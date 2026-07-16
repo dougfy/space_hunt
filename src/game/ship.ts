@@ -3,13 +3,14 @@
 import type { Vec2, ShipShape, GameState } from './types';
 import {
   SHIP_MAX_SPEED, SHIP_ACCELERATION, SHIP_ARRIVE_RADIUS,
-  AVOID_STRENGTH,
+  AVOID_STRENGTH, GALAXY_SHIP_SPEED, SYSTEM_SHIP_SPEED,
 } from './constants';
 import {
   vec2, add, sub, scale, normalize, magnitude, sqrMagnitude,
   moveTowardsVec2,
 } from './math';
 import { computeAvoidance, resolveShipCollisions } from './asteroids';
+import { NavigationTier } from './galaxy';
 
 export function getShipShapePoints(shape: ShipShape): Vec2[] {
   switch (shape) {
@@ -40,6 +41,10 @@ export function normalizeShipShape(shape: string): ShipShape {
 
 export function updateShip(state: GameState, dt: number, safeZone: { minX: number; maxX: number; minY: number; maxY: number }): void {
   const { ship } = state;
+  const maxSpeed = state.galaxy.tier === NavigationTier.Local || state.galaxy.tier === NavigationTier.Planet
+    ? SHIP_MAX_SPEED
+    : state.galaxy.tier === NavigationTier.System ? SYSTEM_SHIP_SPEED
+    : GALAXY_SHIP_SPEED;
 
   if (state.tgtActive) {
     const d = sub(state.tgtPos, ship.pos);
@@ -49,32 +54,51 @@ export function updateShip(state: GameState, dt: number, safeZone: { minX: numbe
       const tgtInSafe = state.tgtPos.x > safeZone.minX && state.tgtPos.x < safeZone.maxX &&
         state.tgtPos.y > safeZone.minY && state.tgtPos.y < safeZone.maxY;
 
-      let desiredSpeed = state.fuelPercent > 0 ? SHIP_MAX_SPEED : 0;
-      if (tgtInSafe && dist < SHIP_ARRIVE_RADIUS) {
-        desiredSpeed *= Math.max(0, Math.min(1, (dist - 0.02) / (SHIP_ARRIVE_RADIUS - 0.02)));
+      let desiredSpeed = state.fuelPercent > 0 ? maxSpeed : 0;
+      // Scale arrive radius with tier speed so the ship decelerates proportionally
+      const arriveR = SHIP_ARRIVE_RADIUS * (maxSpeed / SHIP_MAX_SPEED);
+      // In Planet tier, don't decelerate near target if target is near visible edge
+      // (this lets the ship fly off-screen to trigger tier transition)
+      const nearEdge = state.galaxy.tier === NavigationTier.Planet && !tgtInSafe;
+      if (dist < arriveR && !nearEdge) {
+        desiredSpeed *= Math.max(0, Math.min(1, (dist - 0.02) / (arriveR - 0.02)));
       }
 
       let desiredVel = scale(normalize(d), desiredSpeed);
-      // Steer around nearby asteroids
-      const avoidance = computeAvoidance(ship.pos, state.asteroids, state.impactBufferWorld);
-      desiredVel = add(desiredVel, scale(avoidance, AVOID_STRENGTH));
-      if (magnitude(desiredVel) > SHIP_MAX_SPEED) {
-        desiredVel = scale(normalize(desiredVel), SHIP_MAX_SPEED);
+      // Steer around nearby asteroids (only in local tier)
+      if (state.galaxy.tier === NavigationTier.Local) {
+        const avoidance = computeAvoidance(ship.pos, state.asteroids, state.impactBufferWorld);
+        desiredVel = add(desiredVel, scale(avoidance, AVOID_STRENGTH));
       }
-      ship.vel = moveTowardsVec2(ship.vel, desiredVel, SHIP_ACCELERATION * dt);
+      if (magnitude(desiredVel) > maxSpeed) {
+        desiredVel = scale(normalize(desiredVel), maxSpeed);
+      }
+      // Scale acceleration with tier speed so deceleration feels proportional
+      const accelScale = maxSpeed / SHIP_MAX_SPEED;
+      ship.vel = moveTowardsVec2(ship.vel, desiredVel, SHIP_ACCELERATION * accelScale * dt);
       ship.thrust = sqrMagnitude(ship.vel) > 0.0025 && desiredSpeed > 0.02;
     } else {
-      state.tgtActive = false;
-      ship.thrust = false;
+      // In Planet tier near edge, keep flying past target toward boundary
+      if (state.galaxy.tier === NavigationTier.Planet &&
+          (Math.abs(ship.pos.x) > 3.5 || Math.abs(ship.pos.y) > 2.0)) {
+        // Don't stop — keep current velocity
+        ship.thrust = true;
+      } else {
+        state.tgtActive = false;
+        ship.thrust = false;
+      }
     }
   } else {
-    ship.vel = moveTowardsVec2(ship.vel, vec2(0, 0), SHIP_ACCELERATION * 0.6 * dt);
+    const accelScale = maxSpeed / SHIP_MAX_SPEED;
+    ship.vel = moveTowardsVec2(ship.vel, vec2(0, 0), SHIP_ACCELERATION * accelScale * 0.6 * dt);
     ship.thrust = false;
   }
 
   ship.pos = add(ship.pos, scale(ship.vel, dt));
 
-  // Boundary scrolling
+  // Boundary scrolling (Local tier only — Galaxy/System tiers follow the ship with the camera,
+  // Planet tier has fixed camera so ship moves freely for edge-based tier transitions)
+  if (state.galaxy.tier === NavigationTier.Local) {
   let worldShift = vec2(0, 0);
   if (ship.pos.x < safeZone.minX) {
     worldShift = { ...worldShift, x: ship.pos.x - safeZone.minX };
@@ -93,6 +117,7 @@ export function updateShip(state: GameState, dt: number, safeZone: { minX: numbe
 
   if (sqrMagnitude(worldShift) > 0) {
     applyWorldShift(state, worldShift);
+  }
   }
 
   // Hard collision resolution

@@ -163,10 +163,53 @@
         border-top: 1px solid rgba(79, 255, 176, 0.15);
         padding-top: 6px;
       }
+      #debug-log {
+        display: none;
+        max-height: 200px;
+        overflow-y: auto;
+        background: rgba(0, 0, 0, 0.8);
+        border: 1px solid #3a7a5a;
+        padding: 6px;
+        font-family: monospace;
+        font-size: 9px;
+        color: #6ab89a;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      #debug-log.visible { display: block; }
+      #debug-toggle {
+        background: transparent;
+        border: 1px solid #3a7a5a;
+        color: #5a7a6a;
+        font-family: monospace;
+        font-size: 10px;
+        padding: 4px 8px;
+        cursor: pointer;
+        margin-top: 4px;
+      }
+      #debug-toggle:hover { border-color: #4fffb0; color: #8ff7cf; }
+      #bounds-btn {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        z-index: 100;
+        pointer-events: auto;
+        background: transparent;
+        border: 2px solid #ff5050;
+        color: #ff5050;
+        font-family: monospace;
+        font-size: 11px;
+        font-weight: bold;
+        padding: 4px 10px;
+        cursor: pointer;
+      }
+      #bounds-btn:hover { background: rgba(255, 80, 80, 0.1); }
+      #bounds-btn.active { background: rgba(255, 80, 80, 0.2); border-color: #ffaa50; color: #ffaa50; }
     </style>
   </head>
   <body>
     <canvas id="game-canvas"></canvas>
+    <button id="bounds-btn">BOUNDS</button>
     <button id="settings-btn">SETTINGS</button>
     <div id="settings-panel">
       <h3>Ship Name</h3>
@@ -179,6 +222,8 @@
       <h3 style="margin-top:10px">Nearby Ships</h3>
       <div id="ghost-list"><span class="ghost-empty">none</span></div>
       <div id="settings-version">v0.0.0</div>
+      <button id="debug-toggle">DEBUG LOG</button>
+      <div id="debug-log"></div>
     </div>
     <div id="overlay">
       <div id="btn-row">

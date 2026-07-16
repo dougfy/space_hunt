@@ -6,14 +6,20 @@ import {
   BASE_ORTHO, CLOSE_ORTHO, ZOOM_TRANSITION_DURATION,
   ZOOM_DWELL_SECONDS, ZOOM_GRACE_SECONDS,
   MAP_HALF_X, MAP_HALF_Y,
+  GALAXY_SIZE, SYSTEM_SIZE,
 } from './constants';
 import { vec2, clamp } from './math';
 import { distanceToAsteroidSurface } from './asteroids';
+import { NavigationTier } from './galaxy';
 
 // Trigger zoom when ship is within ZOOM_TRIGGER_PIXELS screen pixels of an
 // asteroid surface. Converted to world units at runtime using the actual canvas
 // height, matching the original C# GetStableZoomTriggerWorld().
 const ZOOM_TRIGGER_PIXELS = 100;
+
+// Ortho sizes for non-local tiers (show a good portion of the map, follow ship)
+const GALAXY_ORTHO = 20; // shows ~40 units vertically of the 100-unit galaxy
+const SYSTEM_ORTHO = 18; // shows ~36 units vertically — fits the full 40-unit system
 
 export function createCamera(aspect: number): Camera {
   return {
@@ -25,9 +31,40 @@ export function createCamera(aspect: number): Camera {
 
 export function updateCamera(state: GameState, dt: number): void {
   const { camera } = state;
+  const tier = state.galaxy.tier;
 
+  // ── Galaxy / System tiers: fixed ortho, follow ship ──
+  if (tier === NavigationTier.Galaxy) {
+    camera.orthoSize = GALAXY_ORTHO;
+    camera.pos = { x: state.ship.pos.x, y: state.ship.pos.y };
+    // Clamp within galaxy bounds
+    const halfW = camera.orthoSize * camera.aspect;
+    const halfH = camera.orthoSize;
+    camera.pos.x = clamp(camera.pos.x, halfW, GALAXY_SIZE - halfW);
+    camera.pos.y = clamp(camera.pos.y, halfH, GALAXY_SIZE - halfH);
+    return;
+  }
+
+  if (tier === NavigationTier.System) {
+    camera.orthoSize = SYSTEM_ORTHO;
+    camera.pos = { x: state.ship.pos.x, y: state.ship.pos.y };
+    // Clamp within system bounds
+    const halfW = camera.orthoSize * camera.aspect;
+    const halfH = camera.orthoSize;
+    camera.pos.x = clamp(camera.pos.x, halfW, SYSTEM_SIZE - halfW);
+    camera.pos.y = clamp(camera.pos.y, halfH, SYSTEM_SIZE - halfH);
+    return;
+  }
+
+  // ── Planet tier: fixed ortho, origin-centered ──
+  if (tier === NavigationTier.Planet) {
+    camera.orthoSize = BASE_ORTHO;
+    camera.pos = { x: 0, y: 0 };
+    return;
+  }
+
+  // ── Local tier: existing zoom behavior ──
   // Continuous zoom animation: zoomT goes 0→1 (wide→close)
-  // Original: target=1 when Zoomed or Releasing, target=0 when Normal or Arming
   const zoomTarget = (state.zoomState === ZoomState.Zoomed || state.zoomState === ZoomState.Releasing) ? 1 : 0;
   const speed = 1 / ZOOM_TRANSITION_DURATION;
   if (state.zoomTimer < zoomTarget) {
@@ -142,7 +179,7 @@ export function getSafeZone(camera: Camera): {
 } {
   const halfW = camera.orthoSize * camera.aspect;
   const halfH = camera.orthoSize;
-  const margin = 0.15;
+  const margin = 0.35;
   return {
     minX: -halfW * (1 - margin),
     maxX: halfW * (1 - margin),

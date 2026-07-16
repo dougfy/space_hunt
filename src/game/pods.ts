@@ -101,15 +101,17 @@ export function checkPodCollection(state: GameState): number[] {
 
 export function applyPodCollected(state: GameState, podId: number, mine: boolean): void {
   const pod = state.pods.find(p => p.id === podId);
-  if (!pod) return;
+  if (!pod) { console.log('[PODS] applyPodCollected: pod not found id=', podId); return; }
   if (pod.collected) return;
   pod.collected = true;
 
   if (mine) {
     if (pod.refuels) {
       state.fuelPercent = FUEL_MAX;
+      console.log('[PODS] REFUEL pod id=', podId, 'fuel=', state.fuelPercent);
     } else {
       state.fuelPercent = Math.min(FUEL_MAX, state.fuelPercent + 15);
+      console.log('[PODS] DOCK pod id=', podId, 'fuel=', state.fuelPercent, 'docks=', state.docksCollected + 1);
     }
     state.docksCollected++;
   }

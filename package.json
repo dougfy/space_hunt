@@ -13,6 +13,8 @@
     "login": "devvit login",
     "prettier": "prettier --write .",
     "ship": "node -e \"const f='version.json';const j=JSON.parse(require('fs').readFileSync(f));const p=j.version.split('.');p[2]=+p[2]+1;j.version=p.join('.');require('fs').writeFileSync(f,JSON.stringify(j,null,2)+'\\n');console.log('v'+j.version)\" && npx devvit upload && npx devvit install valcordia_space_dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "type-check": "tsc --build"
   },
   "engines": {
@@ -42,6 +44,7 @@
     "tailwindcss": "4.3.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.59.4",
-    "vite": "8.0.13"
+    "vite": "8.0.13",
+    "vitest": "^4.1.10"
   }
 }

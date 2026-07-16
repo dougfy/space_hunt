@@ -39,7 +39,7 @@ export interface DevvitBridge {
 /** Callbacks the game engine will invoke */
 export interface DevvitCallbacks {
   /** Ship pose changed — report to server (throttled by caller) */
-  onPose(x: number, y: number, angle: number, name: string): void;
+  onPose(x: number, y: number, angle: number, name: string, tier: number, starIndex: number, bodyIndex: number): void;
   /** Ship touched a fuel pod — request server claim */
   onClaimPod(podId: number): void;
   /** Player fired a burst — send shots to server */
@@ -69,8 +69,12 @@ export function createDevvitBridge(
     beginPlay() {
       if (!canvas || !callbacks || !pendingSeed) return;
       const s = getGameState();
-      if (s) {
-        // Game already running in preview — just activate networking
+      if (s && s.splashMode) {
+        // Transition from splash to real game — stop splash, start fresh
+        stopGame();
+        startGame(canvas, pendingSeed, pendingName, pendingShape, callbacks);
+      } else if (s) {
+        // Game already running (non-splash) — just activate networking
         setGameCallbacks(callbacks);
       } else {
         // Start fresh with networking

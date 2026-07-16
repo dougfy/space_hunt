@@ -89,7 +89,9 @@ export interface GameState {
   shipShape: ShipShape;
   impactBufferWorld: number;
   playing: boolean;
+  splashMode: boolean;
   shooting: ShootingState;
+  galaxy: import('./galaxy').GalaxyState;
 }
 
 export interface Camera {

@@ -3,7 +3,7 @@
 // Detects inline vs expanded mode and shows overlay buttons when inline.
 
 import { context, getWebViewMode, requestExpandedMode } from '@devvit/web/client';
-import { createDevvitBridge } from '../game';
+import { createDevvitBridge, getGameState, getDebugBounds, setDebugBounds } from '../game';
 import type { DevvitBridge } from '../game';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -29,6 +29,37 @@ const postId = context.postId ?? 'standalone:dev';
 declare const __APP_VERSION__: string;
 const versionEl = document.getElementById('settings-version');
 if (versionEl) versionEl.textContent = 'v' + __APP_VERSION__;
+
+// ── Debug log panel ─────────────────────────────────────────────────────────
+const debugLog = document.getElementById('debug-log')!;
+const debugToggle = document.getElementById('debug-toggle')!;
+const _origLog = console.log;
+const _origWarn = console.warn;
+const _origError = console.error;
+const MAX_DEBUG_LINES = 100;
+function appendDebug(prefix: string, args: unknown[]) {
+  const line = prefix + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+  debugLog.textContent = (debugLog.textContent || '') + line + '\n';
+  // Trim old lines
+  const lines = debugLog.textContent!.split('\n');
+  if (lines.length > MAX_DEBUG_LINES) {
+    debugLog.textContent = lines.slice(lines.length - MAX_DEBUG_LINES).join('\n');
+  }
+  debugLog.scrollTop = debugLog.scrollHeight;
+}
+console.log = (...args: unknown[]) => { _origLog.apply(console, args); appendDebug('', args); };
+console.warn = (...args: unknown[]) => { _origWarn.apply(console, args); appendDebug('[W] ', args); };
+console.error = (...args: unknown[]) => { _origError.apply(console, args); appendDebug('[E] ', args); };
+debugToggle.addEventListener('click', () => debugLog.classList.toggle('visible'));
+
+// ── Bounds debug button ─────────────────────────────────────────────────────
+const boundsBtn = document.getElementById('bounds-btn')!;
+boundsBtn.addEventListener('click', () => {
+  const next = !getDebugBounds();
+  setDebugBounds(next);
+  boundsBtn.classList.toggle('active', next);
+});
+
 const sessionId = `${username}:${Math.random().toString(36).slice(2, 8)}`;
 
 // ── Ship shape state ────────────────────────────────────────────────────────
@@ -39,13 +70,13 @@ let currentName = username;
 
 // ── Create bridge ───────────────────────────────────────────────────────────
 const bridge: DevvitBridge = createDevvitBridge(canvas, {
-  onPose(x, y, angle, name) {
+  onPose(x, y, angle, name, tier, starIndex, bodyIndex) {
     const sentName = name || currentName;
     // Send pose to server via Devvit API route
     fetch('/api/pose', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ x, y, angle, username: sentName, sessionId, shape: currentShape }),
+      body: JSON.stringify({ x, y, angle, username: sentName, sessionId, shape: currentShape, tier, starIndex, bodyIndex }),
     }).catch(() => {});
   },
   onClaimPod(podId) {
@@ -116,7 +147,11 @@ let shotPollInterval: ReturnType<typeof setInterval> | null = null;
 
 async function pollGhosts() {
   try {
-    const res = await fetch(`/api/room-poses?postId=${encodeURIComponent(postId)}&exclude=${encodeURIComponent(sessionId)}`);
+    const gs = getGameState();
+    const tier = gs?.galaxy.tier ?? 0;
+    const starIndex = gs?.galaxy.currentStarIndex ?? -1;
+    const bodyIndex = gs?.galaxy.currentBodyIndex ?? -1;
+    const res = await fetch(`/api/room-poses?postId=${encodeURIComponent(postId)}&exclude=${encodeURIComponent(sessionId)}&tier=${tier}&starIndex=${starIndex}&bodyIndex=${bodyIndex}`);
     if (res.ok) {
       const data = await res.json() as { items: Array<{ username: string; x: number; y: number; angle: number; shape: string }> };
       if (data.items) {

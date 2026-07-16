@@ -101,19 +101,26 @@ api.post('/pose', async (c) => {
   const { postId } = context;
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
 
-  const body = await c.req.json<{ x: number; y: number; angle: number; username: string; sessionId?: string; shape?: string }>();
+  const body = await c.req.json<{ x: number; y: number; angle: number; username: string; sessionId?: string; shape?: string; tier?: number; starIndex?: number; bodyIndex?: number }>();
   const sid = body.sessionId || body.username;
   const hashKey = `poses:${postId}`;
-  const value = JSON.stringify({ x: body.x, y: body.y, angle: body.angle, shape: body.shape || 'arrow', username: body.username, ts: Date.now() });
+  const value = JSON.stringify({
+    x: body.x, y: body.y, angle: body.angle, shape: body.shape || 'arrow',
+    username: body.username, ts: Date.now(),
+    tier: body.tier ?? 0, starIndex: body.starIndex ?? -1, bodyIndex: body.bodyIndex ?? -1,
+  });
   await redis.hSet(hashKey, { [sid]: value });
 
   return c.json({ ok: true });
 });
 
-/** Get all poses for a room (post), excluding the requesting player. */
+/** Get all poses for a room (post), excluding the requesting player. Filters by tier+location. */
 api.get('/room-poses', async (c) => {
   const postId = c.req.query('postId');
   const exclude = c.req.query('exclude') ?? '';
+  const tierFilter = parseInt(c.req.query('tier') ?? '-1', 10);
+  const starFilter = parseInt(c.req.query('starIndex') ?? '-1', 10);
+  const bodyFilter = parseInt(c.req.query('bodyIndex') ?? '-1', 10);
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
 
   const hashKey = `poses:${postId}`;
@@ -125,10 +132,16 @@ api.get('/room-poses', async (c) => {
 
   for (const [sid, raw] of Object.entries(all)) {
     if (sid === exclude) continue;
-    const data = JSON.parse(raw) as { x: number; y: number; angle: number; shape?: string; username?: string; ts: number };
+    const data = JSON.parse(raw) as { x: number; y: number; angle: number; shape?: string; username?: string; ts: number; tier?: number; starIndex?: number; bodyIndex?: number };
     if (now - data.ts > POSE_STALE_MS) {
       staleKeys.push(sid);
       continue;
+    }
+    // Filter: only show players in the same tier+location
+    if (tierFilter >= 0) {
+      if ((data.tier ?? 0) !== tierFilter) continue;
+      if (tierFilter >= 1 && (data.starIndex ?? -1) !== starFilter) continue;
+      if (tierFilter >= 2 && (data.bodyIndex ?? -1) !== bodyFilter) continue;
     }
     items.push({ username: data.username || sid, x: data.x, y: data.y, angle: data.angle, shape: data.shape || 'arrow' });
   }

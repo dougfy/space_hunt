@@ -109,3 +109,52 @@ export const ASTEROID_NAME_SUFFIXES = [
   'reach', 'spire', 'hollow', 'gate', 'mark', 'rest', 'drift',
   'point', 'wake', 'crown', 'bloom', 'haven', 'loop', 'trace', 'veil',
 ];
+
+// ── Galaxy / Navigation Constants ───────────────────────────────────────────
+
+export const GALAXY_SIZE = 100;          // 100×100 unit space
+export const STAR_COUNT = 100;
+export const STAR_MIN_SPACING = 7;       // minimum distance between stars
+export const STAR_ENTER_RADIUS = 3;      // how close ship must get to enter a star system
+export const SYSTEM_SIZE = 40;           // 40×40 unit system space
+export const SYSTEM_BODY_MIN = 3;
+export const SYSTEM_BODY_MAX = 8;
+export const BODY_ENTER_RADIUS = 2;      // how close to enter local tier
+export const SYSTEM_EXIT_RADIUS = 18;    // distance from system center to exit back to galaxy (must be > max orbit)
+
+export const GALAXY_SHIP_SPEED = 4.5;    // ~5× normal so crossing ~22s matches current local feel
+export const SYSTEM_SHIP_SPEED = 1.8;    // slower than galaxy, faster than local
+
+// Star name generation
+export const STAR_NAME_PREFIXES = [
+  'Sol', 'Vega', 'Lyra', 'Crux', 'Pola', 'Zeta', 'Riga', 'Nyx',
+  'Orsa', 'Mira', 'Ceti', 'Alph', 'Dene', 'Alde', 'Spic', 'Anta',
+  'Acru', 'Foma', 'Arct', 'Siri', 'Proc', 'Bete', 'Cano', 'Rege',
+];
+export const STAR_NAME_SUFFIXES = [
+  'ris', 'nus', 'ion', 'ara', 'eon', 'ium', 'ath', 'ova',
+  'ell', 'ux', 'ar', 'en', 'is', 'os', 'ax', 'um',
+];
+
+// Planet / body name generation
+export const PLANET_NAME_PREFIXES = [
+  'Kra', 'Vel', 'Nor', 'Zel', 'Py', 'Dru', 'Tha', 'Ix',
+  'Quo', 'Bre', 'Fen', 'Gol', 'Hyx', 'Jem', 'Cor', 'Alu',
+];
+export const PLANET_NAME_SUFFIXES = [
+  'thos', 'mir', 'vex', 'don', 'nar', 'pex', 'lis', 'gon',
+  'ra', 'tek', 'ium', 'or', 'ax', 'en', 'is', 'ul',
+];
+
+// Planet feature types and naming
+export const FEATURE_TYPES: ('mine' | 'relay' | 'refinery' | 'station' | 'outpost' | 'colony')[] = [
+  'mine', 'relay', 'refinery', 'station', 'outpost', 'colony',
+];
+export const FEATURE_LABELS: Record<string, string> = {
+  mine: 'Mine',
+  relay: 'Relay Outpost',
+  refinery: 'Refinery Station',
+  station: 'Station',
+  outpost: 'Outpost',
+  colony: 'Colony',
+};
