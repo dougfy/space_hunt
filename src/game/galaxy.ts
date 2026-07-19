@@ -51,12 +51,45 @@ export interface SystemBody {
 export interface GalaxyState {
   tier: NavigationTier;
   stars: GalaxyStar[];
+  homeStarIndex: number;     // persistent home star index for galaxy highlighting
   currentStarIndex: number;  // -1 when in galaxy view
   currentBodyIndex: number;  // -1 when in system view
   bodies: SystemBody[];      // populated when in a system
   galaxySeed: number;
   bodyEntryAngle: number;    // angle (radians) where ship entered current body's orbit
   beltEnteredFromInside: boolean; // true if ship was closer to star than belt when entering
+}
+
+let externalStarNames: string[] = [];
+
+export function setExternalStarNames(names: string[]): void {
+  const cleaned = Array.from(new Set(
+    names
+      .map((n) => n.trim())
+      .filter((n) => n.length >= 2 && n.length <= 32),
+  ));
+  externalStarNames = cleaned;
+}
+
+function generatedStarName(starSeed: number): string {
+  const nameRng = createRng(starSeed);
+  const prefix = STAR_NAME_PREFIXES[nameRng.rangeInt(0, STAR_NAME_PREFIXES.length)];
+  const suffix = STAR_NAME_SUFFIXES[nameRng.rangeInt(0, STAR_NAME_SUFFIXES.length)];
+  return `${prefix} ${suffix}`;
+}
+
+function pickStarName(starSeed: number, index: number): string {
+  if (externalStarNames.length > 0) {
+    const idx = Math.abs(stableHash(`starname:${starSeed}:${index}`)) % externalStarNames.length;
+    return externalStarNames[idx];
+  }
+  return generatedStarName(starSeed);
+}
+
+export function applyStarNames(stars: GalaxyStar[]): void {
+  for (const star of stars) {
+    star.name = pickStarName(star.seed, star.index);
+  }
 }
 
 // ── Galaxy Generation ───────────────────────────────────────────────────────
@@ -89,15 +122,11 @@ export function generateGalaxy(worldSeed: string): GalaxyStar[] {
 
     const index = stars.length;
     const starSeed = stableHash(`${galaxySeed}:star:${index}`);
-    const nameRng = createRng(starSeed);
-    const prefix = STAR_NAME_PREFIXES[nameRng.rangeInt(0, STAR_NAME_PREFIXES.length)];
-    const suffix = STAR_NAME_SUFFIXES[nameRng.rangeInt(0, STAR_NAME_SUFFIXES.length)];
-
     stars.push({
       index,
       pos: vec2(x, y),
       seed: starSeed,
-      name: `${prefix} ${suffix}`,
+      name: pickStarName(starSeed, index),
       bodyCount: rng.rangeInt(SYSTEM_BODY_MIN, SYSTEM_BODY_MAX + 1),
     });
   }
@@ -201,6 +230,7 @@ export function createGalaxyState(worldSeed: string): GalaxyState {
   return {
     tier: NavigationTier.System,
     stars,
+    homeStarIndex: homeIdx,
     currentStarIndex: homeIdx,
     currentBodyIndex: -1,
     bodies: generateSystem(homeStar),
@@ -216,9 +246,12 @@ export interface TierTransition {
   newTier: NavigationTier;
   starIndex: number;
   bodyIndex: number;
-  exitDir?: Vec2;    // normalized direction ship was heading when it exited
+  exitDir?: Vec2;    // for belt radial exit: raw (x, y) world position at exit
   entryAngle?: number; // angle (radians) of ship around center when entering body
   enteredFromInside?: boolean; // true if ship was closer to star than belt orbit
+  exitedOutward?: boolean;    // true if ship exited belt toward outside (positive localY)
+  beltWrap?: boolean;         // true if ship wrapped around belt tangentially (stays in Local)
+  wrapDir?: number;           // +1 or -1 indicating wrap direction
 }
 
 /**
@@ -236,7 +269,10 @@ export function checkTierTransition(
     for (const star of galaxy.stars) {
       const dist = magnitude(sub(shipPos, star.pos));
       if (dist < STAR_ENTER_RADIUS) {
-        return { newTier: NavigationTier.System, starIndex: star.index, bodyIndex: -1 };
+        // exitDir = direction from star to ship (approach direction)
+        const dx = shipPos.x - star.pos.x;
+        const dy = shipPos.y - star.pos.y;
+        return { newTier: NavigationTier.System, starIndex: star.index, bodyIndex: -1, exitDir: vec2(dx, dy) };
       }
     }
   } else if (tier === NavigationTier.System) {
@@ -267,17 +303,21 @@ export function checkTierTransition(
     }
     // Check exit: distance from system center
     if (shipDistFromCenter > SYSTEM_EXIT_RADIUS) {
-      return { newTier: NavigationTier.Galaxy, starIndex: -1, bodyIndex: -1 };
+      const center = SYSTEM_SIZE / 2;
+      return { newTier: NavigationTier.Galaxy, starIndex: -1, bodyIndex: -1, exitDir: vec2(shipPos.x - center, shipPos.y - center) };
     }
   } else if (tier === NavigationTier.Local) {
-    // Check exit: ship reaches edge of local map
-    const halfX = 10; // MAP_HALF_X
-    const halfY = 8;  // MAP_HALF_Y
-    if (Math.abs(shipPos.x) > halfX - 0.5 || Math.abs(shipPos.y) > halfY - 0.5) {
-      // Capture exit direction from ship position
-      const m = magnitude(shipPos);
-      const exitDir = m > 0 ? vec2(shipPos.x / m, shipPos.y / m) : vec2(0, 1);
-      return { newTier: NavigationTier.System, starIndex: galaxy.currentStarIndex, bodyIndex: -1, exitDir };
+    // Ring model: ship is in system coordinates. Exit when radial distance from
+    // belt orbit exceeds BELT_HALF_WIDTH + buffer.
+    const center = vec2(SYSTEM_SIZE / 2, SYSTEM_SIZE / 2);
+    const shipDistFromCenter = magnitude(sub(shipPos, center));
+    const body = galaxy.currentBodyIndex >= 0 ? galaxy.bodies[galaxy.currentBodyIndex] : null;
+    const orbitDist = body ? body.orbitDist : 12;
+    const beltHalfWidth = 3.0; // matches BELT_HALF_WIDTH in asteroids.ts
+    const exitThreshold = beltHalfWidth + 0.5; // small buffer past the asteroid field edge
+
+    if (Math.abs(shipDistFromCenter - orbitDist) > exitThreshold) {
+      return { newTier: NavigationTier.System, starIndex: galaxy.currentStarIndex, bodyIndex: -1 };
     }
   } else if (tier === NavigationTier.Planet) {
     // Check exit: ship reaches edge of planet view (camera is fixed at origin with orthoSize=3.2)
@@ -298,10 +338,12 @@ export function checkTierTransition(
 
 /**
  * Apply a tier transition — updates galaxy state and returns new ship position.
+ * In the ring model, belt transitions don't remap position — the ship stays in system coords.
  */
 export function applyTransition(
   galaxy: GalaxyState,
   transition: TierTransition,
+  currentShipPos?: Vec2,
 ): Vec2 {
   galaxy.tier = transition.newTier;
 
@@ -315,49 +357,40 @@ export function applyTransition(
     }
     galaxy.currentBodyIndex = -1;
     const center = SYSTEM_SIZE / 2;
-    // If we came from a belt, place ship on the correct side based on exit direction
+
+    // Coming from a belt: ship stays at its current position (ring model — no remap needed)
     if (prevBody && prevBody.type === 'belt') {
-      // Use the entry angle to maintain angular position on the ring
-      const ringAngle = galaxy.bodyEntryAngle;
-      if (transition.exitDir) {
-        // Entry placement matches approach direction:
-        //   - Entered from inside → placed at y=-6 → crossing through exits at positive y
-        //   - Entered from outside → placed at y=+6 → crossing through exits at negative y
-        const crossedThrough = galaxy.beltEnteredFromInside
-          ? transition.exitDir.y > 0   // exited at top = crossed outward
-          : transition.exitDir.y < 0;  // exited at bottom = crossed inward
-        let safeDist: number;
-        if (galaxy.beltEnteredFromInside) {
-          safeDist = crossedThrough
-            ? prevBody.orbitDist + 1.5  // crossed through → outside
-            : prevBody.orbitDist - 1.5; // bounced back → inside
-        } else {
-          safeDist = crossedThrough
-            ? prevBody.orbitDist - 1.5  // crossed through → inside
-            : prevBody.orbitDist + 1.5; // bounced back → outside
-        }
-        return vec2(center + Math.cos(ringAngle) * safeDist, center + Math.sin(ringAngle) * safeDist);
-      }
-      // Fallback: place on entry side
-      const safeDist = galaxy.beltEnteredFromInside
-        ? prevBody.orbitDist - 1.5
-        : prevBody.orbitDist + 1.5;
-      return vec2(center + Math.cos(ringAngle) * safeDist, center + Math.sin(ringAngle) * safeDist);
+      // Ship is already in system coords, just return current position
+      if (currentShipPos) return currentShipPos;
+      // Fallback: shouldn't happen, but place on ring
+      const angle = galaxy.bodyEntryAngle;
+      return vec2(center + Math.cos(angle) * prevBody.orbitDist, center + Math.sin(angle) * prevBody.orbitDist);
     }
     // If we came from a planet, place ship just outside the planet's enter radius
-    // Use exitDir to determine which side of the planet to appear on
     if (prevBody && prevBody.type === 'planet') {
       const offset = BODY_ENTER_RADIUS + 0.5;
       if (transition.exitDir) {
-        return vec2(prevBody.pos.x + transition.exitDir.x * offset, prevBody.pos.y + transition.exitDir.y * offset);
+        const m = magnitude(transition.exitDir);
+        const dir = m > 0 ? vec2(transition.exitDir.x / m, transition.exitDir.y / m) : vec2(0, 1);
+        return vec2(prevBody.pos.x + dir.x * offset, prevBody.pos.y + dir.y * offset);
       }
-      // Fallback: place outward from star
       const angle = Math.atan2(prevBody.pos.y - center, prevBody.pos.x - center);
       return vec2(prevBody.pos.x + Math.cos(angle) * offset, prevBody.pos.y + Math.sin(angle) * offset);
     }
-    // Default: place ship inside exit radius so it doesn't immediately bounce back
+    // Default: entering from galaxy — place ship at system edge in approach direction
+    if (transition.exitDir) {
+      const m = magnitude(transition.exitDir);
+      if (m > 0) {
+        const dx = transition.exitDir.x / m;
+        const dy = transition.exitDir.y / m;
+        const edgeDist = SYSTEM_EXIT_RADIUS - 2;
+        return vec2(center + dx * edgeDist, center + dy * edgeDist);
+      }
+    }
     return vec2(center, center + SYSTEM_EXIT_RADIUS - 3);
   } else if (transition.newTier === NavigationTier.Local) {
+    // Ring model: ship stays at its current position in system coords.
+    // Just update galaxy state to track which body we're in.
     galaxy.currentBodyIndex = transition.bodyIndex;
     if (transition.entryAngle !== undefined) {
       galaxy.bodyEntryAngle = transition.entryAngle;
@@ -365,23 +398,33 @@ export function applyTransition(
     if (transition.enteredFromInside !== undefined) {
       galaxy.beltEnteredFromInside = transition.enteredFromInside;
     }
-    // Place ship on the ENTRY side so continuing their direction crosses through:
-    // - Entered from inside (moving outward/up): place at bottom (y=-6) → going up crosses through
-    // - Entered from outside (moving inward/down): place at top (y=+6) → going down crosses through
-    const entryY = galaxy.beltEnteredFromInside ? -6 : 6;
-    return vec2(0, entryY);
+    // Return current position — no remap
+    if (currentShipPos) return currentShipPos;
+    // Fallback: place on ring at entry angle
+    const center = SYSTEM_SIZE / 2;
+    const body = galaxy.bodies[transition.bodyIndex];
+    const orbitDist = body ? body.orbitDist : 12;
+    const angle = transition.entryAngle ?? 0;
+    return vec2(center + Math.cos(angle) * orbitDist, center + Math.sin(angle) * orbitDist);
   } else if (transition.newTier === NavigationTier.Planet) {
     galaxy.currentBodyIndex = transition.bodyIndex;
-    // Place ship at edge of planet view (inside exit thresholds of exitX=4.5, exitY=2.8)
+    // Place ship at edge of planet view (inside exit thresholds)
     return vec2(0, 2.4);
   } else {
-    // Returning to galaxy — place ship at the star's position
+    // Returning to galaxy — place ship offset from star in exit direction
     if (galaxy.currentStarIndex >= 0) {
       const star = galaxy.stars[galaxy.currentStarIndex];
       galaxy.currentStarIndex = -1;
       galaxy.currentBodyIndex = -1;
       galaxy.bodies = [];
-      return vec2(star.pos.x, star.pos.y + STAR_ENTER_RADIUS + 1);
+      const offset = STAR_ENTER_RADIUS + 1;
+      if (transition.exitDir) {
+        const m = magnitude(transition.exitDir);
+        if (m > 0) {
+          return vec2(star.pos.x + (transition.exitDir.x / m) * offset, star.pos.y + (transition.exitDir.y / m) * offset);
+        }
+      }
+      return vec2(star.pos.x, star.pos.y + offset);
     }
     galaxy.currentStarIndex = -1;
     galaxy.currentBodyIndex = -1;

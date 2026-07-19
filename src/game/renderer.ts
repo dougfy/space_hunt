@@ -550,6 +550,124 @@ export function drawZoomButton(
   ctx.restore();
 }
 
+// ── Bottom-right control buttons (recenter + zoom) ──────────────────────────
+
+const CTRL_BTN_RADIUS = 20;
+
+function getCtrlBtnPositions(r: Renderer) {
+  const dpr = window.devicePixelRatio || 1;
+  const screenW = r.width / dpr;
+  const screenH = r.height / dpr;
+  return {
+    recenter: { x: screenW - 36, y: screenH - 36 },
+    zoom:     { x: screenW - 36 - 52, y: screenH - 36 },
+  };
+}
+
+export function drawControlButtons(
+  r: Renderer,
+  showZoom: boolean,
+  zoomed: boolean,
+  boundsActive: boolean,
+  showRecenter = true,
+) {
+  const { ctx } = r;
+  const pos = getCtrlBtnPositions(r);
+
+  ctx.save();
+
+  // ── Recenter button ──
+  if (showRecenter) {
+    const rc = pos.recenter;
+    ctx.beginPath();
+    ctx.arc(rc.x, rc.y, CTRL_BTN_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = boundsActive ? 'rgba(20, 80, 60, 0.8)' : 'rgba(30, 50, 60, 0.7)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(rc.x, rc.y, CTRL_BTN_RADIUS, 0, Math.PI * 2);
+    ctx.strokeStyle = boundsActive ? '#4fffb0' : 'rgba(79, 255, 176, 0.4)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Crosshair icon
+    const cr = 7;
+    ctx.strokeStyle = boundsActive ? '#4fffb0' : 'rgba(79, 255, 176, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(rc.x, rc.y, cr, 0, Math.PI * 2);
+    ctx.stroke();
+    const ext = 4;
+    ctx.beginPath();
+    ctx.moveTo(rc.x - cr - ext, rc.y); ctx.lineTo(rc.x + cr + ext, rc.y);
+    ctx.moveTo(rc.x, rc.y - cr - ext); ctx.lineTo(rc.x, rc.y + cr + ext);
+    ctx.stroke();
+  }
+
+  // ── Zoom button (only in planet tier with shooting) ──
+  if (showZoom) {
+    const zc = pos.zoom;
+    ctx.beginPath();
+    ctx.arc(zc.x, zc.y, CTRL_BTN_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = zoomed ? 'rgba(20, 80, 60, 0.8)' : 'rgba(30, 50, 60, 0.7)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(zc.x, zc.y, CTRL_BTN_RADIUS, 0, Math.PI * 2);
+    ctx.strokeStyle = zoomed ? '#4fffb0' : 'rgba(79, 255, 176, 0.4)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Magnifying glass
+    const glassR = 7;
+    ctx.beginPath();
+    ctx.arc(zc.x - 2, zc.y - 2, glassR, 0, Math.PI * 2);
+    ctx.strokeStyle = zoomed ? '#4fffb0' : 'rgba(79, 255, 176, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(zc.x - 2 + glassR * 0.7, zc.y - 2 + glassR * 0.7);
+    ctx.lineTo(zc.x - 2 + glassR * 1.4, zc.y - 2 + glassR * 1.4);
+    ctx.stroke();
+    const icoS = 3.5;
+    if (!zoomed) {
+      ctx.beginPath();
+      ctx.moveTo(zc.x - 2 - icoS, zc.y - 2); ctx.lineTo(zc.x - 2 + icoS, zc.y - 2);
+      ctx.moveTo(zc.x - 2, zc.y - 2 - icoS); ctx.lineTo(zc.x - 2, zc.y - 2 + icoS);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(zc.x - 2 - icoS, zc.y - 2); ctx.lineTo(zc.x - 2 + icoS, zc.y - 2);
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+}
+
+export type ControlButtonHit = 'recenter' | 'zoom' | null;
+
+export function hitTestControlButtons(
+  r: Renderer,
+  screenX: number,
+  screenY: number,
+  showZoom: boolean,
+  showRecenter = true,
+): ControlButtonHit {
+  const pos = getCtrlBtnPositions(r);
+  const hitR = CTRL_BTN_RADIUS + 6;
+
+  if (showRecenter) {
+    const rdx = screenX - pos.recenter.x;
+    const rdy = screenY - pos.recenter.y;
+    if (rdx * rdx + rdy * rdy <= hitR * hitR) return 'recenter';
+  }
+
+  if (showZoom) {
+    const zdx = screenX - pos.zoom.x;
+    const zdy = screenY - pos.zoom.y;
+    if (zdx * zdx + zdy * zdy <= hitR * hitR) return 'zoom';
+  }
+
+  return null;
+}
+
 /** Check if a screen tap hit the fire button. */
 export function isFireButtonHit(
   r: Renderer,
@@ -585,18 +703,24 @@ function drawStarburst(
   coreR: number,
   rayLen: number,
   brightness: number, // 0-1
+  palette: 'green' | 'blue' = 'green',
 ) {
   const a = 0.4 + brightness * 0.6;
+  const cBright = palette === 'blue' ? '110, 190, 255' : '79, 255, 176';
+  const cMid = palette === 'blue' ? '150, 215, 255' : '150, 255, 210';
+  const cSoft = palette === 'blue' ? '30, 70, 120' : '30, 120, 80';
+  const cBloom = palette === 'blue' ? '180, 220, 255' : '180, 255, 220';
+  const cCore = palette === 'blue' ? '170, 220, 255' : '150, 255, 200';
 
   // ── 1. Wide soft green halo ──
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   const haloR = rayLen * 2.2;
   const haloGrad = ctx.createRadialGradient(x, y, 0, x, y, haloR);
-  haloGrad.addColorStop(0, `rgba(79, 255, 176, ${a * 0.18})`);
-  haloGrad.addColorStop(0.25, `rgba(79, 255, 176, ${a * 0.08})`);
-  haloGrad.addColorStop(0.6, `rgba(30, 120, 80, ${a * 0.03})`);
-  haloGrad.addColorStop(1, 'rgba(79, 255, 176, 0)');
+  haloGrad.addColorStop(0, `rgba(${cBright}, ${a * 0.18})`);
+  haloGrad.addColorStop(0.25, `rgba(${cBright}, ${a * 0.08})`);
+  haloGrad.addColorStop(0.6, `rgba(${cSoft}, ${a * 0.03})`);
+  haloGrad.addColorStop(1, `rgba(${cBright}, 0)`);
   ctx.beginPath();
   ctx.arc(x, y, haloR, 0, Math.PI * 2);
   ctx.fillStyle = haloGrad;
@@ -638,9 +762,9 @@ function drawStarburst(
 
     const grad = ctx.createLinearGradient(x, y, x + dx * spike.len, y + dy * spike.len);
     grad.addColorStop(0, `rgba(220, 255, 240, ${a * 0.8})`);
-    grad.addColorStop(0.1, `rgba(150, 255, 210, ${a * 0.5})`);
-    grad.addColorStop(0.4, `rgba(79, 255, 176, ${a * 0.15})`);
-    grad.addColorStop(1, 'rgba(79, 255, 176, 0)');
+    grad.addColorStop(0.1, `rgba(${cMid}, ${a * 0.5})`);
+    grad.addColorStop(0.4, `rgba(${cBright}, ${a * 0.15})`);
+    grad.addColorStop(1, `rgba(${cBright}, 0)`);
     ctx.fillStyle = grad;
     ctx.fill();
   }
@@ -652,10 +776,10 @@ function drawStarburst(
   // Outer green bloom
   const bloomR = coreR * 3.0;
   const bloomGrad = ctx.createRadialGradient(x, y, 0, x, y, bloomR);
-  bloomGrad.addColorStop(0, `rgba(180, 255, 220, ${a * 0.6})`);
-  bloomGrad.addColorStop(0.3, `rgba(79, 255, 176, ${a * 0.25})`);
-  bloomGrad.addColorStop(0.7, `rgba(79, 255, 176, ${a * 0.05})`);
-  bloomGrad.addColorStop(1, 'rgba(79, 255, 176, 0)');
+  bloomGrad.addColorStop(0, `rgba(${cBloom}, ${a * 0.6})`);
+  bloomGrad.addColorStop(0.3, `rgba(${cBright}, ${a * 0.25})`);
+  bloomGrad.addColorStop(0.7, `rgba(${cBright}, ${a * 0.05})`);
+  bloomGrad.addColorStop(1, `rgba(${cBright}, 0)`);
   ctx.beginPath();
   ctx.arc(x, y, bloomR, 0, Math.PI * 2);
   ctx.fillStyle = bloomGrad;
@@ -667,8 +791,8 @@ function drawStarburst(
   const coreGrad = ctx.createRadialGradient(x, y, 0, x, y, coreR * 1.2);
   coreGrad.addColorStop(0, `rgba(255, 255, 255, ${a})`);
   coreGrad.addColorStop(0.4, `rgba(230, 255, 245, ${a * 0.9})`);
-  coreGrad.addColorStop(0.8, `rgba(150, 255, 200, ${a * 0.4})`);
-  coreGrad.addColorStop(1, 'rgba(79, 255, 176, 0)');
+  coreGrad.addColorStop(0.8, `rgba(${cCore}, ${a * 0.4})`);
+  coreGrad.addColorStop(1, `rgba(${cBright}, 0)`);
   ctx.beginPath();
   ctx.arc(x, y, coreR * 1.2, 0, Math.PI * 2);
   ctx.fillStyle = coreGrad;
@@ -689,6 +813,7 @@ export function drawGalaxyView(
   camera: Camera,
   galaxy: GalaxyState,
   shipPos: Vec2,
+  showLinks = true,
 ) {
   const { ctx } = r;
   const screenW = r.width / (window.devicePixelRatio || 1);
@@ -705,25 +830,27 @@ export function drawGalaxyView(
   }
 
   // ── Jump links (constellation lines between nearby stars) ──
-  ctx.save();
-  ctx.strokeStyle = G_DIM;
-  ctx.lineWidth = 0.8;
-  for (let i = 0; i < screenStars.length; i++) {
-    const a = screenStars[i];
-    for (let j = i + 1; j < screenStars.length; j++) {
-      const b = screenStars[j];
-      const dx = a.star.pos.x - b.star.pos.x;
-      const dy = a.star.pos.y - b.star.pos.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < JUMP_LINK_MAX) {
-        ctx.beginPath();
-        ctx.moveTo(a.sx, a.sy);
-        ctx.lineTo(b.sx, b.sy);
-        ctx.stroke();
+  if (showLinks) {
+    ctx.save();
+    ctx.strokeStyle = G_DIM;
+    ctx.lineWidth = 0.8;
+    for (let i = 0; i < screenStars.length; i++) {
+      const a = screenStars[i];
+      for (let j = i + 1; j < screenStars.length; j++) {
+        const b = screenStars[j];
+        const dx = a.star.pos.x - b.star.pos.x;
+        const dy = a.star.pos.y - b.star.pos.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < JUMP_LINK_MAX) {
+          ctx.beginPath();
+          ctx.moveTo(a.sx, a.sy);
+          ctx.lineTo(b.sx, b.sy);
+          ctx.stroke();
+        }
       }
     }
+    ctx.restore();
   }
-  ctx.restore();
 
   // ── Stars (starburst effect) ──
   for (const { star, sx, sy } of screenStars) {
@@ -733,23 +860,15 @@ export function drawGalaxyView(
     const coreR = Math.max(2, 0.5 / wpp);
     const rayLen = Math.max(6, 1.2 / wpp);
 
-    drawStarburst(ctx, sx, sy, coreR, rayLen, brightness);
-
-    // Current system marker: concentric rings
-    if (star.index === galaxy.currentStarIndex) {
-      ctx.save();
-      ctx.strokeStyle = G_BRIGHT;
-      ctx.lineWidth = 1.5;
-      const r1 = coreR * 3;
-      const r2 = coreR * 4.5;
-      ctx.beginPath();
-      ctx.arc(sx, sy, r1, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(sx, sy, r2, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
+    drawStarburst(
+      ctx,
+      sx,
+      sy,
+      coreR,
+      rayLen,
+      brightness,
+      star.index === galaxy.homeStarIndex ? 'blue' : 'green',
+    );
 
     // Name label (always show)
     ctx.save();
@@ -798,6 +917,24 @@ function drawPanelBorder(
   ctx.beginPath();
   ctx.moveTo(x + w - cornerLen, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - cornerLen);
   ctx.stroke();
+}
+
+/** Trace a rounded rectangle path (compatible fallback for ctx.roundRect) */
+function roundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number, r: number,
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
 }
 
 /** Draw a small icon for a planet feature */
@@ -1238,6 +1375,94 @@ export function drawDebugBounds(
   ctx.restore();
 }
 
+// ── Planet Debug Bounds ──────────────────────────────────────────────────────
+
+import { DOCK_TRIGGER_RADIUS, DOCK_FEATURE_RADIUS } from './dock';
+
+export function drawPlanetDebugBounds(
+  r: Renderer,
+  camera: Camera,
+  galaxy: GalaxyState,
+  shipPos: Vec2,
+  worldOffset: Vec2,
+) {
+  const { ctx } = r;
+  const dpr = window.devicePixelRatio || 1;
+  const screenW = r.width / dpr;
+  const screenH = r.height / dpr;
+  const wpp = worldPerPixel(camera, screenH);
+
+  const body = galaxy.bodies[galaxy.currentBodyIndex];
+  if (!body) return;
+
+  ctx.save();
+  ctx.setLineDash([4, 3]);
+  ctx.lineWidth = 1;
+
+  // Planet dock radius
+  const planetSc = worldToScreen(vec2(0, 0), camera, screenW, screenH);
+  const planetDockPx = DOCK_TRIGGER_RADIUS / wpp;
+  ctx.beginPath();
+  ctx.arc(planetSc.x, planetSc.y, planetDockPx, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255, 200, 50, 0.6)';
+  ctx.stroke();
+  ctx.font = '7px monospace';
+  ctx.fillStyle = 'rgba(255, 200, 50, 0.8)';
+  ctx.textAlign = 'center';
+  ctx.fillText('DOCK', planetSc.x, planetSc.y - planetDockPx - 3);
+
+  // Feature dock radii
+  for (const feat of body.features) {
+    const fx = Math.cos(feat.angle) * feat.dist;
+    const fy = Math.sin(feat.angle) * feat.dist;
+    const fsc = worldToScreen(vec2(fx, fy), camera, screenW, screenH);
+    const featDockPx = DOCK_FEATURE_RADIUS / wpp;
+    ctx.beginPath();
+    ctx.arc(fsc.x, fsc.y, featDockPx, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(100, 200, 255, 0.6)';
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(100, 200, 255, 0.8)';
+    ctx.fillText(feat.name.split(' ').pop() || '', fsc.x, fsc.y - featDockPx - 3);
+  }
+
+  // Ship position readout (local + world-space used by transition logic)
+  const worldShipPos = vec2(shipPos.x + worldOffset.x, shipPos.y + worldOffset.y);
+  ctx.setLineDash([]);
+  ctx.font = 'bold 9px monospace';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(
+    `SHIP local=(${shipPos.x.toFixed(2)},${shipPos.y.toFixed(2)}) world=(${worldShipPos.x.toFixed(2)},${worldShipPos.y.toFixed(2)})`,
+    10,
+    screenH - 20,
+  );
+
+  // Exit boundaries in local coordinates, matching:
+  // |shipPos.x + worldOffset.x| > exitX  ||  |shipPos.y + worldOffset.y| > exitY
+  const exitX = 4.5;
+  const exitY = 2.8;
+  const minX = -exitX - worldOffset.x;
+  const maxX = exitX - worldOffset.x;
+  const minY = -exitY - worldOffset.y;
+  const maxY = exitY - worldOffset.y;
+
+  const tlSc = worldToScreen(vec2(minX, maxY), camera, screenW, screenH);
+  const brSc = worldToScreen(vec2(maxX, minY), camera, screenW, screenH);
+  ctx.setLineDash([6, 4]);
+  ctx.strokeStyle = 'rgba(255, 80, 80, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(tlSc.x, tlSc.y, brSc.x - tlSc.x, brSc.y - tlSc.y);
+  ctx.setLineDash([]);
+  ctx.font = '7px monospace';
+  ctx.fillStyle = 'rgba(255, 80, 80, 0.7)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('EXIT BOUNDARY', screenW / 2, tlSc.y - 2);
+
+  ctx.restore();
+}
+
 // ── Planet View ──────────────────────────────────────────────────────────────
 
 export function drawPlanetView(
@@ -1245,6 +1470,8 @@ export function drawPlanetView(
   camera: Camera,
   galaxy: GalaxyState,
   shipPos: Vec2,
+  fuelPercent: number,
+  shieldPercent: number,
 ) {
   const { ctx } = r;
   const screenW = r.width / (window.devicePixelRatio || 1);
@@ -1341,10 +1568,14 @@ export function drawPlanetView(
   // ── 5. Sub-features around the planet ──
   if (body.features && body.features.length > 0) {
     for (const feat of body.features) {
-      // Place features around the orbit ring
-      const featureDistPx = orbitRingPx + 40 + (feat.dist / wpp) * 0.5;
-      const fx = sc.x + Math.cos(feat.angle) * featureDistPx;
-      const fy = sc.y + Math.sin(feat.angle) * featureDistPx;
+      // Place features at their actual world positions
+      const featWorldPos = vec2(
+        Math.cos(feat.angle) * feat.dist,
+        Math.sin(feat.angle) * feat.dist,
+      );
+      const fsc = worldToScreen(featWorldPos, camera, screenW, screenH);
+      const fx = fsc.x;
+      const fy = fsc.y;
 
       // Dashed connection line from orbit ring edge to feature
       ctx.save();
@@ -1352,7 +1583,7 @@ export function drawPlanetView(
       ctx.setLineDash([3, 3]);
       ctx.moveTo(
         sc.x + Math.cos(feat.angle) * orbitRingPx,
-        sc.y + Math.sin(feat.angle) * orbitRingPx,
+        sc.y - Math.sin(feat.angle) * orbitRingPx,
       );
       ctx.lineTo(fx, fy);
       ctx.strokeStyle = G_DIM;
@@ -1398,6 +1629,8 @@ export function drawPlanetView(
   ctx.fillStyle = G_DIM;
   ctx.fillText(`TYPE: TERRESTRIAL`, 14, 50);
   ctx.fillText(`FEATURES: ${body.features ? body.features.length : 0}`, 14, 62);
+  ctx.fillText(`FUEL: ${Math.round(fuelPercent)}%`, 14, 74);
+  ctx.fillText(`SHIELDS: ${Math.round(shieldPercent)}%`, 14, 86);
   ctx.restore();
 
   // ── 7. Feature legend (bottom-left) ──
@@ -1428,6 +1661,187 @@ export function drawPlanetView(
     }
     ctx.restore();
   }
+
+  // ── 8. Bottom-right stub panels ──
+  drawPlanetPanels(ctx, screenW, screenH);
+}
+
+// ── Right-edge slide-out panels (planet view) ──────────────────────────────
+
+interface StubPanel {
+  title: string;
+  icon: string;
+  rows: string[];
+}
+
+const PLANET_PANELS: StubPanel[] = [
+  {
+    title: 'STATUS',
+    icon: '\u25B3', // △
+    rows: ['HULL: ████████░░ 82%', 'FUEL: ██████░░░░ 61%', 'CARGO: 3 / 12'],
+  },
+  {
+    title: 'COMMS',
+    icon: '\u25CE', // ◎
+    rows: ['No signals detected', '── scan to discover ──'],
+  },
+  {
+    title: 'NAV',
+    icon: '\u2316', // ⌖
+    rows: ['ORBIT: stable', 'VECTOR: holding'],
+  },
+];
+
+// -1 = all closed, 0..2 = which panel is open
+let _openPanel = -1;
+
+// Layout constants
+const TAB_W = 28;      // width of the vertical tab strip
+const TAB_H = 72;      // height of each tab
+const TAB_GAP = 6;
+const PANEL_W = 170;   // width of the slide-out body
+const ROW_H = 14;
+const PANEL_PAD = 10;
+
+export function togglePlanetPanel(index: number): void {
+  _openPanel = _openPanel === index ? -1 : index;
+}
+
+/** Get the tab rects for hit testing */
+function getPanelTabRects(screenH: number) {
+  const totalH = PLANET_PANELS.length * TAB_H + (PLANET_PANELS.length - 1) * TAB_GAP;
+  const startY = (screenH - totalH) / 2;
+  return PLANET_PANELS.map((_, i) => ({
+    y: startY + i * (TAB_H + TAB_GAP),
+  }));
+}
+
+/**
+ * Hit-test the planet panels. Returns:
+ *  - tab index (>=0) if a tab was clicked (toggle it)
+ *  - -2 if click is inside an open panel body (consume but don't toggle)
+ *  - -1 if click is outside all panel areas (don't consume)
+ */
+export function hitTestPlanetPanels(
+  screenW: number, screenH: number,
+  sx: number, sy: number,
+): number {
+  const tabRects = getPanelTabRects(screenH);
+  const tabX = screenW - TAB_W;
+
+  // Check if click is on a tab
+  for (let i = 0; i < tabRects.length; i++) {
+    const ty = tabRects[i].y;
+    if (sx >= tabX && sx <= screenW && sy >= ty && sy <= ty + TAB_H) {
+      return i;
+    }
+  }
+
+  // Check if click is inside the open panel body
+  if (_openPanel >= 0) {
+    const p = PLANET_PANELS[_openPanel];
+    const bodyH = p.rows.length * ROW_H + PANEL_PAD * 2 + 20;
+    const panelX = screenW - TAB_W - PANEL_W;
+    const tabY = tabRects[_openPanel].y;
+    const panelY = tabY;
+    if (sx >= panelX && sx <= screenW - TAB_W && sy >= panelY && sy <= panelY + Math.max(bodyH, TAB_H)) {
+      return -2; // inside panel body — consume click
+    }
+  }
+
+  return -1;
+}
+
+function drawPlanetPanels(ctx: CanvasRenderingContext2D, screenW: number, screenH: number) {
+  const tabRects = getPanelTabRects(screenH);
+  const tabX = screenW - TAB_W;
+
+  ctx.save();
+
+  for (let i = 0; i < PLANET_PANELS.length; i++) {
+    const p = PLANET_PANELS[i];
+    const ty = tabRects[i].y;
+    const isOpen = _openPanel === i;
+
+    // ── Tab (vertical, right edge) ──
+    ctx.fillStyle = isOpen ? 'rgba(0, 30, 15, 0.9)' : 'rgba(0, 10, 5, 0.7)';
+    roundedRect(ctx, tabX - 4, ty, TAB_W + 4, TAB_H, 4);
+    ctx.fill();
+
+    ctx.strokeStyle = isOpen ? G_BRIGHT : G_DIM;
+    ctx.lineWidth = 1.5;
+    roundedRect(ctx, tabX - 4, ty, TAB_W + 4, TAB_H, 4);
+    ctx.stroke();
+
+    // Icon at top of tab
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = isOpen ? G_BRIGHT : G_MED;
+    ctx.fillText(p.icon, tabX + TAB_W / 2, ty + 18);
+
+    // Vertical title text
+    ctx.save();
+    ctx.translate(tabX + TAB_W / 2, ty + TAB_H / 2 + 8);
+    ctx.rotate(-Math.PI / 2);
+    ctx.font = 'bold 7px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = isOpen ? G_BRIGHT : G_DIM;
+    ctx.fillText(p.title, 0, 0);
+    ctx.restore();
+
+    // Arrow indicator
+    ctx.font = '10px monospace';
+    ctx.fillStyle = isOpen ? G_BRIGHT : G_DIM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(isOpen ? '\u203A' : '\u2039', tabX + TAB_W / 2, ty + TAB_H - 10);
+
+    // ── Slide-out body (only when open) ──
+    if (isOpen) {
+      const bodyH = p.rows.length * ROW_H + PANEL_PAD * 2 + 22;
+      const panelX = screenW - TAB_W - PANEL_W;
+      const panelY = ty;
+      const drawH = Math.max(bodyH, TAB_H);
+
+      // Panel background
+      ctx.fillStyle = 'rgba(0, 10, 5, 0.88)';
+      roundedRect(ctx, panelX, panelY, PANEL_W, drawH, 4);
+      ctx.fill();
+
+      ctx.strokeStyle = G_BRIGHT;
+      ctx.lineWidth = 1;
+      roundedRect(ctx, panelX, panelY, PANEL_W, drawH, 4);
+      ctx.stroke();
+
+      // Panel title
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = G_BRIGHT;
+      ctx.fillText(`${p.icon} ${p.title}`, panelX + PANEL_PAD, panelY + PANEL_PAD);
+
+      // Separator line
+      ctx.strokeStyle = G_DIM;
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(panelX + PANEL_PAD, panelY + 22);
+      ctx.lineTo(panelX + PANEL_W - PANEL_PAD, panelY + 22);
+      ctx.stroke();
+
+      // Rows
+      ctx.font = '8px monospace';
+      ctx.fillStyle = G_MED;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      for (let r = 0; r < p.rows.length; r++) {
+        ctx.fillText(p.rows[r], panelX + PANEL_PAD, panelY + 28 + r * ROW_H);
+      }
+    }
+  }
+
+  ctx.restore();
 }
 
 /** Draw a tier indicator in the top-right */
@@ -1435,20 +1849,158 @@ export function drawTierHUD(
   r: Renderer,
   tierName: string,
   locationName: string,
+  align: 'right' | 'center' = 'right',
 ) {
   const { ctx } = r;
   const screenW = r.width / (window.devicePixelRatio || 1);
+  const x = align === 'center' ? screenW / 2 : screenW - 12;
 
   ctx.save();
   ctx.font = 'bold 12px monospace';
-  ctx.textAlign = 'right';
+  ctx.textAlign = align;
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_BRIGHT;
-  ctx.fillText(tierName, screenW - 12, 12);
+  ctx.fillText(tierName, x, 12);
   if (locationName) {
     ctx.font = '11px monospace';
     ctx.fillStyle = G_MED;
-    ctx.fillText(locationName, screenW - 12, 28);
+    ctx.fillText(locationName, x, 28);
   }
   ctx.restore();
+}
+
+// ── Dock Panel ──────────────────────────────────────────────────────────────
+
+import type { DockState } from './types';
+import type { DockAction } from './dock';
+
+interface DockButton {
+  action: DockAction;
+  label: string;
+  icon: string; // unicode character
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+let _lastDockButtons: DockButton[] = [];
+
+const DOCK_ACTIONS: { action: DockAction; label: string; icon: string }[] = [
+  { action: 'contact', label: 'CONTACT', icon: '\u{1F4E1}' }, // 📡
+  { action: 'trade',   label: 'TRADE',   icon: '\u{1F4E6}' }, // 📦
+  { action: 'missions',label: 'MISSIONS',icon: '\u2605' },     // ★
+  { action: 'leave',   label: 'LEAVE',   icon: '\u2191' },     // ↑
+  { action: 'scan',    label: 'SCAN',    icon: '\u25CE' },     // ◎
+];
+
+export function drawDockPanel(
+  r: Renderer,
+  dock: DockState,
+): void {
+  const { ctx } = r;
+  const dpr = window.devicePixelRatio || 1;
+  const screenW = r.width / dpr;
+  const screenH = r.height / dpr;
+
+  // Panel dimensions
+  const panelH = 110;
+  const panelW = Math.min(screenW - 24, 400);
+  const panelX = (screenW - panelW) / 2;
+  const panelY = screenH - panelH - 12;
+
+  // Panel background
+  ctx.save();
+  ctx.fillStyle = 'rgba(0, 10, 5, 0.92)';
+  ctx.strokeStyle = G_BRIGHT;
+  ctx.lineWidth = 1.5;
+  roundedRect(ctx, panelX, panelY, panelW, panelH, 4);
+  ctx.fill();
+  ctx.stroke();
+
+  // "ORBIT ESTABLISHED" header line
+  const headerY = panelY + 16;
+  const lineW = panelW * 0.25;
+  ctx.strokeStyle = G_DIM;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(panelX + 12, headerY);
+  ctx.lineTo(panelX + lineW, headerY);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(panelX + panelW - lineW, headerY);
+  ctx.lineTo(panelX + panelW - 12, headerY);
+  ctx.stroke();
+
+  const headerText = `ORBIT: ${dock.targetName.toUpperCase()}`;
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText(headerText, screenW / 2, headerY);
+
+  // Action buttons
+  const btnCount = DOCK_ACTIONS.length;
+  const btnW = 56;
+  const btnH = 52;
+  const btnGap = 8;
+  const totalBtnW = btnCount * btnW + (btnCount - 1) * btnGap;
+  const btnStartX = (screenW - totalBtnW) / 2;
+  const btnY = panelY + 28;
+
+  _lastDockButtons = [];
+
+  for (let i = 0; i < btnCount; i++) {
+    const act = DOCK_ACTIONS[i];
+    const bx = btnStartX + i * (btnW + btnGap);
+    const by = btnY;
+
+    _lastDockButtons.push({ ...act, x: bx, y: by, w: btnW, h: btnH });
+
+    const isLeave = act.action === 'leave';
+    const isStub = !dock.docked || (!isLeave && act.action !== 'scan');
+
+    // Button border
+    ctx.strokeStyle = isStub ? G_FAINT : G_BRIGHT;
+    ctx.lineWidth = 1.5;
+    roundedRect(ctx, bx, by, btnW, btnH, 3);
+    ctx.stroke();
+
+    // Icon
+    ctx.font = '18px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = isStub ? G_FAINT : G_BRIGHT;
+    ctx.fillText(act.icon, bx + btnW / 2, by + 20);
+
+    // Label
+    ctx.font = '8px monospace';
+    ctx.fillStyle = isStub ? G_FAINT : G_MED;
+    ctx.fillText(act.label, bx + btnW / 2, by + btnH - 8);
+  }
+
+  // Status text
+  const statusText = dock.docked
+    ? `You are in a stable orbit around ${dock.targetName}.`
+    : `Approaching ${dock.targetName}...`;
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = G_DIM;
+  ctx.fillText(statusText, screenW / 2, panelY + panelH - 18);
+
+  ctx.restore();
+}
+
+/** Hit-test dock panel buttons. Returns the action if a button was clicked, null otherwise. */
+export function hitTestDockPanel(screenPos: Vec2): DockAction | null {
+  for (const btn of _lastDockButtons) {
+    if (
+      screenPos.x >= btn.x && screenPos.x <= btn.x + btn.w &&
+      screenPos.y >= btn.y && screenPos.y <= btn.y + btn.h
+    ) {
+      return btn.action;
+    }
+  }
+  return null;
 }

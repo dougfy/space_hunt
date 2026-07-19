@@ -6,11 +6,16 @@ import {
   ASTEROID_GAP, SPAWN_CLEAR_RADIUS, MAP_HALF_X, MAP_HALF_Y,
   AVOID_LOOKAHEAD, SHIP_MAX_SPEED,
   ASTEROID_NAME_PREFIXES, ASTEROID_NAME_SUFFIXES,
+  SYSTEM_SIZE,
 } from './constants';
 import {
   vec2, add, sub, scale, normalize, magnitude, sqrMagnitude,
   clamp01, dot, createRng, stableHash,
 } from './math';
+
+// ── Ring Constants ──────────────────────────────────────────────────────────
+export const BELT_HALF_WIDTH = 3.0; // radial half-extent of belt (units from orbit center line)
+export const RING_ASTEROID_COUNT = 120; // number of asteroids around the full ring
 
 export interface SurfaceInfo {
   nearest: Vec2;
@@ -187,4 +192,87 @@ function generateAsteroidName(rng: ReturnType<typeof createRng>): string {
   const suffix = ASTEROID_NAME_SUFFIXES[rng.rangeInt(0, ASTEROID_NAME_SUFFIXES.length)];
   const serial = rng.rangeInt(10, 100);
   return `${prefix} ${suffix}-${serial}`;
+}
+
+// ── Ring Asteroid Generation ────────────────────────────────────────────────
+/**
+ * Generate asteroids placed in System coordinates along a belt ring.
+ * centerX, centerY = system center (typically 20, 20)
+ * orbitDist = radius of the belt orbit from center
+ * Asteroids are distributed evenly around the full ring with radial jitter.
+ */
+export function generateRingAsteroids(
+  seed: string,
+  centerX: number,
+  centerY: number,
+  orbitDist: number,
+): { asteroids: Asteroid[]; names: string[] } {
+  const rng = createRng(stableHash(seed));
+  const asteroids: Asteroid[] = [];
+  const names: string[] = [];
+
+  let placed = 0;
+  let attempts = 0;
+  const maxAttempts = RING_ASTEROID_COUNT * 200;
+
+  while (placed < RING_ASTEROID_COUNT && attempts < maxAttempts) {
+    attempts++;
+
+    // Random angle around the ring
+    const angle = rng.range(0, Math.PI * 2);
+    // Random radial offset within belt width
+    const radialOffset = rng.range(-BELT_HALF_WIDTH, BELT_HALF_WIDTH);
+    const dist = orbitDist + radialOffset;
+
+    const px = centerX + Math.cos(angle) * dist;
+    const py = centerY + Math.sin(angle) * dist;
+    const pos = vec2(px, py);
+
+    const radius = rng.range(ASTEROID_MIN_RADIUS, ASTEROID_MAX_RADIUS);
+    const pts = genAsteroidPoints(rng, radius);
+
+    let br = 0;
+    for (let k = 0; k < pts.length; k++) {
+      br = Math.max(br, magnitude(pts[k]));
+    }
+
+    // Reject overlaps with existing asteroids
+    let ok = true;
+    for (let j = 0; j < asteroids.length; j++) {
+      const need = br + asteroids[j].r + ASTEROID_GAP;
+      if (sqrMagnitude(sub(pos, asteroids[j].pos)) < need * need) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+
+    asteroids.push({ pos, pts, r: br });
+    names.push(generateAsteroidName(rng));
+    placed++;
+  }
+
+  return { asteroids, names };
+}
+
+/**
+ * Get the subset of asteroids within a radius of a point (for frustum culling).
+ * Returns indices into the original array.
+ */
+export function getNearbyAsteroids(
+  asteroids: Asteroid[],
+  center: Vec2,
+  radius: number,
+): number[] {
+  const indices: number[] = [];
+  const r2 = radius * radius;
+  for (let i = 0; i < asteroids.length; i++) {
+    const d2 = sqrMagnitude(sub(asteroids[i].pos, center));
+    // Include if asteroid center is within radius + its own bounding radius
+    const threshold = radius + asteroids[i].r;
+    if (d2 < threshold * threshold) {
+      indices.push(i);
+    }
+  }
+  return indices;
 }

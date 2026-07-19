@@ -68,11 +68,28 @@ export interface ShootingState {
   hitFlashTimer: number;
 }
 
+export type InputMode = 'mouse' | 'keyboard';
+
+export type DockTargetType = 'planet' | 'feature' | 'star';
+
+export interface DockState {
+  docked: boolean;
+  targetType: DockTargetType;
+  bodyIndex: number;          // index in galaxy.bodies (-1 for star)
+  featureIndex: number;       // index in body.features (-1 if docked to planet/star itself)
+  targetName: string;
+  targetLabel: string;        // e.g. "Terrestrial Planet", "Mine", "Station"
+  approachTimer: number;      // 0–1 lerp progress during docking animation
+}
+
 export interface GameState {
   ship: Ship;
   tgtPos: Vec2;
   tgtActive: boolean;
   worldOffset: Vec2;
+  inputMode: InputMode;
+  keyThrust: boolean;    // true when forward key is held
+  keyTurnRate: number;   // -1 = turning left, +1 = turning right, 0 = no turn
   asteroids: Asteroid[];
   asteroidNames: string[];
   pods: FuelPod[];
@@ -90,6 +107,7 @@ export interface GameState {
   impactBufferWorld: number;
   playing: boolean;
   splashMode: boolean;
+  dock: DockState | null;
   shooting: ShootingState;
   galaxy: import('./galaxy').GalaxyState;
 }

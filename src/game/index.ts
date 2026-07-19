@@ -5,4 +5,5 @@ export { createDevvitBridge } from './bridge';
 export type { DevvitBridge, DevvitCallbacks } from './bridge';
 export type { RemotePoseItem } from './ghosts';
 export type { GameState, ShipShape, Ghost } from './types';
-export { getGameState, getDebugBounds, setDebugBounds } from './game-loop';
+export { getGameState, refreshGalaxyStarNames } from './game-loop';
+export { setExternalStarNames } from './galaxy';

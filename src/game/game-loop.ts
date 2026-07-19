@@ -5,10 +5,10 @@ import { ZoomState } from './types';
 import {
   CANVAS_W, CANVAS_H, FUEL_MAX,
   FUEL_DRAIN_PER_SECOND, LOW_FUEL_THRESHOLD, LOW_FUEL_BLINK_PERIOD,
-  SHIP_IMPACT_BUFFER,
+  SHIP_IMPACT_BUFFER, SYSTEM_SIZE, SHIP_SIZE, PLAYER_MAX_HP,
 } from './constants';
 import { vec2, add } from './math';
-import { generateAsteroids } from './asteroids';
+import { generateAsteroids, generateRingAsteroids } from './asteroids';
 import { generateFuelPods, updatePodDiscovery, checkPodCollection, applyPodCollected } from './pods';
 import { createCamera, updateCamera, updateZoomState, getSafeZone, findNearestAsteroidIndex, isOverrideClear } from './camera';
 import { updateShip } from './ship';
@@ -17,15 +17,17 @@ import { createInputState, setupInput, processInput, InputState } from './input'
 import {
   createRenderer, resizeRenderer, clearScreen, drawShip, drawAsteroid,
   drawTargetReticle, drawFuelPod, drawGhostShip, drawHUD, drawGhostLabel,
-  drawAsteroidLabel, drawPlayerLabel, drawProjectiles, drawShootingHUD,
-  drawZoomButton, isFireButtonHit, Renderer,
+  drawAsteroidLabel, drawPlayerLabel, drawProjectiles, drawShootingHUD, drawZoomButton,
+  isFireButtonHit, Renderer, drawControlButtons, hitTestControlButtons,
   drawGalaxyView, drawSystemView, drawPlanetView, drawTierHUD,
-  drawDebugBounds,
+  drawDebugBounds, drawDockPanel, hitTestDockPanel,
+  hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
 } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
-import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, generateSystem } from './galaxy';
-import { GALAXY_SHIP_SPEED, GALAXY_SIZE, SYSTEM_SIZE, SHIP_MAX_SPEED } from './constants';
+import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, generateSystem, applyStarNames } from './galaxy';
+import { GALAXY_SHIP_SPEED, GALAXY_SIZE, SHIP_MAX_SPEED } from './constants';
+import { checkDocking, updateDocking, undock } from './dock';
 
 let gameState: GameState | null = null;
 let renderer: Renderer | null = null;
@@ -43,6 +45,11 @@ const POSE_INTERVAL = 1 / 12; // ~12Hz pose reporting
 
 export function getGameState(): GameState | null {
   return gameState;
+}
+
+export function refreshGalaxyStarNames(): void {
+  if (!gameState) return;
+  applyStarNames(gameState.galaxy.stars);
 }
 
 /** Swap in real callbacks after a preview session starts */
@@ -79,6 +86,9 @@ export function startGame(
     worldOffset: vec2(0, 0),
     tgtPos: vec2(0, 0),
     tgtActive: false,
+    inputMode: 'mouse',
+    keyThrust: false,
+    keyTurnRate: 0,
     fuelPercent: FUEL_MAX,
     docksCollected: 0,
     totalDocks: 0,
@@ -91,6 +101,7 @@ export function startGame(
     impactBufferWorld: SHIP_IMPACT_BUFFER,
     playing: true,
     splashMode: isSplash,
+    dock: null,
     shooting: createShootingState(),
     galaxy: createGalaxyState(seed),
   };
@@ -111,10 +122,13 @@ export function startGame(
     gameState.galaxy.currentBodyIndex = 0;
     const stationFeature = stationBody.features.find(f => f.type === 'station');
     if (stationFeature) {
-      // Position ship at the station feature's location
+      // Position ship near the station but outside dock range
       const sx = Math.cos(stationFeature.angle) * stationFeature.dist;
       const sy = Math.sin(stationFeature.angle) * stationFeature.dist;
-      gameState.ship.pos = vec2(sx + 0.4, sy);
+      // Offset away from feature by more than DOCK_FEATURE_RADIUS (0.4)
+      const awayX = Math.cos(stationFeature.angle);
+      const awayY = Math.sin(stationFeature.angle);
+      gameState.ship.pos = vec2(sx + awayX * 0.6, sy + awayY * 0.6);
       gameState.ship.ang = stationFeature.angle + Math.PI; // face toward station
     }
   }
@@ -188,7 +202,34 @@ function update(dt: number): void {
 
   gameState.elapsedTime += dt;
 
-  // Process input
+  // Intercept UI clicks BEFORE processInput sets ship target
+
+  // Handle dock panel clicks
+  if (gameState.dock && inputState.pointerDown && inputState.pointerPos) {
+    const dockAction = hitTestDockPanel(inputState.pointerPos);
+    if (dockAction) {
+      inputState.pointerDown = false;
+      if (dockAction === 'leave') {
+        console.log('[DOCK] Undocking from', gameState.dock.targetName);
+        undock(gameState);
+      } else {
+        console.log('[DOCK] Action stub:', dockAction);
+      }
+    }
+  }
+
+  // Handle planet panel slide-out clicks
+  if (gameState.galaxy.tier === NavigationTier.Planet && inputState.pointerDown && inputState.pointerPos) {
+    const panelIdx = hitTestPlanetPanels(screenW, screenH, inputState.pointerPos.x, inputState.pointerPos.y);
+    if (panelIdx >= 0) {
+      togglePlanetPanel(panelIdx);
+      inputState.pointerDown = false;
+    } else if (panelIdx === -2) {
+      inputState.pointerDown = false;
+    }
+  }
+
+  // Process input (ship targeting, etc.)
   processInput(inputState, gameState, gameState.camera, screenW, screenH);
 
   // Handle fire request
@@ -215,6 +256,16 @@ function update(dt: number): void {
     }
   }
 
+  // Handle recenter — snap camera to ship, stop movement, toggle debug bounds
+  if (inputState.recenterRequested) {
+    inputState.recenterRequested = false;
+    gameState.tgtActive = false;
+    gameState.ship.vel = { x: 0, y: 0 };
+    gameState.ship.thrust = false;
+    gameState.camera.pos = { x: gameState.ship.pos.x, y: gameState.ship.pos.y };
+    _debugBounds = !_debugBounds;
+  }
+
   // Auto-clear override once ship leaves the suppressed asteroid's zone
   if (gameState.zoomOverride >= 0) {
     const cleared = isOverrideClear(gameState, renderer.height);
@@ -236,8 +287,33 @@ function update(dt: number): void {
   // Get safe zone from current camera
   const safeZone = getSafeZone(gameState.camera);
 
-  // Update ship physics
-  updateShip(gameState, dt, safeZone);
+  // Update ship physics (skip when docked — ship is locked in place)
+  if (gameState.dock && gameState.dock.docked) {
+    // Ship is fully docked — freeze in place
+    gameState.ship.vel = vec2(0, 0);
+    gameState.ship.thrust = false;
+
+    // Refill resources at station/starbase
+    if (gameState.dock.targetType === 'feature' && gameState.dock.targetLabel === 'Station') {
+      gameState.fuelPercent = FUEL_MAX;
+      gameState.shooting.hp = PLAYER_MAX_HP;
+    }
+  } else if (gameState.dock && !gameState.dock.docked) {
+    // Docking approach animation in progress
+    updateDocking(gameState, dt);
+  } else {
+    updateShip(gameState, dt, safeZone);
+
+    // Check for docking in Planet tier (only when not already docked)
+    if (gameState.galaxy.tier === NavigationTier.Planet && !gameState.dock) {
+      const newDock = checkDocking(gameState);
+      if (newDock) {
+        gameState.dock = newDock;
+        gameState.tgtActive = false;
+        console.log('[DOCK] Approaching', newDock.targetName, newDock.targetType);
+      }
+    }
+  }
 
   // Update ghost interpolation
   updateGhosts(gameState, dt);
@@ -267,39 +343,47 @@ function update(dt: number): void {
     }
   }
 
-  // Galaxy tier transitions — skip in splash mode (self-contained asteroid field)
-  if (!gameState.splashMode) {
+  // Galaxy tier transitions — skip in splash mode and when docked
+  if (!gameState.splashMode && !gameState.dock) {
   const tier = gameState.galaxy.tier;
-  const worldShipPos = (tier === NavigationTier.Local || tier === NavigationTier.Planet)
+  // In ring model, Local tier uses system coords directly (no worldOffset)
+  const worldShipPos = (tier === NavigationTier.Planet)
     ? add(gameState.ship.pos, gameState.worldOffset)
     : gameState.ship.pos;
   const transition = checkTierTransition(worldShipPos, gameState.galaxy);
   if (transition) {
     console.log('[TRANSITION] from tier=', gameState.galaxy.tier, 'to=', transition.newTier, 'shipPos=', gameState.ship.pos, 'worldShipPos=', worldShipPos, 'starIdx=', transition.starIndex, 'bodyIdx=', transition.bodyIndex);
-    const newPos = applyTransition(gameState.galaxy, transition);
+    const newPos = applyTransition(gameState.galaxy, transition, gameState.ship.pos);
     gameState.ship.pos = newPos;
-    gameState.ship.vel = vec2(0, 0);
     gameState.worldOffset = vec2(0, 0);
     gameState.tgtActive = false;
+
+    // Belt transitions (Local↔System): don't reset velocity — ship keeps moving
+    const isBeltTransition = (
+      (tier === NavigationTier.System && transition.newTier === NavigationTier.Local) ||
+      (tier === NavigationTier.Local && transition.newTier === NavigationTier.System)
+    );
+    if (!isBeltTransition) {
+      gameState.ship.vel = vec2(0, 0);
+    }
 
     // Regenerate world content for new tier
     if (transition.newTier === NavigationTier.Local) {
       const body = gameState.galaxy.bodies[transition.bodyIndex];
       const localSeed = getLocalSeed(body);
-      const { asteroids, names } = generateAsteroids(localSeed);
+      const center = SYSTEM_SIZE / 2;
+      const { asteroids, names } = generateRingAsteroids(localSeed, center, center, body.orbitDist);
       gameState.asteroids = asteroids;
       gameState.asteroidNames = names;
       gameState.pods = generateFuelPods(asteroids, localSeed);
       gameState.docksCollected = 0;
       gameState.totalDocks = gameState.pods.filter(p => !p.refuels).length;
-      console.log('[PODS] Local tier entered. asteroids=', asteroids.length, 'pods=', gameState.pods.length, 'docks=', gameState.totalDocks, 'seed=', localSeed);
+      console.log('[RING] Local tier entered. asteroids=', asteroids.length, 'pods=', gameState.pods.length, 'docks=', gameState.totalDocks, 'orbitDist=', body.orbitDist);
     } else if (transition.newTier === NavigationTier.Planet) {
-      // Planet view — no asteroids, just features rendered by drawPlanetView
       gameState.asteroids = [];
       gameState.asteroidNames = [];
       gameState.pods = [];
     } else {
-      // Galaxy and System tiers have no asteroids/pods (for now stars/planets are rendered differently)
       gameState.asteroids = [];
       gameState.asteroidNames = [];
       gameState.pods = [];
@@ -311,8 +395,8 @@ function update(dt: number): void {
   poseTimer += dt;
   if (poseTimer >= POSE_INTERVAL && devvitCb) {
     poseTimer -= POSE_INTERVAL;
-    const wx = gameState.ship.pos.x + gameState.worldOffset.x;
-    const wy = gameState.ship.pos.y + gameState.worldOffset.y;
+    const wx = gameState.ship.pos.x;
+    const wy = gameState.ship.pos.y;
     devvitCb.onPose(
       wx, wy, gameState.ship.ang, gameState.playerName,
       gameState.galaxy.tier, gameState.galaxy.currentStarIndex, gameState.galaxy.currentBodyIndex,
@@ -329,7 +413,8 @@ function render(): void {
 
   // ── Galaxy tier ──
   if (tier === NavigationTier.Galaxy) {
-    drawGalaxyView(renderer, camera, gameState.galaxy, gameState.ship.pos);
+    const shipRenderSize = SHIP_SIZE * 3;
+    drawGalaxyView(renderer, camera, gameState.galaxy, gameState.ship.pos, !_debugBounds);
 
     // Draw ghost ships in galaxy
     for (const g of gameState.ghosts) {
@@ -346,15 +431,18 @@ function render(): void {
       renderer, camera, gameState.ship.pos,
       gameState.ship.ang, gameState.shipShape,
       gameState.ship.thrust ? '#17b97d' : '#8ff7cf',
+      shipRenderSize,
     );
     drawPlayerLabel(renderer, camera, gameState.ship.pos, gameState.playerName);
 
-    drawTierHUD(renderer, 'GALAXY', '');
+    drawTierHUD(renderer, 'GALAXY', '', 'center');
+    drawControlButtons(renderer, false, false, _debugBounds);
     return;
   }
 
   // ── System tier ──
   if (tier === NavigationTier.System) {
+    const shipRenderSize = SHIP_SIZE * 3;
     drawSystemView(renderer, camera, gameState.galaxy, gameState.ship.pos);
     if (_debugBounds) {
       drawDebugBounds(renderer, camera, gameState.galaxy, gameState.ship.pos);
@@ -375,18 +463,30 @@ function render(): void {
       renderer, camera, gameState.ship.pos,
       gameState.ship.ang, gameState.shipShape,
       gameState.ship.thrust ? '#17b97d' : '#8ff7cf',
+      shipRenderSize,
     );
     drawPlayerLabel(renderer, camera, gameState.ship.pos, gameState.playerName);
 
-    const sysStarName = gameState.galaxy.currentStarIndex >= 0
-      ? gameState.galaxy.stars[gameState.galaxy.currentStarIndex].name : '';
-    drawTierHUD(renderer, 'SYSTEM', sysStarName);
+    drawTierHUD(renderer, 'SYSTEM', '');
+
+    drawControlButtons(renderer, false, false, _debugBounds);
     return;
   }
 
   // ── Planet tier ──
   if (tier === NavigationTier.Planet) {
-    drawPlanetView(renderer, camera, gameState.galaxy, gameState.ship.pos);
+    const shieldPercent = (gameState.shooting.hp / PLAYER_MAX_HP) * 100;
+    drawPlanetView(
+      renderer,
+      camera,
+      gameState.galaxy,
+      gameState.ship.pos,
+      gameState.fuelPercent,
+      shieldPercent,
+    );
+    if (_debugBounds) {
+      drawPlanetDebugBounds(renderer, camera, gameState.galaxy, gameState.ship.pos, gameState.worldOffset);
+    }
 
     // Draw ghost ships in planet view
     for (const g of gameState.ghosts) {
@@ -406,9 +506,13 @@ function render(): void {
     );
     drawPlayerLabel(renderer, camera, gameState.ship.pos, gameState.playerName);
 
-    const planetName = gameState.galaxy.currentBodyIndex >= 0
-      ? gameState.galaxy.bodies[gameState.galaxy.currentBodyIndex]?.name ?? '' : '';
-    drawTierHUD(renderer, 'PLANET', planetName);
+    // Planet tier info is in the planet view itself (top-left), no separate HUD needed
+    drawControlButtons(renderer, false, false, _debugBounds);
+
+    // Draw dock panel only when fully docked
+    if (gameState.dock?.docked) {
+      drawDockPanel(renderer, gameState.dock);
+    }
     return;
   }
 
@@ -484,5 +588,5 @@ function render(): void {
   // Local tier HUD
   const bodyName = gameState.galaxy.currentBodyIndex >= 0
     ? gameState.galaxy.bodies[gameState.galaxy.currentBodyIndex]?.name ?? '' : '';
-  drawTierHUD(renderer, 'LOCAL', bodyName);
+  drawTierHUD(renderer, 'LOCAL', bodyName, 'center');
 }

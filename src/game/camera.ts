@@ -63,7 +63,7 @@ export function updateCamera(state: GameState, dt: number): void {
     return;
   }
 
-  // ── Local tier: existing zoom behavior ──
+  // ── Local tier: zoom behavior, camera follows ship in system coords ──
   // Continuous zoom animation: zoomT goes 0→1 (wide→close)
   const zoomTarget = (state.zoomState === ZoomState.Zoomed || state.zoomState === ZoomState.Releasing) ? 1 : 0;
   const speed = 1 / ZOOM_TRANSITION_DURATION;
@@ -77,16 +77,14 @@ export function updateCamera(state: GameState, dt: number): void {
   // Interpolate ortho size
   camera.orthoSize = BASE_ORTHO + (CLOSE_ORTHO - BASE_ORTHO) * zoomT;
 
-  // Camera focus: at zero zoom → origin, zoomed → ship position
-  const focusX = state.ship.pos.x * zoomT;
-  const focusY = state.ship.pos.y * zoomT;
-  camera.pos = { x: focusX, y: focusY };
+  // Camera follows ship in system coordinates
+  camera.pos = { x: state.ship.pos.x, y: state.ship.pos.y };
 
-  // Clamp camera within map bounds
+  // Clamp camera within system bounds
   const halfW = camera.orthoSize * camera.aspect;
   const halfH = camera.orthoSize;
-  camera.pos.x = clamp(camera.pos.x, -(MAP_HALF_X - halfW), MAP_HALF_X - halfW);
-  camera.pos.y = clamp(camera.pos.y, -(MAP_HALF_Y - halfH), MAP_HALF_Y - halfH);
+  camera.pos.x = clamp(camera.pos.x, halfW, SYSTEM_SIZE - halfW);
+  camera.pos.y = clamp(camera.pos.y, halfH, SYSTEM_SIZE - halfH);
 }
 
 export function updateZoomState(state: GameState, dt: number, pixelHeight: number): void {

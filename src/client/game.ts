@@ -3,11 +3,51 @@
 // Detects inline vs expanded mode and shows overlay buttons when inline.
 
 import { context, getWebViewMode, requestExpandedMode } from '@devvit/web/client';
-import { createDevvitBridge, getGameState, getDebugBounds, setDebugBounds } from '../game';
+import { createDevvitBridge, getGameState, setExternalStarNames, refreshGalaxyStarNames } from '../game';
 import type { DevvitBridge } from '../game';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) throw new Error('Canvas #game-canvas not found');
+
+async function loadRealStarNames(): Promise<void> {
+  const cacheKey = 'spacehunt_real_star_names_v1';
+
+  // Use cached one-time pull first.
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const names = JSON.parse(cached) as string[];
+      if (Array.isArray(names) && names.length > 0) {
+        setExternalStarNames(names);
+        refreshGalaxyStarNames();
+        return;
+      }
+    }
+  } catch {
+    // Ignore cache parse/storage issues.
+  }
+
+  try {
+    const url = 'https://cdn.jsdelivr.net/gh/dariusk/corpora@master/data/astronomy/stars.json';
+    const res = await fetch(url, { cache: 'force-cache' });
+    if (!res.ok) return;
+    const data = await res.json() as { stars?: string[] };
+    const names = Array.isArray(data.stars) ? data.stars : [];
+    if (names.length > 0) {
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify(names));
+      } catch {
+        // Ignore storage quota/privacy mode issues.
+      }
+      setExternalStarNames(names);
+      refreshGalaxyStarNames();
+    }
+  } catch {
+    // Internet fetch is optional; fallback names remain active.
+  }
+}
+
+void loadRealStarNames();
 
 const overlay = document.getElementById('overlay')!;
 const playHereBtn = document.getElementById('play-here')!;
@@ -51,13 +91,13 @@ console.log = (...args: unknown[]) => { _origLog.apply(console, args); appendDeb
 console.warn = (...args: unknown[]) => { _origWarn.apply(console, args); appendDebug('[W] ', args); };
 console.error = (...args: unknown[]) => { _origError.apply(console, args); appendDebug('[E] ', args); };
 debugToggle.addEventListener('click', () => debugLog.classList.toggle('visible'));
-
-// ── Bounds debug button ─────────────────────────────────────────────────────
-const boundsBtn = document.getElementById('bounds-btn')!;
-boundsBtn.addEventListener('click', () => {
-  const next = !getDebugBounds();
-  setDebugBounds(next);
-  boundsBtn.classList.toggle('active', next);
+const debugCopy = document.getElementById('debug-copy')!;
+debugCopy.addEventListener('click', () => {
+  const text = debugLog.textContent || '';
+  navigator.clipboard.writeText(text).then(() => {
+    debugCopy.textContent = '\u2713';
+    setTimeout(() => { debugCopy.innerHTML = '&#x2398;'; }, 1500);
+  });
 });
 
 const sessionId = `${username}:${Math.random().toString(36).slice(2, 8)}`;
@@ -241,6 +281,7 @@ let ghostListInterval: ReturnType<typeof setInterval> | null = null;
 settingsBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 settingsBtn.addEventListener('click', (e) => {
   e.stopPropagation();
+  helpPanel.classList.remove('visible');
   const opening = !settingsPanel.classList.contains('visible');
   settingsPanel.classList.toggle('visible');
   if (opening) {
@@ -251,6 +292,18 @@ settingsBtn.addEventListener('click', (e) => {
     ghostListInterval = null;
   }
 });
+
+// ── Help button ─────────────────────────────────────────────────────────────
+const helpBtn = document.getElementById('help-btn')!;
+const helpPanel = document.getElementById('help-panel')!;
+helpBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+helpBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  settingsPanel.classList.remove('visible');
+  helpPanel.classList.toggle('visible');
+});
+helpPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
+helpPanel.addEventListener('click', (e) => e.stopPropagation());
 
 function updateGhostList() {
   const ghosts = bridge.getGhosts();
@@ -308,6 +361,8 @@ if (isInline) {
   playFullBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
   playFullBtn.addEventListener('click', (e) => {
     e.stopPropagation();
+    overlay.classList.remove('visible');
+    startMultiplayer();
     requestExpandedMode(e, 'game');
   });
 }

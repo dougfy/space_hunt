@@ -48,6 +48,7 @@ export function createBeltGalaxyState(opts: {
   return {
     tier: NavigationTier.Local,
     stars: [{ index: 0, pos: vec2(50, 50), seed: 999, name: 'Test Star', bodyCount: 2 }],
+    homeStarIndex: 0,
     currentStarIndex: 0,
     currentBodyIndex: 0,
     bodies: [belt, planet],
@@ -64,6 +65,7 @@ export function createSystemGalaxyState(orbitDist = 12): GalaxyState {
   return {
     tier: NavigationTier.System,
     stars: [{ index: 0, pos: vec2(50, 50), seed: 999, name: 'Test Star', bodyCount: 2 }],
+    homeStarIndex: 0,
     currentStarIndex: 0,
     currentBodyIndex: -1,
     bodies: [belt, planet],
@@ -78,6 +80,7 @@ export function createTestGameState(galaxyOverride?: Partial<GalaxyState>): Game
   const galaxy: GalaxyState = {
     tier: NavigationTier.Local,
     stars: [{ index: 0, pos: vec2(50, 50), seed: 999, name: 'Test Star', bodyCount: 2 }],
+    homeStarIndex: 0,
     currentStarIndex: 0,
     currentBodyIndex: 0,
     bodies: [createBeltBody()],
@@ -87,16 +90,23 @@ export function createTestGameState(galaxyOverride?: Partial<GalaxyState>): Game
     ...galaxyOverride,
   };
 
+  // In ring model, ship starts in system coords on the belt orbit (right side at angle=0)
+  const orbitDist = galaxy.bodies[0]?.orbitDist ?? 12;
+  const shipPos = vec2(center + orbitDist, center);
+
   return {
-    ship: { pos: vec2(0, -6), vel: vec2(0, 0), ang: 0, thrust: false },
+    ship: { pos: shipPos, vel: vec2(0, 0), ang: 0, thrust: false },
     tgtPos: vec2(0, 0),
     tgtActive: false,
+    inputMode: 'mouse',
+    keyThrust: false,
+    keyTurnRate: 0,
     worldOffset: vec2(0, 0),
     asteroids: [],
     asteroidNames: [],
     pods: [],
     ghosts: [],
-    camera: { pos: vec2(0, 0), orthoSize: 3.2, aspect: 1.5 },
+    camera: { pos: vec2(center, center), orthoSize: 3.2, aspect: 1.5 },
     fuelPercent: 100,
     docksCollected: 0,
     totalDocks: 0,
@@ -109,6 +119,7 @@ export function createTestGameState(galaxyOverride?: Partial<GalaxyState>): Game
     impactBufferWorld: 0.12,
     playing: true,
     splashMode: false,
+    dock: null,
     shooting: { enabled: false, projectiles: [], cooldownRemaining: 0, hp: 3, invulnRemaining: 0, hitFlashTimer: 0 },
     galaxy,
   };

@@ -46,7 +46,38 @@ export function updateShip(state: GameState, dt: number, safeZone: { minX: numbe
     : state.galaxy.tier === NavigationTier.System ? SYSTEM_SHIP_SPEED
     : GALAXY_SHIP_SPEED;
 
-  if (state.tgtActive) {
+  const accelScale = maxSpeed / SHIP_MAX_SPEED;
+
+  // ── Keyboard mode: rotation + thrust ──
+  if (state.inputMode === 'keyboard' && (state.keyThrust || state.keyTurnRate !== 0 || !state.tgtActive)) {
+    // Turn: left/right rotates ship angle
+    const TURN_SPEED = 3.5; // radians per second (~200°/s)
+    if (state.keyTurnRate !== 0) {
+      ship.ang += state.keyTurnRate * TURN_SPEED * dt;
+    }
+
+    if (state.keyThrust && state.fuelPercent > 0) {
+      // Thrust in facing direction
+      const forwardDir = vec2(Math.cos(ship.ang), Math.sin(ship.ang));
+      let desiredVel = scale(forwardDir, maxSpeed);
+
+      // Asteroid avoidance (Local tier)
+      if (state.galaxy.tier === NavigationTier.Local) {
+        const avoidance = computeAvoidance(ship.pos, state.asteroids, state.impactBufferWorld);
+        desiredVel = add(desiredVel, scale(avoidance, AVOID_STRENGTH));
+      }
+      if (magnitude(desiredVel) > maxSpeed) {
+        desiredVel = scale(normalize(desiredVel), maxSpeed);
+      }
+
+      ship.vel = moveTowardsVec2(ship.vel, desiredVel, SHIP_ACCELERATION * accelScale * dt);
+      ship.thrust = true;
+    } else {
+      // No thrust: decelerate
+      ship.vel = moveTowardsVec2(ship.vel, vec2(0, 0), SHIP_ACCELERATION * accelScale * 0.6 * dt);
+      ship.thrust = false;
+    }
+  } else if (state.tgtActive) {
     const d = sub(state.tgtPos, ship.pos);
     const dist = magnitude(d);
 
@@ -73,8 +104,6 @@ export function updateShip(state: GameState, dt: number, safeZone: { minX: numbe
       if (magnitude(desiredVel) > maxSpeed) {
         desiredVel = scale(normalize(desiredVel), maxSpeed);
       }
-      // Scale acceleration with tier speed so deceleration feels proportional
-      const accelScale = maxSpeed / SHIP_MAX_SPEED;
       ship.vel = moveTowardsVec2(ship.vel, desiredVel, SHIP_ACCELERATION * accelScale * dt);
       ship.thrust = sqrMagnitude(ship.vel) > 0.0025 && desiredSpeed > 0.02;
     } else {
@@ -89,16 +118,14 @@ export function updateShip(state: GameState, dt: number, safeZone: { minX: numbe
       }
     }
   } else {
-    const accelScale = maxSpeed / SHIP_MAX_SPEED;
     ship.vel = moveTowardsVec2(ship.vel, vec2(0, 0), SHIP_ACCELERATION * accelScale * 0.6 * dt);
     ship.thrust = false;
   }
 
   ship.pos = add(ship.pos, scale(ship.vel, dt));
 
-  // Boundary scrolling (Local tier only — Galaxy/System tiers follow the ship with the camera,
-  // Planet tier has fixed camera so ship moves freely for edge-based tier transitions)
-  if (state.galaxy.tier === NavigationTier.Local) {
+  // Boundary scrolling (Planet tier only — Galaxy/System/Local tiers follow the ship with the camera)
+  if (state.galaxy.tier === NavigationTier.Planet) {
   let worldShift = vec2(0, 0);
   if (ship.pos.x < safeZone.minX) {
     worldShift = { ...worldShift, x: ship.pos.x - safeZone.minX };
@@ -123,21 +150,15 @@ export function updateShip(state: GameState, dt: number, safeZone: { minX: numbe
   // Hard collision resolution
   resolveShipCollisions(state);
 
-  // Update angle from velocity
-  if (sqrMagnitude(ship.vel) > 0.01) {
+  // Update angle from velocity (mouse mode only — keyboard mode controls angle directly)
+  if (state.inputMode !== 'keyboard' && sqrMagnitude(ship.vel) > 0.01) {
     ship.ang = Math.atan2(ship.vel.y, ship.vel.x);
   }
 }
 
 function applyWorldShift(state: GameState, shift: Vec2): void {
-  const halfW = state.camera.orthoSize * state.camera.aspect;
-  const halfH = state.camera.orthoSize;
-
+  // Only used by Planet tier for edge-based transitions
   const desired = add(state.worldOffset, shift);
-  const limX = Math.max(0, 10 - halfW);
-  const limY = Math.max(0, 8 - halfH);
-  desired.x = Math.max(-limX, Math.min(limX, desired.x));
-  desired.y = Math.max(-limY, Math.min(limY, desired.y));
 
   const actual = sub(desired, state.worldOffset);
   state.worldOffset = desired;

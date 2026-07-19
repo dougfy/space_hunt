@@ -21,24 +21,56 @@
         pointer-events: none;
       }
       #overlay.visible { display: flex; }
-      #settings-btn {
+      #icon-bar {
         position: absolute;
         top: 12px;
         right: 12px;
         z-index: 100;
         pointer-events: auto;
+        display: flex;
+        gap: 6px;
+      }
+      .icon-btn {
         background: transparent;
         border: 2px solid #4fffb0;
         color: #4fffb0;
-        font-family: monospace;
-        font-size: 13px;
-        font-weight: bold;
-        letter-spacing: 1px;
-        padding: 6px 14px;
+        font-size: 18px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         cursor: pointer;
-        text-transform: uppercase;
+        line-height: 1;
       }
-      #settings-btn:hover { background: rgba(79, 255, 176, 0.1); }
+      .icon-btn:hover { background: rgba(79, 255, 176, 0.1); }
+      .icon-btn.active { background: rgba(79, 255, 176, 0.2); }
+
+      #help-panel {
+        display: none;
+        position: absolute;
+        top: 56px;
+        right: 12px;
+        z-index: 99;
+        pointer-events: auto;
+        background: rgba(0, 0, 0, 0.92);
+        border: 1px solid #3a7a5a;
+        padding: 12px 16px;
+        font-family: monospace;
+        font-size: 11px;
+        color: #8ff7cf;
+        max-width: 260px;
+      }
+      #help-panel.visible { display: block; }
+      #help-panel h3 {
+        color: #4fffb0;
+        font-size: 11px;
+        margin-bottom: 4px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      .help-row { margin: 3px 0; color: #5a9a7a; }
+      .help-row b { color: #8ff7cf; }
 
       #btn-row {
         position: absolute;
@@ -79,7 +111,7 @@
       /* Settings panel */
       #settings-panel {
         position: absolute;
-        top: 50px;
+        top: 56px;
         right: 12px;
         z-index: 101;
         display: none;
@@ -188,29 +220,38 @@
         margin-top: 4px;
       }
       #debug-toggle:hover { border-color: #4fffb0; color: #8ff7cf; }
-      #bounds-btn {
-        position: absolute;
-        top: 12px;
-        left: 12px;
-        z-index: 100;
-        pointer-events: auto;
+      #debug-copy {
         background: transparent;
-        border: 2px solid #ff5050;
-        color: #ff5050;
+        border: 1px solid #3a7a5a;
+        color: #5a7a6a;
         font-family: monospace;
-        font-size: 11px;
-        font-weight: bold;
-        padding: 4px 10px;
+        font-size: 10px;
+        padding: 4px 6px;
         cursor: pointer;
+        margin-top: 4px;
+        margin-left: 4px;
       }
-      #bounds-btn:hover { background: rgba(255, 80, 80, 0.1); }
-      #bounds-btn.active { background: rgba(255, 80, 80, 0.2); border-color: #ffaa50; color: #ffaa50; }
+      #debug-copy:hover { border-color: #4fffb0; color: #8ff7cf; }
+
     </style>
   </head>
   <body>
     <canvas id="game-canvas"></canvas>
-    <button id="bounds-btn">BOUNDS</button>
-    <button id="settings-btn">SETTINGS</button>
+    <div id="icon-bar">
+      <button id="settings-btn" class="icon-btn" title="Settings">&#x2699;</button>
+      <button id="help-btn" class="icon-btn" title="Help">?</button>
+    </div>
+    <div id="help-panel">
+      <h3>Controls</h3>
+      <div class="help-row"><b>Click</b> — move to target</div>
+      <div class="help-row"><b>WASD / Arrows / hjkl</b> — rotate &amp; thrust</div>
+      <div class="help-row"><b>Space</b> — fire</div>
+      <div class="help-row"><b>Right-click</b> — cancel target</div>
+      <h3 style="margin-top:8px">Navigation</h3>
+      <div class="help-row">Fly near a star to enter its system</div>
+      <div class="help-row">Fly near a belt ring to explore it</div>
+      <div class="help-row">Collect fuel pods to keep moving</div>
+    </div>
     <div id="settings-panel">
       <h3>Ship Name</h3>
       <input id="ship-name-input" type="text" maxlength="16" placeholder="pilot" autocomplete="off" />
@@ -219,16 +260,18 @@
       <button class="shape-btn" data-shape="delta">◆ Delta</button>
       <button class="shape-btn" data-shape="needle">│ Needle</button>
       <button class="shape-btn" data-shape="blade">◇ Blade</button>
+      <h3 style="margin-top:10px">Steering</h3>
+      <div id="steering-info" style="font-size:10px;color:#5a7a6a;margin:4px 0">Auto-detects: click=mouse, WASD/arrows=keyboard</div>
       <h3 style="margin-top:10px">Nearby Ships</h3>
       <div id="ghost-list"><span class="ghost-empty">none</span></div>
       <div id="settings-version">v0.0.0</div>
-      <button id="debug-toggle">DEBUG LOG</button>
+      <button id="debug-toggle">DEBUG LOG</button><button id="debug-copy" title="Copy log">&#x2398;</button>
       <div id="debug-log"></div>
     </div>
     <div id="overlay">
       <div id="btn-row">
-        <button id="play-here" class="play-btn">&#9654; Play Here</button>
-        <button id="play-full" class="play-btn">&#x29C9; Play Full Size</button>
+        <button id="play-here" class="play-btn">&#9654; Join Here</button>
+        <button id="play-full" class="play-btn">&#x29C9; Join Full Size</button>
       </div>
     </div>
     <script type="module" src="game.ts"></script>

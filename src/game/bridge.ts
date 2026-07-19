@@ -91,6 +91,8 @@ export function createDevvitBridge(
 
     setShipShape(shape: string) {
       pendingShape = normalizeShipShape(shape);
+      const s = getGameState();
+      if (s) s.shipShape = pendingShape;
     },
 
     setSharedWorldSeed(seed: string) {
