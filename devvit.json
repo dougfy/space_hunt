@@ -10,7 +10,7 @@
         "height": "regular"
       },
       "game": {
-        "entry": "game.html"
+        "entry": "play.html"
       }
     }
   },

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { checkTierTransition, applyTransition, NavigationTier } from '../galaxy';
-import { vec2, add, magnitude, sub } from '../math';
+import { vec2, magnitude, sub } from '../math';
 import { SYSTEM_SIZE } from '../constants';
 import { createBeltGalaxyState, createSystemGalaxyState, createTestGameState } from './test-utils';
 import { updateShip } from '../ship';

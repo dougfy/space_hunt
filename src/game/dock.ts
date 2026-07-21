@@ -32,8 +32,7 @@ export function checkDocking(state: GameState): DockState | null {
   const planetPos = vec2(0, 0);
 
   // Check features first (smaller targets take priority)
-  for (let fi = 0; fi < body.features.length; fi++) {
-    const feat = body.features[fi];
+  for (const [fi, feat] of body.features.entries()) {
     const featPos = getFeatureWorldPos(feat);
     const dist = magnitude(sub(shipPos, featPos));
     if (dist < DOCK_FEATURE_RADIUS) {
@@ -43,7 +42,7 @@ export function checkDocking(state: GameState): DockState | null {
         bodyIndex: body.index,
         featureIndex: fi,
         targetName: feat.name,
-        targetLabel: FEATURE_LABELS[feat.type],
+        targetLabel: FEATURE_LABELS[feat.type] ?? feat.type,
         approachTimer: 0,
       };
     }
@@ -91,6 +90,7 @@ export function updateDocking(state: GameState, dt: number): void {
 
   if (dock.targetType === 'feature' && body && dock.featureIndex >= 0) {
     const feat = body.features[dock.featureIndex];
+    if (!feat) return;
     const featPos = getFeatureWorldPos(feat);
     // Dock just outside the feature
     const toFeat = normalize(sub(featPos, planetPos));
@@ -141,6 +141,7 @@ export function undock(state: GameState): void {
   let targetPos: Vec2;
   if (state.dock.targetType === 'feature' && body && state.dock.featureIndex >= 0) {
     const feat = body.features[state.dock.featureIndex];
+    if (!feat) return;
     targetPos = getFeatureWorldPos(feat);
   } else {
     targetPos = vec2(0, 0); // planet center
@@ -162,9 +163,9 @@ export function undock(state: GameState): void {
 }
 
 /** Action IDs for the dock menu */
-export type DockAction = 'contact' | 'trade' | 'missions' | 'leave' | 'scan';
+export type DockAction = 'contact' | 'trade' | 'missions' | 'leave' | 'scan' | 'ships';
 
 /** Get available actions for current dock target */
 export function getDockActions(_dock: DockState): DockAction[] {
-  return ['contact', 'trade', 'missions', 'leave', 'scan'];
+  return ['contact', 'trade', 'missions', 'leave', 'scan', 'ships'];
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { checkTierTransition, applyTransition, NavigationTier } from '../galaxy';
-import { vec2, magnitude, sub } from '../math';
-import { SYSTEM_SIZE, BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, STAR_ENTER_RADIUS } from '../constants';
+import { checkTierTransition, applyTransition, createGalaxyState, NavigationTier } from '../galaxy';
+import { vec2 } from '../math';
+import { SYSTEM_SIZE, SYSTEM_EXIT_RADIUS, STAR_ENTER_RADIUS } from '../constants';
 import {
   createBeltGalaxyState,
   createSystemGalaxyState,
@@ -147,6 +147,7 @@ describe('checkTierTransition', () => {
       const galaxy = createBeltGalaxyState();
       galaxy.tier = NavigationTier.Galaxy;
       const star = galaxy.stars[0];
+      if (!star) throw new Error('Expected test star');
       const shipPos = vec2(star.pos.x + STAR_ENTER_RADIUS - 0.5, star.pos.y);
 
       const transition = checkTierTransition(shipPos, galaxy);
@@ -158,6 +159,44 @@ describe('checkTierTransition', () => {
 });
 
 describe('applyTransition — ring model', () => {
+  describe('star ownership and discovery', () => {
+    it('assigns the starting home star to the player and marks it discovered', () => {
+      const galaxy = createGalaxyState('ownership-seed');
+      const homeStar = galaxy.stars[galaxy.homeStarIndex];
+      if (!homeStar) throw new Error('Expected home star');
+
+      expect(homeStar.owner).toBe('player');
+      expect(homeStar.discovered).toBe(true);
+    });
+
+    it('marks a foreign star discovered when entering its system from galaxy view', () => {
+      const galaxy = createGalaxyState('ownership-seed');
+      const foreignStar = galaxy.stars.find((star) => star.index !== galaxy.homeStarIndex);
+
+      expect(foreignStar).toBeDefined();
+      expect(foreignStar!.owner).toBe('foreign');
+      expect(foreignStar!.discovered).toBe(false);
+
+      galaxy.tier = NavigationTier.Galaxy;
+      galaxy.currentStarIndex = -1;
+      galaxy.currentBodyIndex = -1;
+      galaxy.bodies = [];
+
+      applyTransition(galaxy, {
+        newTier: NavigationTier.System,
+        starIndex: foreignStar!.index,
+        bodyIndex: -1,
+        exitDir: vec2(1, 0),
+      });
+
+      expect(galaxy.currentStarIndex).toBe(foreignStar!.index);
+      const visitedStar = galaxy.stars[foreignStar!.index];
+      if (!visitedStar) throw new Error('Expected visited star');
+      expect(visitedStar.discovered).toBe(true);
+      expect(visitedStar.owner).toBe('foreign');
+    });
+  });
+
   describe('belt entry (System → Local)', () => {
     it('keeps ship at current position (no remap)', () => {
       const orbitDist = 12;

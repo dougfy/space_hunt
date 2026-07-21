@@ -47,7 +47,7 @@ export function createBeltGalaxyState(opts: {
   const planet = createPlanetBody(8, 1);
   return {
     tier: NavigationTier.Local,
-    stars: [{ index: 0, pos: vec2(50, 50), seed: 999, name: 'Test Star', bodyCount: 2 }],
+    stars: [{ index: 0, pos: vec2(50, 50), seed: 999, name: 'Test Star', bodyCount: 2, owner: 'player', discovered: true }],
     homeStarIndex: 0,
     currentStarIndex: 0,
     currentBodyIndex: 0,
@@ -64,7 +64,7 @@ export function createSystemGalaxyState(orbitDist = 12): GalaxyState {
   const planet = createPlanetBody(8, 1);
   return {
     tier: NavigationTier.System,
-    stars: [{ index: 0, pos: vec2(50, 50), seed: 999, name: 'Test Star', bodyCount: 2 }],
+    stars: [{ index: 0, pos: vec2(50, 50), seed: 999, name: 'Test Star', bodyCount: 2, owner: 'player', discovered: true }],
     homeStarIndex: 0,
     currentStarIndex: 0,
     currentBodyIndex: -1,
@@ -79,7 +79,7 @@ export function createSystemGalaxyState(orbitDist = 12): GalaxyState {
 export function createTestGameState(galaxyOverride?: Partial<GalaxyState>): GameState {
   const galaxy: GalaxyState = {
     tier: NavigationTier.Local,
-    stars: [{ index: 0, pos: vec2(50, 50), seed: 999, name: 'Test Star', bodyCount: 2 }],
+    stars: [{ index: 0, pos: vec2(50, 50), seed: 999, name: 'Test Star', bodyCount: 2, owner: 'player', discovered: true }],
     homeStarIndex: 0,
     currentStarIndex: 0,
     currentBodyIndex: 0,

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <rect width="256" height="256" fill="#00110B"/>
+  <g stroke="#4FFFB0" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Level 2 Mine: headframe tower + shaft -->
+    <path d="M128 198 L128 58"/>
+    <path d="M76 198 L128 58"/>
+    <path d="M180 198 L128 58"/>
+    <path d="M102 136 L154 136"/>
+    <circle cx="128" cy="58" r="12"/>
+    <path d="M68 198 L188 198"/>
+  </g>
+</svg>

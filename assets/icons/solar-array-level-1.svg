@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <rect width="256" height="256" fill="#00110B"/>
+  <g stroke="#4FFFB0" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Matched to renderer.ts case 'solar_array' with x=128,y=128,s=40 -->
+    <!-- Hub + ring -->
+    <rect x="116" y="116" width="24" height="24"/>
+    <circle cx="128" cy="128" r="6"/>
+
+    <!-- Horizontal truss arms -->
+    <path d="M116 128 L84 128"/>
+    <path d="M140 128 L172 128"/>
+
+    <!-- Left panel (2-cell grid) -->
+    <rect x="84" y="106" width="32" height="44"/>
+    <path d="M100 106 L100 150"/>
+    <path d="M84 128 L116 128"/>
+
+    <!-- Right panel (2-cell grid) -->
+    <rect x="140" y="106" width="32" height="44"/>
+    <path d="M156 106 L156 150"/>
+    <path d="M140 128 L172 128"/>
+
+    <!-- Vertical mast -->
+    <path d="M128 116 L128 94"/>
+    <path d="M128 140 L128 162"/>
+  </g>
+</svg>

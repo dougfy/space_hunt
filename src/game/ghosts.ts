@@ -7,8 +7,7 @@ import { normalizeShipShape } from './ship';
 const GHOST_LERP_SPEED = 14;
 
 export function updateGhosts(state: GameState, dt: number): void {
-  for (let i = 0; i < state.ghosts.length; i++) {
-    const g = state.ghosts[i];
+  for (const g of state.ghosts) {
     if (!g.hasCur) {
       g.curWorld = { ...g.targetWorld };
       g.curAng = g.targetAng;

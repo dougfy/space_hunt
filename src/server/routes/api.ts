@@ -1,10 +1,41 @@
 import { Hono } from 'hono';
 import { context, redis, reddit } from '@devvit/web/server';
 import type {
+  BuildBuildingRequest,
+  BuildBuildingResponse,
+  BuyShipRequest,
+  BuyShipResponse,
+  ClaimPodRequest,
+  ClaimPodResponse,
+  ClaimedPodsResponse,
   DecrementResponse,
   IncrementResponse,
   InitResponse,
+  OkResponse,
+  PlayerProfileResponse,
+  PoseUpdateRequest,
+  PostShotsRequest,
+  RoomPosesResponse,
+  SaveProfileRequest,
+  StarEconomyResponse,
+  StarShipsResponse,
+  ShotsResponse,
 } from '../../shared/api';
+import {
+  buyBuilding,
+  buyShip,
+  claimPod,
+  getClaimedPods,
+  loadStarEconomy,
+  loadStarShips,
+  listActiveShots,
+  listRoomPoses,
+  loadProfile,
+  saveProfile,
+  upgradeBuilding,
+  storePose,
+  storeShots,
+} from '../core/game-service';
 
 type ErrorResponse = {
   status: 'error';
@@ -94,64 +125,31 @@ api.post('/decrement', async (c) => {
 
 // ── Space Hunt Game Routes ──────────────────────────────────────────────────
 
-const POSE_STALE_MS = 8000; // 8s staleness window
-
 /** Store a player's pose in a hash (one hash per post = room). */
 api.post('/pose', async (c) => {
   const { postId } = context;
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
 
-  const body = await c.req.json<{ x: number; y: number; angle: number; username: string; sessionId?: string; shape?: string; tier?: number; starIndex?: number; bodyIndex?: number }>();
-  const sid = body.sessionId || body.username;
-  const hashKey = `poses:${postId}`;
-  const value = JSON.stringify({
-    x: body.x, y: body.y, angle: body.angle, shape: body.shape || 'arrow',
-    username: body.username, ts: Date.now(),
-    tier: body.tier ?? 0, starIndex: body.starIndex ?? -1, bodyIndex: body.bodyIndex ?? -1,
-  });
-  await redis.hSet(hashKey, { [sid]: value });
+  const body = await c.req.json<PoseUpdateRequest>();
+  await storePose(redis, postId, body);
 
-  return c.json({ ok: true });
+  return c.json<OkResponse>({ ok: true });
 });
 
 /** Get all poses for a room (post), excluding the requesting player. Filters by tier+location. */
 api.get('/room-poses', async (c) => {
   const postId = c.req.query('postId');
-  const exclude = c.req.query('exclude') ?? '';
-  const tierFilter = parseInt(c.req.query('tier') ?? '-1', 10);
-  const starFilter = parseInt(c.req.query('starIndex') ?? '-1', 10);
-  const bodyFilter = parseInt(c.req.query('bodyIndex') ?? '-1', 10);
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
 
-  const hashKey = `poses:${postId}`;
-  const all = await redis.hGetAll(hashKey);
+  const response = await listRoomPoses(redis, {
+    postId,
+    exclude: c.req.query('exclude') ?? '',
+    tier: parseInt(c.req.query('tier') ?? '-1', 10),
+    starIndex: parseInt(c.req.query('starIndex') ?? '-1', 10),
+    bodyIndex: parseInt(c.req.query('bodyIndex') ?? '-1', 10),
+  });
 
-  const items: Array<{ username: string; x: number; y: number; angle: number; shape: string }> = [];
-  const now = Date.now();
-  const staleKeys: string[] = [];
-
-  for (const [sid, raw] of Object.entries(all)) {
-    if (sid === exclude) continue;
-    const data = JSON.parse(raw) as { x: number; y: number; angle: number; shape?: string; username?: string; ts: number; tier?: number; starIndex?: number; bodyIndex?: number };
-    if (now - data.ts > POSE_STALE_MS) {
-      staleKeys.push(sid);
-      continue;
-    }
-    // Filter: only show players in the same tier+location
-    if (tierFilter >= 0) {
-      if ((data.tier ?? 0) !== tierFilter) continue;
-      if (tierFilter >= 1 && (data.starIndex ?? -1) !== starFilter) continue;
-      if (tierFilter >= 2 && (data.bodyIndex ?? -1) !== bodyFilter) continue;
-    }
-    items.push({ username: data.username || sid, x: data.x, y: data.y, angle: data.angle, shape: data.shape || 'arrow' });
-  }
-
-  // Clean up stale entries in the background
-  if (staleKeys.length > 0) {
-    redis.hDel(hashKey, staleKeys).catch(() => {});
-  }
-
-  return c.json({ items });
+  return c.json<RoomPosesResponse>(response);
 });
 
 /** Claim a pod. First player to claim wins; others get mine=false. */
@@ -159,18 +157,9 @@ api.post('/claim-pod', async (c) => {
   const { postId } = context;
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
 
-  const body = await c.req.json<{ podId: number; username: string }>();
-  const hashKey = `pods:${postId}`;
-  const field = String(body.podId);
-  const existing = await redis.hGet(hashKey, field);
-
-  if (existing) {
-    // Already claimed
-    return c.json({ success: true, podId: body.podId, mine: existing === body.username });
-  }
-
-  await redis.hSet(hashKey, { [field]: body.username });
-  return c.json({ success: true, podId: body.podId, mine: true });
+  const body = await c.req.json<ClaimPodRequest>();
+  const response = await claimPod(redis, postId, body);
+  return c.json<ClaimPodResponse>(response);
 });
 
 /** Get all claimed pod IDs for late-joining players */
@@ -178,59 +167,34 @@ api.get('/claimed-pods', async (c) => {
   const { postId } = context;
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
 
-  const hashKey = `pods:${postId}`;
-  const all = await redis.hGetAll(hashKey);
-  const podIds = Object.keys(all).map(k => parseInt(k, 10));
-  return c.json({ podIds });
+  const response = await getClaimedPods(redis, postId);
+  return c.json<ClaimedPodsResponse>(response);
 });
 
 // ── Shooting Routes ──────────────────────────────────────────────────────────
-
-const SHOT_TTL_MS = 3000; // Shots expire from Redis after 3s
 
 /** Post a burst of shots. */
 api.post('/shots', async (c) => {
   const { postId } = context;
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
 
-  const body = await c.req.json<{ sessionId: string; shots: Array<{ id: string; origin: { x: number; y: number }; angle: number; speed: number; spawnTime: number }> }>();
-  const hashKey = `shots:${postId}`;
-  const value = JSON.stringify({ shots: body.shots, ts: Date.now() });
-  await redis.hSet(hashKey, { [body.sessionId]: value });
+  const body = await c.req.json<PostShotsRequest>();
+  await storeShots(redis, postId, body);
 
-  return c.json({ ok: true });
+  return c.json<OkResponse>({ ok: true });
 });
 
 /** Get all active shots for a room, excluding the requesting player's. */
 api.get('/shots', async (c) => {
   const postId = c.req.query('postId');
-  const exclude = c.req.query('exclude') ?? '';
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
 
-  const hashKey = `shots:${postId}`;
-  const all = await redis.hGetAll(hashKey);
+  const response = await listActiveShots(redis, {
+    postId,
+    exclude: c.req.query('exclude') ?? '',
+  });
 
-  const shots: Array<{ id: string; shooterId: string; origin: { x: number; y: number }; angle: number; speed: number; spawnTime: number }> = [];
-  const now = Date.now();
-  const staleKeys: string[] = [];
-
-  for (const [sid, raw] of Object.entries(all)) {
-    if (sid === exclude) continue;
-    const data = JSON.parse(raw) as { shots: Array<{ id: string; origin: { x: number; y: number }; angle: number; speed: number; spawnTime: number }>; ts: number };
-    if (now - data.ts > SHOT_TTL_MS) {
-      staleKeys.push(sid);
-      continue;
-    }
-    for (const s of data.shots) {
-      shots.push({ ...s, shooterId: sid, spawnTime: data.ts / 1000 });
-    }
-  }
-
-  if (staleKeys.length > 0) {
-    redis.hDel(hashKey, staleKeys).catch(() => {});
-  }
-
-  return c.json({ shots });
+  return c.json<ShotsResponse>(response);
 });
 
 // ── User Profile Routes ──────────────────────────────────────────────────────
@@ -240,20 +204,119 @@ api.get('/profile', async (c) => {
   const user = c.req.query('username');
   if (!user) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
 
-  const raw = await redis.hGetAll(`profile:${user}`);
-  return c.json({ name: raw.name || '', shape: raw.shape || 'arrow' });
+  const response = await loadProfile(redis, user);
+  return c.json<PlayerProfileResponse>(response);
 });
 
 /** Save a user's profile (ship name + shape). */
 api.post('/profile', async (c) => {
-  const body = await c.req.json<{ username: string; name?: string; shape?: string }>();
+  const body = await c.req.json<SaveProfileRequest>();
   if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
 
-  const fields: Record<string, string> = {};
-  if (body.name !== undefined) fields.name = body.name;
-  if (body.shape !== undefined) fields.shape = body.shape;
-  if (Object.keys(fields).length > 0) {
-    await redis.hSet(`profile:${body.username}`, fields);
+  await saveProfile(redis, body);
+  return c.json<OkResponse>({ ok: true });
+});
+
+/** Get per-star economy snapshot for a user, with elapsed production applied server-side. */
+api.get('/economy', async (c) => {
+  const username = c.req.query('username');
+  const starIndexRaw = c.req.query('starIndex');
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!starIndexRaw) return c.json<ErrorResponse>({ status: 'error', message: 'starIndex required' }, 400);
+
+  const starIndex = parseInt(starIndexRaw, 10);
+  if (Number.isNaN(starIndex) || starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
   }
-  return c.json({ ok: true });
+
+  const response = await loadStarEconomy(redis, username, starIndex);
+  return c.json<StarEconomyResponse>(response);
+});
+
+/** Get buildings for a star. Alias of economy snapshot for now. */
+api.get('/buildings', async (c) => {
+  const username = c.req.query('username');
+  const starIndexRaw = c.req.query('starIndex');
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!starIndexRaw) return c.json<ErrorResponse>({ status: 'error', message: 'starIndex required' }, 400);
+
+  const starIndex = parseInt(starIndexRaw, 10);
+  if (Number.isNaN(starIndex) || starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
+  }
+
+  const response = await loadStarEconomy(redis, username, starIndex);
+  return c.json<StarEconomyResponse>(response);
+});
+
+/** Start a building purchase/upgrade for the given star. */
+api.post('/buildings/buy', async (c) => {
+  const body = await c.req.json<BuildBuildingRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!Number.isInteger(body.starIndex) || body.starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
+  }
+
+  try {
+    const response = await buyBuilding(redis, body);
+    return c.json<BuildBuildingResponse>(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to start building purchase';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+/** Upgrade an existing building for the given star. */
+api.post('/buildings/upgrade', async (c) => {
+  const body = await c.req.json<BuildBuildingRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!Number.isInteger(body.starIndex) || body.starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
+  }
+
+  try {
+    const response = await upgradeBuilding(redis, body);
+    return c.json<BuildBuildingResponse>(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to start building upgrade';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+// ── Ship Routes ──────────────────────────────────────────────────────────────
+
+/** Get ships stationed at a star. */
+api.get('/ships', async (c) => {
+  const username = c.req.query('username');
+  const starIndexRaw = c.req.query('starIndex');
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!starIndexRaw) return c.json<ErrorResponse>({ status: 'error', message: 'starIndex required' }, 400);
+
+  const starIndex = parseInt(starIndexRaw, 10);
+  if (Number.isNaN(starIndex) || starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
+  }
+
+  const response = await loadStarShips(redis, username, starIndex);
+  return c.json<StarShipsResponse>(response);
+});
+
+/** Buy ships at a star (requires dock). */
+api.post('/ships/buy', async (c) => {
+  const body = await c.req.json<BuyShipRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!Number.isInteger(body.starIndex) || body.starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
+  }
+  if (!Number.isInteger(body.quantity) || body.quantity < 1) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'quantity must be >= 1' }, 400);
+  }
+
+  try {
+    const response = await buyShip(redis, body);
+    return c.json<BuyShipResponse>(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to buy ship';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
 });

@@ -147,14 +147,17 @@ export const PLANET_NAME_SUFFIXES = [
 ];
 
 // Planet feature types and naming
-export const FEATURE_TYPES: ('mine' | 'relay' | 'refinery' | 'station' | 'outpost' | 'colony')[] = [
-  'mine', 'relay', 'refinery', 'station', 'outpost', 'colony',
+export const FEATURE_TYPES: ('mine' | 'relay' | 'refinery' | 'station' | 'outpost' | 'colony' | 'solar_array' | 'mine_l2' | 'solar_array_l2')[] = [
+  'mine', 'relay', 'refinery', 'station', 'outpost', 'colony', 'solar_array', 'mine_l2', 'solar_array_l2',
 ];
 export const FEATURE_LABELS: Record<string, string> = {
   mine: 'Mine',
+  mine_l2: 'Deep Mine',
   relay: 'Relay Outpost',
   refinery: 'Refinery Station',
   station: 'Station',
   outpost: 'Outpost',
   colony: 'Colony',
+  solar_array: 'Solar Array',
+  solar_array_l2: 'Solar Array II',
 };

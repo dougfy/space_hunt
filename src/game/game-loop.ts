@@ -9,7 +9,7 @@ import {
 } from './constants';
 import { vec2, add } from './math';
 import { generateAsteroids, generateRingAsteroids } from './asteroids';
-import { generateFuelPods, updatePodDiscovery, checkPodCollection, applyPodCollected } from './pods';
+import { generateFuelPods, updatePodDiscovery, checkPodCollection } from './pods';
 import { createCamera, updateCamera, updateZoomState, getSafeZone, findNearestAsteroidIndex, isOverrideClear } from './camera';
 import { updateShip } from './ship';
 import { updateGhosts } from './ghosts';
@@ -18,15 +18,15 @@ import {
   createRenderer, resizeRenderer, clearScreen, drawShip, drawAsteroid,
   drawTargetReticle, drawFuelPod, drawGhostShip, drawHUD, drawGhostLabel,
   drawAsteroidLabel, drawPlayerLabel, drawProjectiles, drawShootingHUD, drawZoomButton,
-  isFireButtonHit, Renderer, drawControlButtons, hitTestControlButtons,
+  Renderer, drawControlButtons,
   drawGalaxyView, drawSystemView, drawPlanetView, drawTierHUD,
-  drawDebugBounds, drawDockPanel, hitTestDockPanel,
+  drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
+  worldToScreen, isPointCoveredByOpenPlanetPanel,
 } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
-import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, generateSystem, applyStarNames } from './galaxy';
-import { GALAXY_SHIP_SPEED, GALAXY_SIZE, SHIP_MAX_SPEED } from './constants';
+import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, applyStarNames } from './galaxy';
 import { checkDocking, updateDocking, undock } from './dock';
 
 let gameState: GameState | null = null;
@@ -52,7 +52,7 @@ export function refreshGalaxyStarNames(): void {
   applyStarNames(gameState.galaxy.stars);
 }
 
-/** Swap in real callbacks after a preview session starts */
+/** Swap in real callbacks after the game starts. */
 export function setGameCallbacks(cb: DevvitCallbacks | null): void {
   devvitCb = cb;
 }
@@ -118,6 +118,9 @@ export function startGame(
   } else {
     // Play mode: start at Planet level, docked at home station
     const stationBody = gameState.galaxy.bodies[0]; // guaranteed to be a planet with station
+    if (!stationBody) {
+      throw new Error('Missing starting station body');
+    }
     gameState.galaxy.tier = NavigationTier.Planet;
     gameState.galaxy.currentBodyIndex = 0;
     const stationFeature = stationBody.features.find(f => f.type === 'station');
@@ -212,6 +215,10 @@ function update(dt: number): void {
       if (dockAction === 'leave') {
         console.log('[DOCK] Undocking from', gameState.dock.targetName);
         undock(gameState);
+      } else if (dockAction === 'ships' || dockAction === 'buy_ships') {
+        // Ship panel toggle/buy handled inside hitTestDockPanel
+      } else if (triggerDockPanelAction(dockAction, gameState.dock)) {
+        console.log('[DOCK] Extension started:', dockAction);
       } else {
         console.log('[DOCK] Action stub:', dockAction);
       }
@@ -336,11 +343,6 @@ function update(dt: number): void {
     for (const podId of claimed) {
       devvitCb.onClaimPod(podId);
     }
-  } else {
-    // Solo/preview mode — apply immediately without server round-trip
-    for (const podId of claimed) {
-      applyPodCollected(gameState, podId, true);
-    }
   }
 
   // Galaxy tier transitions — skip in splash mode and when docked
@@ -370,6 +372,7 @@ function update(dt: number): void {
     // Regenerate world content for new tier
     if (transition.newTier === NavigationTier.Local) {
       const body = gameState.galaxy.bodies[transition.bodyIndex];
+      if (!body) return;
       const localSeed = getLocalSeed(body);
       const center = SYSTEM_SIZE / 2;
       const { asteroids, names } = generateRingAsteroids(localSeed, center, center, body.orbitDist);
@@ -414,7 +417,7 @@ function render(): void {
   // ── Galaxy tier ──
   if (tier === NavigationTier.Galaxy) {
     const shipRenderSize = SHIP_SIZE * 3;
-    drawGalaxyView(renderer, camera, gameState.galaxy, gameState.ship.pos, !_debugBounds);
+    drawGalaxyView(renderer, camera, gameState.galaxy, gameState.ship.pos, !_debugBounds, !_debugBounds);
 
     // Draw ghost ships in galaxy
     for (const g of gameState.ghosts) {
@@ -475,6 +478,8 @@ function render(): void {
 
   // ── Planet tier ──
   if (tier === NavigationTier.Planet) {
+    const screenW = renderer.width / (window.devicePixelRatio || 1);
+    const screenH = renderer.height / (window.devicePixelRatio || 1);
     const shieldPercent = (gameState.shooting.hp / PLAYER_MAX_HP) * 100;
     drawPlanetView(
       renderer,
@@ -483,6 +488,7 @@ function render(): void {
       gameState.ship.pos,
       gameState.fuelPercent,
       shieldPercent,
+      gameState.dock?.docked === true,
     );
     if (_debugBounds) {
       drawPlanetDebugBounds(renderer, camera, gameState.galaxy, gameState.ship.pos, gameState.worldOffset);
@@ -494,24 +500,35 @@ function render(): void {
         x: g.curWorld.x - gameState.worldOffset.x,
         y: g.curWorld.y - gameState.worldOffset.y,
       };
+      const ghostSc = worldToScreen(localPos, camera, screenW, screenH);
+      if (isPointCoveredByOpenPlanetPanel(screenW, screenH, ghostSc.x, ghostSc.y)) {
+        continue;
+      }
       drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot);
       drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
     }
 
     // Draw ship
-    drawShip(
-      renderer, camera, gameState.ship.pos,
-      gameState.ship.ang, gameState.shipShape,
-      gameState.ship.thrust ? '#17b97d' : '#8ff7cf',
-    );
-    drawPlayerLabel(renderer, camera, gameState.ship.pos, gameState.playerName);
+    const shipSc = worldToScreen(gameState.ship.pos, camera, screenW, screenH);
+    if (!isPointCoveredByOpenPlanetPanel(screenW, screenH, shipSc.x, shipSc.y)) {
+      drawShip(
+        renderer, camera, gameState.ship.pos,
+        gameState.ship.ang, gameState.shipShape,
+        gameState.ship.thrust ? '#17b97d' : '#8ff7cf',
+      );
+      drawPlayerLabel(renderer, camera, gameState.ship.pos, gameState.playerName);
+    }
 
     // Planet tier info is in the planet view itself (top-left), no separate HUD needed
     drawControlButtons(renderer, false, false, _debugBounds);
 
     // Draw dock panel only when fully docked
     if (gameState.dock?.docked) {
-      drawDockPanel(renderer, gameState.dock);
+      const body = gameState.galaxy.currentBodyIndex >= 0
+        ? (gameState.galaxy.bodies[gameState.galaxy.currentBodyIndex] ?? null)
+        : null;
+      drawDockPanel(renderer, gameState.dock, body, gameState.galaxy.currentStarIndex);
+      drawShipPanel(renderer);
     }
     return;
   }
@@ -522,13 +539,13 @@ function render(): void {
     gameState.zoomState === ZoomState.Releasing;
 
   // Draw asteroids
-  for (let i = 0; i < gameState.asteroids.length; i++) {
-    const a = gameState.asteroids[i];
+  for (const [i, a] of gameState.asteroids.entries()) {
     const discovered = gameState.pods.some(p => p.astIndex === i && p.discovered);
     drawAsteroid(renderer, camera, a, discovered);
 
-    if (discovered && gameState.asteroidNames[i]) {
-      drawAsteroidLabel(renderer, camera, a, gameState.asteroidNames[i], discovered);
+    const asteroidName = gameState.asteroidNames[i];
+    if (discovered && asteroidName) {
+      drawAsteroidLabel(renderer, camera, a, asteroidName, discovered);
     }
   }
 
@@ -536,8 +553,10 @@ function render(): void {
   if (showPods) {
     for (const pod of gameState.pods) {
       if (!pod.discovered || pod.collected) continue;
+      const asteroid = gameState.asteroids[pod.astIndex];
+      if (!asteroid) continue;
       drawFuelPod(
-        renderer, camera, pod.pos, gameState.asteroids[pod.astIndex], pod.color,
+        renderer, camera, pod.pos, asteroid, pod.color,
       );
     }
   }
@@ -582,8 +601,10 @@ function render(): void {
   if (gameState.shooting.enabled) {
     drawProjectiles(renderer, camera, gameState.shooting.projectiles, gameState.elapsedTime);
     drawShootingHUD(renderer, gameState.shooting);
-    drawZoomButton(renderer, gameState.zoomOverride >= 0);
   }
+
+  // Local zoom control is always available, independent of weapon systems.
+  drawZoomButton(renderer, gameState.zoomOverride >= 0);
 
   // Local tier HUD
   const bodyName = gameState.galaxy.currentBodyIndex >= 0

@@ -2,7 +2,6 @@
 
 import type { Vec2, Camera, GameState } from './types';
 import { screenToWorld } from './renderer';
-import { SHOOTING_ENABLED } from './constants';
 import { NavigationTier } from './galaxy';
 
 export interface InputState {
@@ -46,6 +45,7 @@ export function setupInput(
     const screenH = rect.height;
 
     const state = getState();
+    const isLocalTier = state?.galaxy.tier === NavigationTier.Local;
     const showRecenter = state?.galaxy.tier !== NavigationTier.Local;
 
     if (showRecenter) {
@@ -60,8 +60,22 @@ export function setupInput(
       }
     }
 
+    // Local zoom is a primary nav control; handle it first so taps never fall through to movement.
+    if (isLocalTier) {
+      const zBtnX = screenW - 120;
+      const zBtnY = screenH - 60;
+      const zdx = pos.x - zBtnX;
+      const zdy = pos.y - zBtnY;
+      if (zdx * zdx + zdy * zdy <= 30 * 30) {
+        input.zoomToggleRequested = true;
+        return;
+      }
+    }
+
+    const shootingEnabled = state?.shooting.enabled === true;
+
     // Check fire button (bottom-right, above recenter area)
-    if (SHOOTING_ENABLED) {
+    if (shootingEnabled) {
       const btnX = screenW - 50;
       const btnY = screenH - 60;
       const dx = pos.x - btnX;
@@ -71,15 +85,6 @@ export function setupInput(
         return;
       }
 
-      // Check zoom toggle button (left of recenter)
-      const zBtnX = screenW - 36 - 52;
-      const zBtnY = screenH - 36;
-      const zdx = pos.x - zBtnX;
-      const zdy = pos.y - zBtnY;
-      if (zdx * zdx + zdy * zdy <= 26 * 26) {
-        input.zoomToggleRequested = true;
-        return;
-      }
     }
 
     input.pointerDown = true;

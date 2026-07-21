@@ -1,7 +1,9 @@
 // ── Galaxy Generation & Navigation ──────────────────────────────────────────
 
 import type { Vec2 } from './types';
+import type { StarOwner } from './ownership-contracts';
 import { vec2, createRng, stableHash, magnitude, sub } from './math';
+import { reduceStarOwnership } from './ownership';
 import {
   GALAXY_SIZE, STAR_COUNT, STAR_MIN_SPACING,
   STAR_ENTER_RADIUS, SYSTEM_SIZE, SYSTEM_BODY_MIN, SYSTEM_BODY_MAX,
@@ -26,15 +28,18 @@ export interface GalaxyStar {
   seed: number;
   name: string;
   bodyCount: number;
+  owner: StarOwner;
+  discovered: boolean;
 }
 
-export type FeatureType = 'mine' | 'relay' | 'refinery' | 'station' | 'outpost' | 'colony';
+export type FeatureType = 'mine' | 'relay' | 'refinery' | 'station' | 'outpost' | 'colony' | 'solar_array' | 'mine_l2' | 'solar_array_l2' | 'warehouse' | 'dock';
 
 export interface PlanetFeature {
   name: string;
   type: FeatureType;
   angle: number;   // offset angle from planet center (radians)
   dist: number;    // distance from planet center in world units
+  level?: number;  // building level (for icon rendering)
 }
 
 export interface SystemBody {
@@ -81,7 +86,7 @@ function generatedStarName(starSeed: number): string {
 function pickStarName(starSeed: number, index: number): string {
   if (externalStarNames.length > 0) {
     const idx = Math.abs(stableHash(`starname:${starSeed}:${index}`)) % externalStarNames.length;
-    return externalStarNames[idx];
+    return externalStarNames[idx] ?? generatedStarName(starSeed);
   }
   return generatedStarName(starSeed);
 }
@@ -128,6 +133,8 @@ export function generateGalaxy(worldSeed: string): GalaxyStar[] {
       seed: starSeed,
       name: pickStarName(starSeed, index),
       bodyCount: rng.rangeInt(SYSTEM_BODY_MIN, SYSTEM_BODY_MAX + 1),
+      owner: 'foreign',
+      discovered: false,
     });
   }
 
@@ -166,27 +173,16 @@ export function generateSystem(star: GalaxyStar): SystemBody[] {
     const type: 'planet' | 'belt' = (i === 0) ? 'planet' : (rng.next() < 0.3 ? 'belt' : 'planet');
     const radius = type === 'belt' ? rng.range(0.6, 1.0) : rng.range(0.4, 0.8);
 
-    // Generate sub-features for planets
+    // Generate sub-features for planets.
+    // Start state is intentionally minimal: only the home station exists.
     const features: PlanetFeature[] = [];
-    if (type === 'planet') {
+    if (type === 'planet' && i === 0) {
       const featRng = createRng(bodySeed + 777);
-      const featCount = featRng.rangeInt(1, 4); // 1–3 features per planet
-      const usedAngles: number[] = [];
-      for (let f = 0; f < featCount; f++) {
-        // First planet in system always gets a station as first feature (home base)
-        const ft = (i === 0 && f === 0)
-          ? 'station' as FeatureType
-          : FEATURE_TYPES[featRng.rangeInt(0, FEATURE_TYPES.length)];
-        // Spread features around the planet, avoid overlap
-        let fAngle = featRng.range(0, Math.PI * 2);
-        for (const ua of usedAngles) {
-          if (Math.abs(fAngle - ua) < 0.8) fAngle += 1.2;
-        }
-        usedAngles.push(fAngle);
-        const fDist = featRng.range(1.8, 3.0);
-        const fName = `${prefix}${suffix} ${romanNumeral(f + 1)} ${FEATURE_LABELS[ft]}`;
-        features.push({ name: fName, type: ft, angle: fAngle, dist: fDist });
-      }
+      const fAngle = featRng.range(0, Math.PI * 2);
+      const fDist = featRng.range(1.8, 3.0);
+      const ft: FeatureType = 'station';
+      const fName = `${prefix}${suffix} ${romanNumeral(1)} ${FEATURE_LABELS[ft] ?? ft}`;
+      features.push({ name: fName, type: ft, angle: fAngle, dist: fDist });
     }
 
     bodies.push({
@@ -226,10 +222,21 @@ export function createGalaxyState(worldSeed: string): GalaxyState {
     if (d < bestDist) { bestDist = d; homeIdx = star.index; }
   }
 
-  const homeStar = stars[homeIdx];
+  const ownership = reduceStarOwnership(stars, {
+    type: 'assign-home-star',
+    homeStarIndex: homeIdx,
+  });
+  const ownedStars = stars.map((star) => {
+    const ownedStar = ownership.stars.find((candidate) => candidate.index === star.index);
+    return ownedStar
+      ? { ...star, owner: ownedStar.owner, discovered: ownedStar.discovered }
+      : star;
+  });
+  const homeStar = ownedStars[homeIdx];
+  if (!homeStar) throw new Error('Failed to generate a home star');
   return {
     tier: NavigationTier.System,
-    stars,
+    stars: ownedStars,
     homeStarIndex: homeIdx,
     currentStarIndex: homeIdx,
     currentBodyIndex: -1,
@@ -319,6 +326,17 @@ export function checkTierTransition(
     if (Math.abs(shipDistFromCenter - orbitDist) > exitThreshold) {
       return { newTier: NavigationTier.System, starIndex: galaxy.currentStarIndex, bodyIndex: -1 };
     }
+
+    // Fallback: if the ship reaches visible system bounds, allow escape from Local.
+    // This prevents edge-trap situations where collisions keep the ship inside
+    // the radial threshold despite sustained movement toward a boundary.
+    const edgeMargin = 0.35;
+    if (
+      shipPos.x < edgeMargin || shipPos.x > SYSTEM_SIZE - edgeMargin ||
+      shipPos.y < edgeMargin || shipPos.y > SYSTEM_SIZE - edgeMargin
+    ) {
+      return { newTier: NavigationTier.System, starIndex: galaxy.currentStarIndex, bodyIndex: -1 };
+    }
   } else if (tier === NavigationTier.Planet) {
     // Check exit: ship reaches edge of planet view (camera is fixed at origin with orthoSize=3.2)
     // Visible area is about ±3.2 vertically, ±5.1 horizontally (aspect ~1.6)
@@ -352,7 +370,18 @@ export function applyTransition(
     const prevBody = prevBodyIndex >= 0 ? galaxy.bodies[prevBodyIndex] : null;
     if (transition.starIndex >= 0) {
       galaxy.currentStarIndex = transition.starIndex;
+      const ownership = reduceStarOwnership(galaxy.stars, {
+        type: 'visit-star',
+        starIndex: transition.starIndex,
+      });
+      galaxy.stars = galaxy.stars.map((star) => {
+        const ownedStar = ownership.stars.find((candidate) => candidate.index === star.index);
+        return ownedStar
+          ? { ...star, owner: ownedStar.owner, discovered: ownedStar.discovered }
+          : star;
+      });
       const star = galaxy.stars[transition.starIndex];
+      if (!star) throw new Error(`Missing star ${transition.starIndex} during transition`);
       galaxy.bodies = generateSystem(star);
     }
     galaxy.currentBodyIndex = -1;
@@ -414,6 +443,12 @@ export function applyTransition(
     // Returning to galaxy — place ship offset from star in exit direction
     if (galaxy.currentStarIndex >= 0) {
       const star = galaxy.stars[galaxy.currentStarIndex];
+      if (!star) {
+        galaxy.currentStarIndex = -1;
+        galaxy.currentBodyIndex = -1;
+        galaxy.bodies = [];
+        return vec2(GALAXY_SIZE / 2, GALAXY_SIZE / 2);
+      }
       galaxy.currentStarIndex = -1;
       galaxy.currentBodyIndex = -1;
       galaxy.bodies = [];

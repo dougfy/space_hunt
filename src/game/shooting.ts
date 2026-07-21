@@ -130,6 +130,7 @@ export function updateShooting(state: GameState, dt: number): boolean {
 
     for (let i = shooting.projectiles.length - 1; i >= 0; i--) {
       const p = shooting.projectiles[i];
+      if (!p) continue;
       if (p.own) continue; // Can't hit yourself
 
       const pos = getProjectilePos(p, elapsedTime);

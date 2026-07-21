@@ -5,7 +5,6 @@ import { ZoomState } from './types';
 import {
   BASE_ORTHO, CLOSE_ORTHO, ZOOM_TRANSITION_DURATION,
   ZOOM_DWELL_SECONDS, ZOOM_GRACE_SECONDS,
-  MAP_HALF_X, MAP_HALF_Y,
   GALAXY_SIZE, SYSTEM_SIZE,
 } from './constants';
 import { vec2, clamp } from './math';
@@ -94,8 +93,8 @@ export function updateZoomState(state: GameState, dt: number, pixelHeight: numbe
 
   // Find nearest asteroid surface distance
   let nearestEdge = Infinity;
-  for (let i = 0; i < state.asteroids.length; i++) {
-    const edge = distanceToAsteroidSurface(state.asteroids[i], state.ship.pos);
+  for (const asteroid of state.asteroids) {
+    const edge = distanceToAsteroidSurface(asteroid, state.ship.pos);
     if (edge < nearestEdge) nearestEdge = edge;
   }
   const inside = nearestEdge < zoomTriggerWorld;
@@ -149,8 +148,8 @@ export function findNearestAsteroidIndex(state: GameState, pixelHeight: number):
 
   let bestIdx = -1;
   let bestDist = Infinity;
-  for (let i = 0; i < state.asteroids.length; i++) {
-    const edge = distanceToAsteroidSurface(state.asteroids[i], state.ship.pos);
+  for (const [i, asteroid] of state.asteroids.entries()) {
+    const edge = distanceToAsteroidSurface(asteroid, state.ship.pos);
     if (edge < trigger && edge < bestDist) {
       bestDist = edge;
       bestIdx = i;
@@ -163,10 +162,12 @@ export function findNearestAsteroidIndex(state: GameState, pixelHeight: number):
 export function isOverrideClear(state: GameState, pixelHeight: number): boolean {
   const idx = state.zoomOverride;
   if (idx < 0 || idx >= state.asteroids.length) return true;
+  const asteroid = state.asteroids[idx];
+  if (!asteroid) return true;
 
   const worldPerPx = (BASE_ORTHO * 2) / Math.max(1, pixelHeight);
   const trigger = Math.max(0.01, ZOOM_TRIGGER_PIXELS * worldPerPx);
-  const edge = distanceToAsteroidSurface(state.asteroids[idx], state.ship.pos);
+  const edge = distanceToAsteroidSurface(asteroid, state.ship.pos);
   return edge >= trigger;
 }
 

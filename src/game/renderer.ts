@@ -98,10 +98,14 @@ export function drawPolyline(
   const lineWidthPx = Math.max(1, widthWorld / wpp);
 
   ctx.beginPath();
-  const p0 = worldToScreen(points[0], camera, screenW, screenH);
+  const firstPoint = points[0];
+  if (!firstPoint) return;
+  const p0 = worldToScreen(firstPoint, camera, screenW, screenH);
   ctx.moveTo(p0.x, p0.y);
   for (let i = 1; i < points.length; i++) {
-    const p = worldToScreen(points[i], camera, screenW, screenH);
+    const point = points[i];
+    if (!point) continue;
+    const p = worldToScreen(point, camera, screenW, screenH);
     ctx.lineTo(p.x, p.y);
   }
   if (closed) ctx.closePath();
@@ -168,7 +172,9 @@ export function drawShip(
     y: pos.y + right.y * (p.x * size) + forward.y * (p.y * size),
   }));
   // Close the shape
-  worldPts.push({ ...worldPts[0] });
+  const firstWorldPoint = worldPts[0];
+  if (!firstWorldPoint) return;
+  worldPts.push({ x: firstWorldPoint.x, y: firstWorldPoint.y });
 
   drawPolyline(r, camera, worldPts, color, lineWidth, false);
 }
@@ -185,9 +191,14 @@ export function drawAsteroid(
   const n = asteroid.pts.length;
   const points: Vec2[] = [];
   for (let i = 0; i < n; i++) {
-    points.push(add(asteroid.pos, asteroid.pts[i]));
+    const point = asteroid.pts[i];
+    if (!point) continue;
+    points.push(add(asteroid.pos, point));
   }
-  points.push(add(asteroid.pos, asteroid.pts[0]));
+  const firstPoint = asteroid.pts[0];
+  if (firstPoint) {
+    points.push(add(asteroid.pos, firstPoint));
+  }
   drawPolyline(r, camera, points, color, lineWidth, false);
 }
 
@@ -256,7 +267,7 @@ export function drawGhostShip(
   shape: ShipShape,
   slot: number,
 ) {
-  const color = GHOST_PALETTE[Math.abs(slot - 1) % GHOST_PALETTE.length];
+  const color = GHOST_PALETTE[Math.abs(slot - 1) % GHOST_PALETTE.length] ?? G_BRIGHT;
   drawShip(r, camera, pos, angle, shape, color);
 }
 
@@ -351,7 +362,7 @@ export function drawGhostLabel(
   ctx.font = '12px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.fillStyle = GHOST_PALETTE[Math.abs(slot - 1) % GHOST_PALETTE.length];
+  ctx.fillStyle = GHOST_PALETTE[Math.abs(slot - 1) % GHOST_PALETTE.length] ?? G_BRIGHT;
   ctx.fillText(`${name} (S${slot})`, sc.x, sc.y + 16);
   ctx.restore();
 }
@@ -387,7 +398,7 @@ export function drawPlayerLabel(
 import type { Projectile, ShootingState } from './types';
 import {
   SHOT_LINE_WIDTH, SHOT_TRAIL_LENGTH,
-  SHOT_COLOR_OWN, SHOT_COLOR_ENEMY, SHOT_HIT_COLOR,
+  SHOT_COLOR_OWN, SHOT_COLOR_ENEMY,
   SHOT_COOLDOWN, PLAYER_MAX_HP,
 } from './constants';
 import { getProjectilePos } from './shooting';
@@ -686,8 +697,10 @@ export function isFireButtonHit(
 
 // ── Galaxy / System Rendering ─────────────────────────────────────────────
 
-import type { GalaxyStar, SystemBody, GalaxyState, FeatureType } from './galaxy';
-import { STAR_ENTER_RADIUS, BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, GALAXY_SIZE, FEATURE_LABELS } from './constants';
+import type { GalaxyStar, GalaxyState, FeatureType, PlanetFeature, SystemBody } from './galaxy';
+import { buildGalaxyViewModel, getGalaxyStarTone } from './galaxy-view-model';
+import { getEnabledResources, getFeatureResourceIds, getFeatureResourceNames } from './economy-catalog';
+import { BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, FEATURE_LABELS } from './constants';
 
 // ── Monochrome green palette (sci-fi terminal) ─────────────────────────────
 const G_BRIGHT = '#4fffb0';        // primary bright green
@@ -703,14 +716,35 @@ function drawStarburst(
   coreR: number,
   rayLen: number,
   brightness: number, // 0-1
-  palette: 'green' | 'blue' = 'green',
+  palette: 'green' | 'blue' | 'white' = 'green',
+  cardinalBoost = 1,
 ) {
   const a = 0.4 + brightness * 0.6;
-  const cBright = palette === 'blue' ? '110, 190, 255' : '79, 255, 176';
-  const cMid = palette === 'blue' ? '150, 215, 255' : '150, 255, 210';
-  const cSoft = palette === 'blue' ? '30, 70, 120' : '30, 120, 80';
-  const cBloom = palette === 'blue' ? '180, 220, 255' : '180, 255, 220';
-  const cCore = palette === 'blue' ? '170, 220, 255' : '150, 255, 200';
+  const cBright = palette === 'blue'
+    ? '110, 190, 255'
+    : palette === 'white'
+      ? '245, 250, 255'
+      : '79, 255, 176';
+  const cMid = palette === 'blue'
+    ? '150, 215, 255'
+    : palette === 'white'
+      ? '220, 235, 250'
+      : '150, 255, 210';
+  const cSoft = palette === 'blue'
+    ? '30, 70, 120'
+    : palette === 'white'
+      ? '80, 95, 115'
+      : '30, 120, 80';
+  const cBloom = palette === 'blue'
+    ? '180, 220, 255'
+    : palette === 'white'
+      ? '238, 246, 255'
+      : '180, 255, 220';
+  const cCore = palette === 'blue'
+    ? '170, 220, 255'
+    : palette === 'white'
+      ? '245, 250, 255'
+      : '150, 255, 200';
 
   // ── 1. Wide soft green halo ──
   ctx.save();
@@ -731,11 +765,12 @@ function drawStarburst(
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   // Primary cross (vertical + horizontal) — longest
+  const boost = Math.max(1, cardinalBoost);
   const spikes = [
-    { angle: -Math.PI / 2, len: rayLen * 1.0, w: 0.8 },   // up
-    { angle: Math.PI / 2,  len: rayLen * 1.0, w: 0.8 },   // down
-    { angle: 0,            len: rayLen * 0.7, w: 0.6 },   // right
-    { angle: Math.PI,      len: rayLen * 0.7, w: 0.6 },   // left
+    { angle: -Math.PI / 2, len: rayLen * 1.0 * boost, w: 0.8 },   // up
+    { angle: Math.PI / 2,  len: rayLen * 1.0 * boost, w: 0.8 },   // down
+    { angle: 0,            len: rayLen * 0.7 * boost, w: 0.6 },   // right
+    { angle: Math.PI,      len: rayLen * 0.7 * boost, w: 0.6 },   // left
     // Secondary diagonals — shorter, thinner
     { angle: Math.PI / 4,       len: rayLen * 0.35, w: 0.4 },
     { angle: -Math.PI / 4,      len: rayLen * 0.35, w: 0.4 },
@@ -814,19 +849,22 @@ export function drawGalaxyView(
   galaxy: GalaxyState,
   shipPos: Vec2,
   showLinks = true,
+  showNames = true,
 ) {
   const { ctx } = r;
   const screenW = r.width / (window.devicePixelRatio || 1);
   const screenH = r.height / (window.devicePixelRatio || 1);
   const wpp = worldPerPixel(camera, screenH);
-  const stars = galaxy.stars;
+  const galaxyView = buildGalaxyViewModel(galaxy);
 
   // Pre-compute screen positions for visible stars
-  const screenStars: { star: GalaxyStar; sx: number; sy: number }[] = [];
-  for (const star of stars) {
+  const screenStars: { star: GalaxyStar; tone: 'blue' | 'green' | 'white'; sx: number; sy: number }[] = [];
+  for (const starView of galaxyView.stars) {
+    const star = galaxy.stars[starView.index];
+    if (!star) continue;
     const sc = worldToScreen(star.pos, camera, screenW, screenH);
     if (sc.x < -40 || sc.x > screenW + 40 || sc.y < -40 || sc.y > screenH + 40) continue;
-    screenStars.push({ star, sx: sc.x, sy: sc.y });
+    screenStars.push({ star, tone: starView.tone, sx: sc.x, sy: sc.y });
   }
 
   // ── Jump links (constellation lines between nearby stars) ──
@@ -836,8 +874,10 @@ export function drawGalaxyView(
     ctx.lineWidth = 0.8;
     for (let i = 0; i < screenStars.length; i++) {
       const a = screenStars[i];
+      if (!a) continue;
       for (let j = i + 1; j < screenStars.length; j++) {
         const b = screenStars[j];
+        if (!b) continue;
         const dx = a.star.pos.x - b.star.pos.x;
         const dy = a.star.pos.y - b.star.pos.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -853,12 +893,13 @@ export function drawGalaxyView(
   }
 
   // ── Stars (starburst effect) ──
-  for (const { star, sx, sy } of screenStars) {
+  for (const { star, tone, sx, sy } of screenStars) {
     const dist = Math.sqrt((star.pos.x - shipPos.x) ** 2 + (star.pos.y - shipPos.y) ** 2);
     const nearFactor = Math.max(0, 1 - dist / 30); // brighter when close
     const brightness = 0.5 + nearFactor * 0.5;
     const coreR = Math.max(2, 0.5 / wpp);
     const rayLen = Math.max(6, 1.2 / wpp);
+    const cardinalBoost = star.index === galaxy.homeStarIndex ? 1.15 : 1;
 
     drawStarburst(
       ctx,
@@ -867,17 +908,25 @@ export function drawGalaxyView(
       coreR,
       rayLen,
       brightness,
-      star.index === galaxy.homeStarIndex ? 'blue' : 'green',
+      tone,
+      cardinalBoost,
     );
 
-    // Name label (always show)
-    ctx.save();
-    ctx.font = 'bold 10px monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = dist < 15 ? G_BRIGHT : G_MED;
-    ctx.fillText(star.name, sx, sy + rayLen + 4);
-    ctx.restore();
+    if (showNames) {
+      ctx.save();
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      if (tone === 'blue') {
+        ctx.fillStyle = dist < 15 ? 'rgb(165, 220, 255)' : 'rgba(120, 185, 245, 0.85)';
+      } else if (tone === 'white') {
+        ctx.fillStyle = dist < 15 ? 'rgb(240, 248, 255)' : 'rgba(210, 225, 240, 0.85)';
+      } else {
+        ctx.fillStyle = dist < 15 ? G_BRIGHT : G_MED;
+      }
+      ctx.fillText(star.name, sx, sy + rayLen + 4);
+      ctx.restore();
+    }
   }
 
   // ── Sector title (top-left) ──
@@ -938,27 +987,86 @@ function roundedRect(
 }
 
 /** Draw a small icon for a planet feature */
-function drawFeatureIcon(ctx: CanvasRenderingContext2D, x: number, y: number, type: FeatureType, size: number) {
+function drawFeatureIcon(ctx: CanvasRenderingContext2D, x: number, y: number, type: FeatureType, size: number, level?: number) {
   ctx.save();
   ctx.strokeStyle = G_BRIGHT;
   ctx.fillStyle = G_BRIGHT;
   ctx.lineWidth = 1.0;
   const s = size;
+  const lv = level ?? 1;
 
   switch (type) {
     case 'mine':
-      // Pickaxe shape — angled line with head
-      ctx.beginPath();
-      ctx.moveTo(x - s, y + s * 0.8);
-      ctx.lineTo(x + s * 0.3, y - s * 0.5);
-      ctx.lineTo(x + s, y - s * 0.2);
-      ctx.moveTo(x + s * 0.3, y - s * 0.5);
-      ctx.lineTo(x + s * 0.5, y - s * 0.9);
-      ctx.stroke();
+    case 'mine_l2': {
+      if (lv <= 2) {
+        // Pickaxe / headframe tower
+        ctx.beginPath();
+        ctx.moveTo(x, y + s); ctx.lineTo(x, y - s);
+        ctx.moveTo(x - s * 0.7, y + s); ctx.lineTo(x, y - s);
+        ctx.moveTo(x + s * 0.7, y + s); ctx.lineTo(x, y - s);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y - s, s * 0.2, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - s * 0.8, y + s); ctx.lineTo(x + s * 0.8, y + s);
+        ctx.stroke();
+      } else if (lv <= 5) {
+        // Twin-braced tower with cross braces + secondary shaft
+        ctx.beginPath();
+        ctx.moveTo(x, y + s); ctx.lineTo(x, y - s);
+        ctx.moveTo(x - s * 0.7, y + s); ctx.lineTo(x, y - s);
+        ctx.moveTo(x + s * 0.7, y + s); ctx.lineTo(x, y - s);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - s * 0.35, y + s * 0.2); ctx.lineTo(x + s * 0.35, y + s * 0.2);
+        ctx.moveTo(x - s * 0.2, y - s * 0.3); ctx.lineTo(x + s * 0.2, y - s * 0.3);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y - s, s * 0.15, 0, Math.PI * 2);
+        ctx.stroke();
+        // Secondary tower
+        ctx.beginPath();
+        ctx.moveTo(x + s * 0.8, y + s); ctx.lineTo(x + s * 0.8, y - s * 0.3);
+        ctx.moveTo(x + s * 0.5, y + s); ctx.lineTo(x + s * 0.8, y - s * 0.3);
+        ctx.moveTo(x + s * 1.1, y + s); ctx.lineTo(x + s * 0.8, y - s * 0.3);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - s, y + s); ctx.lineTo(x + s * 1.2, y + s);
+        ctx.stroke();
+      } else {
+        // Massive core bore rig — full industrial complex
+        ctx.beginPath();
+        ctx.moveTo(x, y + s); ctx.lineTo(x, y - s);
+        ctx.moveTo(x - s * 0.7, y + s); ctx.lineTo(x, y - s);
+        ctx.moveTo(x + s * 0.7, y + s); ctx.lineTo(x, y - s);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - s * 0.35, y + s * 0.3); ctx.lineTo(x + s * 0.35, y + s * 0.3);
+        ctx.moveTo(x - s * 0.2, y - s * 0.2); ctx.lineTo(x + s * 0.2, y - s * 0.2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y - s, s * 0.15, 0, Math.PI * 2);
+        ctx.stroke();
+        // Drill arms extending outward
+        ctx.beginPath();
+        ctx.moveTo(x - s * 0.5, y - s * 0.3); ctx.lineTo(x - s * 1.2, y - s * 0.8);
+        ctx.moveTo(x + s * 0.5, y - s * 0.3); ctx.lineTo(x + s * 1.2, y - s * 0.8);
+        ctx.stroke();
+        // Sub-shafts
+        ctx.beginPath();
+        ctx.moveTo(x - s * 0.3, y + s); ctx.lineTo(x - s * 0.3, y + s * 0.4);
+        ctx.moveTo(x + s * 0.3, y + s); ctx.lineTo(x + s * 0.3, y + s * 0.4);
+        ctx.moveTo(x - s * 0.3, y + s * 0.4); ctx.lineTo(x + s * 0.3, y + s * 0.4);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - s * 1.1, y + s); ctx.lineTo(x + s * 1.1, y + s);
+        ctx.stroke();
+      }
       break;
+    }
 
     case 'relay':
-      // Satellite dish — arc with line
       ctx.beginPath();
       ctx.moveTo(x, y + s);
       ctx.lineTo(x, y - s * 0.3);
@@ -966,48 +1074,92 @@ function drawFeatureIcon(ctx: CanvasRenderingContext2D, x: number, y: number, ty
       ctx.beginPath();
       ctx.arc(x, y - s * 0.3, s * 0.7, -Math.PI * 0.8, -Math.PI * 0.2);
       ctx.stroke();
-      // Antenna
       ctx.beginPath();
       ctx.moveTo(x, y - s * 0.3);
       ctx.lineTo(x + s * 0.8, y - s);
       ctx.stroke();
-      // Signal waves
       ctx.beginPath();
       ctx.arc(x + s * 0.8, y - s, s * 0.25, 0, Math.PI * 2);
       ctx.stroke();
       break;
 
     case 'refinery':
-      // Factory/building — rectangle with chimney stacks
       ctx.strokeRect(x - s, y - s * 0.3, s * 2, s * 1.3);
       ctx.beginPath();
-      ctx.moveTo(x - s * 0.5, y - s * 0.3);
-      ctx.lineTo(x - s * 0.5, y - s);
-      ctx.moveTo(x, y - s * 0.3);
-      ctx.lineTo(x, y - s * 0.8);
-      ctx.moveTo(x + s * 0.5, y - s * 0.3);
-      ctx.lineTo(x + s * 0.5, y - s);
+      ctx.moveTo(x - s * 0.5, y - s * 0.3); ctx.lineTo(x - s * 0.5, y - s);
+      ctx.moveTo(x, y - s * 0.3); ctx.lineTo(x, y - s * 0.8);
+      ctx.moveTo(x + s * 0.5, y - s * 0.3); ctx.lineTo(x + s * 0.5, y - s);
       ctx.stroke();
       break;
 
-    case 'station':
-      // Cross/station shape — like the reference Helios Station
-      ctx.beginPath();
-      // Horizontal bar
-      ctx.moveTo(x - s, y); ctx.lineTo(x + s, y);
-      // Vertical bar
-      ctx.moveTo(x, y - s); ctx.lineTo(x, y + s);
-      ctx.stroke();
-      // Corner circles (docking ports)
-      for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+    case 'station': {
+      if (lv <= 2) {
+        // Simple cross with docking ports
         ctx.beginPath();
-        ctx.arc(x + dx * s, y + dy * s, s * 0.3, 0, Math.PI * 2);
+        ctx.moveTo(x - s, y); ctx.lineTo(x + s, y);
+        ctx.moveTo(x, y - s); ctx.lineTo(x, y + s);
         ctx.stroke();
+        const portOffsets: Array<[number, number]> = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+        for (const [dx, dy] of portOffsets) {
+          ctx.beginPath();
+          ctx.arc(x + dx * s, y + dy * s, s * 0.25, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } else if (lv <= 5) {
+        // Central hub with rectangular docking modules
+        ctx.beginPath();
+        ctx.arc(x, y, s * 0.25, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.rect(x - s * 0.4, y - s * 0.4, s * 0.8, s * 0.8);
+        ctx.stroke();
+        // 4 truss arms with module boxes
+        ctx.beginPath();
+        ctx.moveTo(x - s * 0.4, y); ctx.lineTo(x - s, y);
+        ctx.moveTo(x + s * 0.4, y); ctx.lineTo(x + s, y);
+        ctx.moveTo(x, y - s * 0.4); ctx.lineTo(x, y - s);
+        ctx.moveTo(x, y + s * 0.4); ctx.lineTo(x, y + s);
+        ctx.stroke();
+        // Module rectangles at ends
+        ctx.beginPath();
+        ctx.rect(x - s * 1.2, y - s * 0.25, s * 0.3, s * 0.5);
+        ctx.rect(x + s * 0.9, y - s * 0.25, s * 0.3, s * 0.5);
+        ctx.rect(x - s * 0.25, y - s * 1.2, s * 0.5, s * 0.3);
+        ctx.rect(x - s * 0.25, y + s * 0.9, s * 0.5, s * 0.3);
+        ctx.stroke();
+      } else {
+        // Capital command nexus — concentric rings with radial arms
+        ctx.beginPath();
+        ctx.arc(x, y, s * 0.2, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, s * 0.55, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, s * 0.9, 0, Math.PI * 2);
+        ctx.stroke();
+        // 8 radial arms
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.moveTo(x + Math.cos(a) * s * 0.2, y + Math.sin(a) * s * 0.2);
+          ctx.lineTo(x + Math.cos(a) * s * 0.9, y + Math.sin(a) * s * 0.9);
+          ctx.stroke();
+        }
+        // Module boxes at cardinal points
+        const cardinals = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
+        for (const a of cardinals) {
+          const mx = x + Math.cos(a) * s;
+          const my = y + Math.sin(a) * s;
+          ctx.beginPath();
+          ctx.rect(mx - s * 0.15, my - s * 0.15, s * 0.3, s * 0.3);
+          ctx.stroke();
+        }
       }
       break;
+    }
 
     case 'outpost':
-      // Small building — triangle roof + box
       ctx.beginPath();
       ctx.moveTo(x - s * 0.7, y + s * 0.6);
       ctx.lineTo(x + s * 0.7, y + s * 0.6);
@@ -1018,20 +1170,203 @@ function drawFeatureIcon(ctx: CanvasRenderingContext2D, x: number, y: number, ty
       ctx.stroke();
       break;
 
-    case 'colony':
-      // Dome shape
-      ctx.beginPath();
-      ctx.arc(x, y, s * 0.8, Math.PI, 0);
-      ctx.lineTo(x + s * 0.8, y + s * 0.4);
-      ctx.lineTo(x - s * 0.8, y + s * 0.4);
-      ctx.closePath();
-      ctx.stroke();
-      // Window dots
-      ctx.beginPath();
-      ctx.arc(x - s * 0.3, y - s * 0.1, 1.5, 0, Math.PI * 2);
-      ctx.arc(x + s * 0.3, y - s * 0.1, 1.5, 0, Math.PI * 2);
-      ctx.fill();
+    case 'colony': {
+      if (lv <= 2) {
+        // Small dome with windows
+        ctx.beginPath();
+        ctx.arc(x, y, s * 0.8, Math.PI, 0);
+        ctx.lineTo(x + s * 0.8, y + s * 0.4);
+        ctx.lineTo(x - s * 0.8, y + s * 0.4);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x - s * 0.3, y - s * 0.1, 1.5, 0, Math.PI * 2);
+        ctx.arc(x + s * 0.3, y - s * 0.1, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (lv <= 5) {
+        // Main dome plus annex dome
+        ctx.beginPath();
+        ctx.arc(x - s * 0.2, y, s * 0.7, Math.PI, 0);
+        ctx.lineTo(x + s * 0.5, y + s * 0.4);
+        ctx.lineTo(x - s * 0.9, y + s * 0.4);
+        ctx.closePath();
+        ctx.stroke();
+        // Annex dome
+        ctx.beginPath();
+        ctx.arc(x + s * 0.7, y + s * 0.1, s * 0.4, Math.PI, 0);
+        ctx.lineTo(x + s * 1.1, y + s * 0.4);
+        ctx.lineTo(x + s * 0.3, y + s * 0.4);
+        ctx.closePath();
+        ctx.stroke();
+        // Corridor connection
+        ctx.beginPath();
+        ctx.moveTo(x + s * 0.3, y + s * 0.2); ctx.lineTo(x + s * 0.5, y + s * 0.2);
+        ctx.moveTo(x + s * 0.3, y + s * 0.35); ctx.lineTo(x + s * 0.5, y + s * 0.35);
+        ctx.stroke();
+        // Base
+        ctx.beginPath();
+        ctx.moveTo(x - s * 1.0, y + s * 0.4); ctx.lineTo(x + s * 1.2, y + s * 0.4);
+        ctx.stroke();
+      } else {
+        // Arcology — dome plus tower with multiple levels
+        ctx.beginPath();
+        ctx.arc(x - s * 0.3, y + s * 0.1, s * 0.55, Math.PI, 0);
+        ctx.lineTo(x + s * 0.25, y + s * 0.5);
+        ctx.lineTo(x - s * 0.85, y + s * 0.5);
+        ctx.closePath();
+        ctx.stroke();
+        // Tower
+        ctx.beginPath();
+        ctx.rect(x + s * 0.4, y - s * 0.8, s * 0.5, s * 1.3);
+        ctx.stroke();
+        // Tower floor lines
+        for (let i = 0; i < 4; i++) {
+          const ty = y - s * 0.5 + i * s * 0.35;
+          ctx.beginPath();
+          ctx.moveTo(x + s * 0.4, ty); ctx.lineTo(x + s * 0.9, ty);
+          ctx.stroke();
+        }
+        // Base platform
+        ctx.beginPath();
+        ctx.moveTo(x - s * 1.0, y + s * 0.5); ctx.lineTo(x + s * 1.1, y + s * 0.5);
+        ctx.stroke();
+      }
       break;
+    }
+
+    case 'solar_array':
+    case 'solar_array_l2': {
+      if (lv <= 2) {
+        // Two-wing panel array
+        ctx.beginPath();
+        ctx.rect(x - s * 0.25, y - s * 0.25, s * 0.5, s * 0.5);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, s * 0.12, 0, Math.PI * 2);
+        ctx.stroke();
+        // Horizontal truss
+        ctx.beginPath();
+        ctx.moveTo(x - s * 0.25, y); ctx.lineTo(x - s * 0.9, y);
+        ctx.moveTo(x + s * 0.25, y); ctx.lineTo(x + s * 0.9, y);
+        ctx.stroke();
+        // Left panel
+        ctx.beginPath();
+        ctx.rect(x - s * 0.9, y - s * 0.45, s * 0.65, s * 0.9);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - s * 0.58, y - s * 0.45); ctx.lineTo(x - s * 0.58, y + s * 0.45);
+        ctx.stroke();
+        // Right panel
+        ctx.beginPath();
+        ctx.rect(x + s * 0.25, y - s * 0.45, s * 0.65, s * 0.9);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x + s * 0.58, y - s * 0.45); ctx.lineTo(x + s * 0.58, y + s * 0.45);
+        ctx.stroke();
+      } else if (lv <= 5) {
+        // Four-wing panel array with grid subdivisions
+        ctx.beginPath();
+        ctx.rect(x - s * 0.25, y - s * 0.25, s * 0.5, s * 0.5);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, s * 0.12, 0, Math.PI * 2);
+        ctx.stroke();
+        // 4 truss arms
+        ctx.beginPath();
+        ctx.moveTo(x - s * 0.25, y); ctx.lineTo(x - s * 0.9, y);
+        ctx.moveTo(x + s * 0.25, y); ctx.lineTo(x + s * 0.9, y);
+        ctx.moveTo(x, y - s * 0.25); ctx.lineTo(x, y - s * 0.9);
+        ctx.moveTo(x, y + s * 0.25); ctx.lineTo(x, y + s * 0.9);
+        ctx.stroke();
+        // 4 panel rectangles with grid
+        const panels: Array<[number, number, number, number]> = [
+          [x - s * 0.9, y - s * 0.4, s * 0.65, s * 0.8],
+          [x + s * 0.25, y - s * 0.4, s * 0.65, s * 0.8],
+          [x - s * 0.4, y - s * 0.9, s * 0.8, s * 0.65],
+          [x - s * 0.4, y + s * 0.25, s * 0.8, s * 0.65],
+        ];
+        for (const [px, py, pw, ph] of panels) {
+          ctx.beginPath();
+          ctx.rect(px, py, pw, ph);
+          ctx.stroke();
+        }
+      } else {
+        // Collector ring — hub with halo ring and radial panels
+        ctx.beginPath();
+        ctx.arc(x, y, s * 0.2, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, s * 0.7, 0, Math.PI * 2);
+        ctx.stroke();
+        // Panels at cardinal + diagonal points on ring
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          const px = x + Math.cos(a) * s * 0.7;
+          const py = y + Math.sin(a) * s * 0.7;
+          ctx.beginPath();
+          ctx.rect(px - s * 0.12, py - s * 0.12, s * 0.24, s * 0.24);
+          ctx.stroke();
+        }
+        // Truss lines from hub to ring
+        ctx.beginPath();
+        ctx.moveTo(x - s * 0.2, y); ctx.lineTo(x - s * 0.7, y);
+        ctx.moveTo(x + s * 0.2, y); ctx.lineTo(x + s * 0.7, y);
+        ctx.moveTo(x, y - s * 0.2); ctx.lineTo(x, y - s * 0.7);
+        ctx.moveTo(x, y + s * 0.2); ctx.lineTo(x, y + s * 0.7);
+        ctx.stroke();
+      }
+      break;
+    }
+    case 'warehouse': {
+      // Crate/box icon
+      ctx.beginPath();
+      ctx.rect(x - s * 0.7, y - s * 0.5, s * 1.4, s * 1.0);
+      ctx.stroke();
+      // Horizontal divider
+      ctx.beginPath();
+      ctx.moveTo(x - s * 0.7, y); ctx.lineTo(x + s * 0.7, y);
+      ctx.stroke();
+      // Vertical divider
+      ctx.beginPath();
+      ctx.moveTo(x, y - s * 0.5); ctx.lineTo(x, y + s * 0.5);
+      ctx.stroke();
+      if (lv >= 3) {
+        // Stacked second crate
+        ctx.beginPath();
+        ctx.rect(x - s * 0.5, y - s * 0.9, s * 1.0, s * 0.4);
+        ctx.stroke();
+      }
+      break;
+    }
+    case 'dock': {
+      // Dock gantry / shipyard frame
+      ctx.beginPath();
+      // Main frame
+      ctx.rect(x - s * 0.8, y - s * 0.6, s * 1.6, s * 1.2);
+      ctx.stroke();
+      // Inner bay opening
+      ctx.beginPath();
+      ctx.rect(x - s * 0.5, y - s * 0.3, s * 1.0, s * 0.6);
+      ctx.stroke();
+      // Gantry arms
+      ctx.beginPath();
+      ctx.moveTo(x - s * 0.8, y - s * 0.6); ctx.lineTo(x - s * 1.1, y - s * 1.0);
+      ctx.moveTo(x + s * 0.8, y - s * 0.6); ctx.lineTo(x + s * 1.1, y - s * 1.0);
+      ctx.stroke();
+      if (lv >= 3) {
+        // Second bay
+        ctx.beginPath();
+        ctx.rect(x - s * 0.5, y + s * 0.4, s * 1.0, s * 0.5);
+        ctx.stroke();
+      }
+      if (lv >= 5) {
+        // Third bay / massive structure
+        ctx.beginPath();
+        ctx.rect(x - s * 0.5, y - s * 1.0, s * 1.0, s * 0.4);
+        ctx.stroke();
+      }
+      break;
+    }
   }
   ctx.restore();
 }
@@ -1040,7 +1375,7 @@ export function drawSystemView(
   r: Renderer,
   camera: Camera,
   galaxy: GalaxyState,
-  shipPos: Vec2,
+  _shipPos: Vec2,
 ) {
   const { ctx } = r;
   const screenW = r.width / (window.devicePixelRatio || 1);
@@ -1050,6 +1385,8 @@ export function drawSystemView(
   const bodies = galaxy.bodies;
   const star = galaxy.stars[galaxy.currentStarIndex];
   const starName = star ? star.name : '';
+  const starTone = star ? getGalaxyStarTone(star, galaxy.homeStarIndex) : 'green';
+  const starCardinalBoost = star && star.index === galaxy.homeStarIndex ? 1.15 : 1;
 
   const starSc = worldToScreen({ x: center, y: center }, camera, screenW, screenH);
 
@@ -1069,14 +1406,20 @@ export function drawSystemView(
 
   // ── 2. Central star (starburst) ──
   const starRadPx = Math.max(8, 2.0 / wpp);
-  drawStarburst(ctx, starSc.x, starSc.y, starRadPx, starRadPx * 3.5, 1.0);
+  drawStarburst(ctx, starSc.x, starSc.y, starRadPx, starRadPx * 3.5, 1.0, starTone, starCardinalBoost);
 
   // Star name next to star
   ctx.save();
   ctx.font = 'bold 11px monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = G_BRIGHT;
+  if (starTone === 'blue') {
+    ctx.fillStyle = 'rgb(165, 220, 255)';
+  } else if (starTone === 'white') {
+    ctx.fillStyle = 'rgb(240, 248, 255)';
+  } else {
+    ctx.fillStyle = G_BRIGHT;
+  }
   ctx.fillText(starName, starSc.x + starRadPx * 4, starSc.y);
   ctx.restore();
 
@@ -1281,7 +1624,9 @@ export function drawSystemView(
     `BODIES:       ${bodies.length}`,
   ];
   for (let i = 0; i < infoLines.length; i++) {
-    ctx.fillText(infoLines[i], infoX + 8, infoY + 20 + i * 12);
+    const line = infoLines[i];
+    if (!line) continue;
+    ctx.fillText(line, infoX + 8, infoY + 20 + i * 12);
   }
   ctx.restore();
 }
@@ -1362,16 +1707,6 @@ export function drawDebugBounds(
     ctx.fillText(`BELT ±${beltTolerance} (d=${body.orbitDist.toFixed(1)})`, starSc.x, starSc.y - outerPx - 4);
   }
 
-  // ── Ship distance from center (debug readout) ──
-  const dx = shipPos.x - center;
-  const dy = shipPos.y - center;
-  const shipDist = Math.sqrt(dx * dx + dy * dy);
-  ctx.font = 'bold 10px monospace';
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText(`SHIP dist=${shipDist.toFixed(2)}  pos=(${shipPos.x.toFixed(1)},${shipPos.y.toFixed(1)})`, 10, screenH - 20);
-
   ctx.restore();
 }
 
@@ -1395,6 +1730,8 @@ export function drawPlanetDebugBounds(
   const body = galaxy.bodies[galaxy.currentBodyIndex];
   if (!body) return;
 
+  const features = getEffectiveFeatures(body, galaxy.currentStarIndex);
+
   ctx.save();
   ctx.setLineDash([4, 3]);
   ctx.lineWidth = 1;
@@ -1412,7 +1749,7 @@ export function drawPlanetDebugBounds(
   ctx.fillText('DOCK', planetSc.x, planetSc.y - planetDockPx - 3);
 
   // Feature dock radii
-  for (const feat of body.features) {
+  for (const feat of features) {
     const fx = Math.cos(feat.angle) * feat.dist;
     const fy = Math.sin(feat.angle) * feat.dist;
     const fsc = worldToScreen(vec2(fx, fy), camera, screenW, screenH);
@@ -1425,18 +1762,7 @@ export function drawPlanetDebugBounds(
     ctx.fillText(feat.name.split(' ').pop() || '', fsc.x, fsc.y - featDockPx - 3);
   }
 
-  // Ship position readout (local + world-space used by transition logic)
-  const worldShipPos = vec2(shipPos.x + worldOffset.x, shipPos.y + worldOffset.y);
   ctx.setLineDash([]);
-  ctx.font = 'bold 9px monospace';
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText(
-    `SHIP local=(${shipPos.x.toFixed(2)},${shipPos.y.toFixed(2)}) world=(${worldShipPos.x.toFixed(2)},${worldShipPos.y.toFixed(2)})`,
-    10,
-    screenH - 20,
-  );
 
   // Exit boundaries in local coordinates, matching:
   // |shipPos.x + worldOffset.x| > exitX  ||  |shipPos.y + worldOffset.y| > exitY
@@ -1465,13 +1791,72 @@ export function drawPlanetDebugBounds(
 
 // ── Planet View ──────────────────────────────────────────────────────────────
 
+/** Build an effective feature list by merging static features with server-built extensions. */
+function getEffectiveFeatures(body: SystemBody, starIndex: number): PlanetFeature[] {
+  const serverEcon = _serverEconomyByStarIndex.get(starIndex);
+  if (!serverEcon) return body.features;
+
+  const stationFeature = body.features.find(f => f.type === 'station');
+  if (!stationFeature) return body.features;
+
+  // Update station name/level from server data
+  const stationBuilding = serverEcon.buildings.station;
+  const stationLevel = stationBuilding?.level ?? 1;
+  const romanNumerals = ['I','II','III','IV','V','VI','VII','VIII'];
+  const updatedStation: PlanetFeature = {
+    ...stationFeature,
+    name: `${body.name} ${romanNumerals[stationLevel - 1] ?? stationLevel} Station`,
+    level: stationLevel,
+  };
+
+  // Start with non-station static features + updated station
+  const baseFeatures = body.features.map(f => f === stationFeature ? updatedStation : f);
+
+  const builtExtensions: PlanetFeature[] = [];
+  const rng = createRng(body.seed + 12345);
+
+  const extensionTypes: Array<{ key: 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock'; featureType: FeatureType; label: string }> = [
+    { key: 'mine', featureType: 'mine', label: 'Mine' },
+    { key: 'solar', featureType: 'solar_array', label: 'Solar Array' },
+    { key: 'hab', featureType: 'colony', label: 'Hab' },
+    { key: 'warehouse', featureType: 'warehouse', label: 'Warehouse' },
+    { key: 'dock', featureType: 'dock', label: 'Space Dock' },
+  ];
+
+  // Space extensions evenly around orbit, offset from station
+  const baseAngle = updatedStation.angle + Math.PI * 0.4; // start offset from station
+  const angleSep = (Math.PI * 2) / (extensionTypes.length + 1); // even spacing
+
+  for (let i = 0; i < extensionTypes.length; i++) {
+    const ext = extensionTypes[i]!;
+    // Deterministic angle: evenly spaced with small jitter
+    const angle = baseAngle + angleSep * (i + 1) + rng.range(-0.15, 0.15);
+    const dist = updatedStation.dist + rng.range(-0.2, 0.3);
+
+    const building = serverEcon.buildings[ext.key];
+    if (building && building.level > 0 && building.status === 'ACTIVE') {
+      builtExtensions.push({
+        name: `${body.name} ${ext.label} LV${building.level}`,
+        type: ext.featureType,
+        angle,
+        dist,
+        level: building.level,
+      });
+    }
+  }
+
+  if (builtExtensions.length === 0) return baseFeatures;
+  return [...baseFeatures, ...builtExtensions];
+}
+
 export function drawPlanetView(
   r: Renderer,
   camera: Camera,
   galaxy: GalaxyState,
-  shipPos: Vec2,
+  _shipPos: Vec2,
   fuelPercent: number,
   shieldPercent: number,
+  docked = false,
 ) {
   const { ctx } = r;
   const screenW = r.width / (window.devicePixelRatio || 1);
@@ -1483,6 +1868,9 @@ export function drawPlanetView(
 
   const star = galaxy.stars[galaxy.currentStarIndex];
   const starName = star ? star.name : '';
+
+  // Merge static features with server-built extensions
+  const effectiveFeatures = getEffectiveFeatures(body, galaxy.currentStarIndex);
 
   // Planet is at world origin (0,0) in the planet view
   const planetWorldPos = vec2(0, 0);
@@ -1566,8 +1954,8 @@ export function drawPlanetView(
   ctx.restore();
 
   // ── 5. Sub-features around the planet ──
-  if (body.features && body.features.length > 0) {
-    for (const feat of body.features) {
+  if (effectiveFeatures.length > 0) {
+    for (const feat of effectiveFeatures) {
       // Place features at their actual world positions
       const featWorldPos = vec2(
         Math.cos(feat.angle) * feat.dist,
@@ -1593,7 +1981,7 @@ export function drawPlanetView(
       ctx.restore();
 
       // Feature icon
-      drawFeatureIcon(ctx, fx, fy, feat.type, 10);
+      drawFeatureIcon(ctx, fx, fy, feat.type, 10, feat.level);
 
       // Feature name and type label
       ctx.save();
@@ -1625,20 +2013,27 @@ export function drawPlanetView(
   ctx.fillStyle = G_MED;
   ctx.fillText(`${starName.toUpperCase()} SYSTEM`, 14, 30);
 
-  ctx.font = '9px monospace';
-  ctx.fillStyle = G_DIM;
+  ctx.font = 'bold 9px monospace';
+  ctx.fillStyle = 'rgba(79, 255, 176, 0.85)';
+  const resources = getEnabledResources();
+  const resourceLine = resources.length > 0
+    ? resources.map((resource) => resource.shortName).join('  ')
+    : 'NONE';
   ctx.fillText(`TYPE: TERRESTRIAL`, 14, 50);
-  ctx.fillText(`FEATURES: ${body.features ? body.features.length : 0}`, 14, 62);
-  ctx.fillText(`FUEL: ${Math.round(fuelPercent)}%`, 14, 74);
-  ctx.fillText(`SHIELDS: ${Math.round(shieldPercent)}%`, 14, 86);
+  ctx.fillText(`FEATURES: ${effectiveFeatures.length}`, 14, 62);
+  ctx.fillText(`RESOURCES: ${resourceLine}`, 14, 74);
+
+  // Blank-line separation between planet info and ship status.
+  ctx.fillText(`SHIP FUEL: ${Math.round(fuelPercent)}%`, 14, 98);
+  ctx.fillText(`SHIP SHIELDS: ${Math.round(shieldPercent)}%`, 14, 110);
   ctx.restore();
 
   // ── 7. Feature legend (bottom-left) ──
-  if (body.features && body.features.length > 0) {
+  if (effectiveFeatures.length > 0) {
     const legX = 10;
-    const legH = 20 + body.features.length * 14;
+    const legH = 20 + effectiveFeatures.length * 14;
     const legY = screenH - legH - 10;
-    const legW = 140;
+    const legW = Math.min(screenW * 0.45, 320);
     ctx.save();
     ctx.fillStyle = 'rgba(0, 10, 5, 0.7)';
     ctx.fillRect(legX, legY, legW, legH);
@@ -1652,18 +2047,22 @@ export function drawPlanetView(
 
     ctx.font = '8px monospace';
     ctx.fillStyle = G_MED;
-    for (let i = 0; i < body.features.length; i++) {
-      const feat = body.features[i];
+    for (const [i, feat] of effectiveFeatures.entries()) {
       const label = FEATURE_LABELS[feat.type] || feat.type;
-      drawFeatureIcon(ctx, legX + 16, legY + 22 + i * 14, feat.type, 5);
+      const resourceNames = getFeatureResourceNames(feat.type);
+      const resourceSuffix = resourceNames.length > 0
+        ? ` [${resourceNames.join('/')}]`
+        : ' [utility]';
+      drawFeatureIcon(ctx, legX + 16, legY + 22 + i * 14, feat.type, 5, feat.level);
       ctx.fillStyle = G_MED;
-      ctx.fillText(`${feat.name} - ${label}`, legX + 26, legY + 18 + i * 14);
+      ctx.fillText(`${feat.name} - ${label}${resourceSuffix}`, legX + 26, legY + 18 + i * 14);
     }
     ctx.restore();
   }
 
   // ── 8. Bottom-right stub panels ──
-  drawPlanetPanels(ctx, screenW, screenH);
+  const statusRows = buildMockPlanetStatusRows(galaxy.currentStarIndex, fuelPercent, shieldPercent, docked);
+  drawPlanetPanels(ctx, screenW, screenH, statusRows);
 }
 
 // ── Right-edge slide-out panels (planet view) ──────────────────────────────
@@ -1674,23 +2073,59 @@ interface StubPanel {
   rows: string[];
 }
 
-const PLANET_PANELS: StubPanel[] = [
+const DEFAULT_STATUS_ROWS: string[] = ['DOCK: in orbit'];
+
+const PLANET_PANELS_BASE: Omit<StubPanel, 'rows'>[] = [
   {
     title: 'STATUS',
     icon: '\u25B3', // △
-    rows: ['HULL: ████████░░ 82%', 'FUEL: ██████░░░░ 61%', 'CARGO: 3 / 12'],
   },
   {
     title: 'COMMS',
     icon: '\u25CE', // ◎
-    rows: ['No signals detected', '── scan to discover ──'],
   },
   {
     title: 'NAV',
     icon: '\u2316', // ⌖
-    rows: ['ORBIT: stable', 'VECTOR: holding'],
   },
 ];
+
+let _lastStatusRows: string[] = DEFAULT_STATUS_ROWS;
+
+function getPlanetPanels(statusRows: string[]): StubPanel[] {
+  return [
+    { ...PLANET_PANELS_BASE[0]!, rows: statusRows },
+    { ...PLANET_PANELS_BASE[1]!, rows: ['No signals detected', '── scan to discover ──'] },
+    { ...PLANET_PANELS_BASE[2]!, rows: ['ORBIT: stable', 'VECTOR: holding'] },
+  ];
+}
+
+function buildMockPlanetStatusRows(
+  starIndex: number,
+  fuelPercent: number,
+  shieldPercent: number,
+  docked: boolean,
+): string[] {
+  const rows: string[] = [];
+  void fuelPercent;
+  void shieldPercent;
+
+  rows.push(`DOCK: ${docked ? 'established' : 'in orbit'}`);
+
+  const enabledResources = getEnabledResources();
+  const serverEcon = _serverEconomyByStarIndex.get(starIndex) ?? null;
+  if (serverEcon && enabledResources.length > 0) {
+    rows.push('RESOURCES');
+    for (const resource of enabledResources) {
+      const id = resource.id;
+      const amount = id === 'ore' ? serverEcon.store.ore : id === 'food' ? serverEcon.store.food : serverEcon.store.energy;
+      const rate = id === 'ore' ? serverEcon.rates.ore : id === 'food' ? serverEcon.rates.food : serverEcon.rates.energy;
+      rows.push(`${resource.shortName}: ${Math.floor(amount)}/${serverEcon.cap} (+${rate}/m)`);
+    }
+  }
+
+  return rows;
+}
 
 // -1 = all closed, 0..2 = which panel is open
 let _openPanel = -1;
@@ -1709,9 +2144,10 @@ export function togglePlanetPanel(index: number): void {
 
 /** Get the tab rects for hit testing */
 function getPanelTabRects(screenH: number) {
-  const totalH = PLANET_PANELS.length * TAB_H + (PLANET_PANELS.length - 1) * TAB_GAP;
+  const panelCount = PLANET_PANELS_BASE.length;
+  const totalH = panelCount * TAB_H + (panelCount - 1) * TAB_GAP;
   const startY = (screenH - totalH) / 2;
-  return PLANET_PANELS.map((_, i) => ({
+  return PLANET_PANELS_BASE.map((_, i) => ({
     y: startY + i * (TAB_H + TAB_GAP),
   }));
 }
@@ -1731,7 +2167,9 @@ export function hitTestPlanetPanels(
 
   // Check if click is on a tab
   for (let i = 0; i < tabRects.length; i++) {
-    const ty = tabRects[i].y;
+    const rect = tabRects[i];
+    if (!rect) continue;
+    const ty = rect.y;
     if (sx >= tabX && sx <= screenW && sy >= ty && sy <= ty + TAB_H) {
       return i;
     }
@@ -1739,10 +2177,12 @@ export function hitTestPlanetPanels(
 
   // Check if click is inside the open panel body
   if (_openPanel >= 0) {
-    const p = PLANET_PANELS[_openPanel];
+    const p = getPlanetPanels(_lastStatusRows)[_openPanel];
+    const openRect = tabRects[_openPanel];
+    if (!p || !openRect) return -1;
     const bodyH = p.rows.length * ROW_H + PANEL_PAD * 2 + 20;
     const panelX = screenW - TAB_W - PANEL_W;
-    const tabY = tabRects[_openPanel].y;
+    const tabY = openRect.y;
     const panelY = tabY;
     if (sx >= panelX && sx <= screenW - TAB_W && sy >= panelY && sy <= panelY + Math.max(bodyH, TAB_H)) {
       return -2; // inside panel body — consume click
@@ -1752,15 +2192,52 @@ export function hitTestPlanetPanels(
   return -1;
 }
 
-function drawPlanetPanels(ctx: CanvasRenderingContext2D, screenW: number, screenH: number) {
+/** Returns true when a screen point lies under the currently open planet panel/tab area. */
+export function isPointCoveredByOpenPlanetPanel(
+  screenW: number,
+  screenH: number,
+  sx: number,
+  sy: number,
+): boolean {
+  if (_openPanel < 0) return false;
+
+  const tabRects = getPanelTabRects(screenH);
+  const openRect = tabRects[_openPanel];
+  const p = getPlanetPanels(_lastStatusRows)[_openPanel];
+  if (!openRect || !p) return false;
+
+  const tabX = screenW - TAB_W;
+  // Occlude tab strip itself.
+  if (sx >= tabX - 4 && sx <= screenW && sy >= openRect.y && sy <= openRect.y + TAB_H) {
+    return true;
+  }
+
+  // Occlude open panel body.
+  const bodyH = p.rows.length * ROW_H + PANEL_PAD * 2 + 22;
+  const panelX = screenW - TAB_W - PANEL_W;
+  const panelY = openRect.y;
+  const panelH = Math.max(bodyH, TAB_H);
+  return sx >= panelX && sx <= screenW - TAB_W && sy >= panelY && sy <= panelY + panelH;
+}
+
+function drawPlanetPanels(
+  ctx: CanvasRenderingContext2D,
+  screenW: number,
+  screenH: number,
+  statusRows: string[],
+) {
+  _lastStatusRows = statusRows;
+  const panels = getPlanetPanels(statusRows);
   const tabRects = getPanelTabRects(screenH);
   const tabX = screenW - TAB_W;
 
   ctx.save();
 
-  for (let i = 0; i < PLANET_PANELS.length; i++) {
-    const p = PLANET_PANELS[i];
-    const ty = tabRects[i].y;
+  for (let i = 0; i < panels.length; i++) {
+    const p = panels[i];
+    const rect = tabRects[i];
+    if (!p || !rect) continue;
+    const ty = rect.y;
     const isOpen = _openPanel === i;
 
     // ── Tab (vertical, right edge) ──
@@ -1836,7 +2313,9 @@ function drawPlanetPanels(ctx: CanvasRenderingContext2D, screenW: number, screen
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       for (let r = 0; r < p.rows.length; r++) {
-        ctx.fillText(p.rows[r], panelX + PANEL_PAD, panelY + 28 + r * ROW_H);
+        const row = p.rows[r];
+        if (!row) continue;
+        ctx.fillText(row, panelX + PANEL_PAD, panelY + 28 + r * ROW_H);
       }
     }
   }
@@ -1873,6 +2352,8 @@ export function drawTierHUD(
 
 import type { DockState } from './types';
 import type { DockAction } from './dock';
+import { SHIP_CATALOG, getAvailableShipTypes, getDockTier, getDockTierLevel } from '../shared/ships';
+import type { ShipCatalogEntry } from '../shared/ships';
 
 interface DockButton {
   action: DockAction;
@@ -1886,17 +2367,169 @@ interface DockButton {
 
 let _lastDockButtons: DockButton[] = [];
 
+type DockExtensionAction = 'upgrade_station' | 'extend_habitat' | 'extend_ore' | 'extend_defense' | 'extend_warehouse' | 'extend_dock';
+export type DockPanelAction = DockAction | DockExtensionAction | 'buy_ships';
+
+type ExtensionButton = {
+  action: DockExtensionAction;
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  enabled: boolean;
+};
+
+type MockExtensionState = {
+  action: DockExtensionAction;
+  label: string;
+  key: 'mine' | 'solar' | 'hab' | 'station' | 'warehouse' | 'dock';
+  cost: { ore: number; food: number; energy: number };
+  buildMs: number;
+};
+
+const MOCK_EXTENSION_DEFS: MockExtensionState[] = [
+  { action: 'upgrade_station', label: 'STATION', key: 'station', cost: { ore: 420, food: 420, energy: 420 }, buildMs: 300_000 },
+  { action: 'extend_habitat', label: 'HAB', key: 'hab', cost: { ore: 180, food: 220, energy: 120 }, buildMs: 300_000 },
+  { action: 'extend_ore', label: 'MINE', key: 'mine', cost: { ore: 260, food: 120, energy: 180 }, buildMs: 300_000 },
+  { action: 'extend_defense', label: 'SOLAR', key: 'solar', cost: { ore: 300, food: 180, energy: 260 }, buildMs: 300_000 },
+  { action: 'extend_warehouse', label: 'STORE', key: 'warehouse', cost: { ore: 240, food: 180, energy: 180 }, buildMs: 300_000 },
+  { action: 'extend_dock', label: 'DOCK', key: 'dock', cost: { ore: 500, food: 300, energy: 400 }, buildMs: 600_000 },
+];
+
+const LEVEL_ONE_TARGET_MINUTES = 5;
+const LEVEL_ONE_MAX_COST = {
+  ore: Math.max(...MOCK_EXTENSION_DEFS.map((def) => def.cost.ore)),
+  food: Math.max(...MOCK_EXTENSION_DEFS.map((def) => def.cost.food)),
+  energy: Math.max(...MOCK_EXTENSION_DEFS.map((def) => def.cost.energy)),
+};
+let _lastExtensionButtons: ExtensionButton[] = [];
+
+type ServerEconomySnapshot = {
+  starIndex: number;
+  store: { ore: number; food: number; energy: number };
+  rates: { ore: number; food: number; energy: number };
+  cap: number;
+  buildings: {
+    station: { level: number; status: string; completeAt: number | null };
+    mine: { level: number; status: string; completeAt: number | null };
+    solar: { level: number; status: string; completeAt: number | null };
+    hab: { level: number; status: string; completeAt: number | null };
+    warehouse: { level: number; status: string; completeAt: number | null };
+    dock: { level: number; status: string; completeAt: number | null };
+  };
+};
+
+const _serverEconomyByStarIndex = new Map<number, ServerEconomySnapshot>();
+let _lastEconomyStarIndex: number | null = null;
+let _pendingBuildRequest: { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' } | null = null;
+let _pendingBuyShipRequest: { shipTypeId: number; quantity: number } | null = null;
+
+export function setServerStarEconomy(snapshot: ServerEconomySnapshot): void {
+  _serverEconomyByStarIndex.set(snapshot.starIndex, snapshot);
+}
+
+type ServerShipSnapshot = {
+  ships: Array<{ typeId: number; count: number }>;
+  building: { typeId: number; completeAt: number } | null;
+};
+const _serverShipsByStarIndex = new Map<number, ServerShipSnapshot>();
+
+export function setServerShipState(
+  starIndex: number,
+  ships: Array<{ typeId: number; count: number }>,
+  building: { typeId: number; completeAt: number } | null,
+): void {
+  _serverShipsByStarIndex.set(starIndex, { ships, building });
+}
+
+export function consumePendingBuildRequest(): { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' } | null {
+  const next = _pendingBuildRequest;
+  _pendingBuildRequest = null;
+  return next;
+}
+
+export function consumePendingBuyShipRequest(): { shipTypeId: number; quantity: number } | null {
+  const next = _pendingBuyShipRequest;
+  _pendingBuyShipRequest = null;
+  return next;
+}
+
+function mapDockActionToBuildType(action: DockExtensionAction): 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' {
+  if (action === 'upgrade_station') return 'station';
+  if (action === 'extend_ore') return 'mine';
+  if (action === 'extend_defense') return 'solar';
+  if (action === 'extend_warehouse') return 'warehouse';
+  if (action === 'extend_dock') return 'dock';
+  return 'hab';
+}
+
+const MAX_STATION_LEVEL = 8;
+const STATION_UPGRADE_COST_STEP = { ore: 180, food: 180, energy: 180 };
+function toRoman(level: number): string {
+  const table = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'];
+  return table[level - 1] ?? `${level}`;
+}
+
+function isDockedAtStation(dock?: DockState): boolean {
+  if (!dock || !dock.docked) return false;
+  return dock.targetType === 'feature' && dock.targetLabel === 'Station';
+}
+
+export function triggerDockPanelAction(action: DockPanelAction, dock?: DockState): boolean {
+  if (action === 'upgrade_station' || action === 'extend_habitat' || action === 'extend_ore' || action === 'extend_defense' || action === 'extend_warehouse' || action === 'extend_dock') {
+    const serverEcon = _lastEconomyStarIndex == null ? null : _serverEconomyByStarIndex.get(_lastEconomyStarIndex);
+    if (!serverEcon || !isDockedAtStation(dock)) return false;
+    const buildType = mapDockActionToBuildType(action);
+    const building = serverEcon.buildings[buildType];
+    const stationLevel = serverEcon.buildings.station.level;
+    const isStationUpgrade = buildType === 'station';
+    const level = building.level;
+    const nextLevel = level + 1;
+    const catalog = MOCK_EXTENSION_DEFS.find((d) => d.action === action);
+    const maxLevel = buildType === 'dock' ? 5 : MAX_STATION_LEVEL;
+    const isMaxLevel = isStationUpgrade ? level >= MAX_STATION_LEVEL : level >= Math.min(maxLevel, stationLevel);
+    const effectiveCost = isStationUpgrade
+      ? {
+          ore: 420 + STATION_UPGRADE_COST_STEP.ore * Math.max(0, level - 1),
+          food: 420 + STATION_UPGRADE_COST_STEP.food * Math.max(0, level - 1),
+          energy: 420 + STATION_UPGRADE_COST_STEP.energy * Math.max(0, level - 1),
+        }
+      : {
+          ore: (catalog?.cost.ore ?? 0) * nextLevel,
+          food: (catalog?.cost.food ?? 0) * nextLevel,
+          energy: (catalog?.cost.energy ?? 0) * nextLevel,
+        };
+    const canAfford =
+      serverEcon.store.ore >= effectiveCost.ore &&
+      serverEcon.store.food >= effectiveCost.food &&
+      serverEcon.store.energy >= effectiveCost.energy;
+    const anyActive = Object.values(serverEcon.buildings).some((candidate) => candidate.status === 'UPGRADING');
+    if (anyActive || isMaxLevel || !canAfford) return false;
+    _pendingBuildRequest = { buildType };
+    return true;
+  }
+  if (action === 'buy_ships') {
+    // Ship panel triggered — handled by game loop
+    return true;
+  }
+  return false;
+}
+
 const DOCK_ACTIONS: { action: DockAction; label: string; icon: string }[] = [
   { action: 'contact', label: 'CONTACT', icon: '\u{1F4E1}' }, // 📡
   { action: 'trade',   label: 'TRADE',   icon: '\u{1F4E6}' }, // 📦
   { action: 'missions',label: 'MISSIONS',icon: '\u2605' },     // ★
-  { action: 'leave',   label: 'LEAVE',   icon: '\u2191' },     // ↑
+  { action: 'ships',   label: 'SHIPS',   icon: '\u{1F680}' }, // 🚀
   { action: 'scan',    label: 'SCAN',    icon: '\u25CE' },     // ◎
+  { action: 'leave',   label: 'LEAVE',   icon: '\u2191' },     // ↑
 ];
 
 export function drawDockPanel(
   r: Renderer,
   dock: DockState,
+  body: SystemBody | null,
+  starIndex?: number,
 ): void {
   const { ctx } = r;
   const dpr = window.devicePixelRatio || 1;
@@ -1904,10 +2537,13 @@ export function drawDockPanel(
   const screenH = r.height / dpr;
 
   // Panel dimensions
-  const panelH = 110;
-  const panelW = Math.min(screenW - 24, 400);
+  const panelH = 192;
+  const panelW = Math.min(screenW - 24, 480);
   const panelX = (screenW - panelW) / 2;
   const panelY = screenH - panelH - 12;
+
+  const nowMs = Date.now();
+  _lastEconomyStarIndex = starIndex ?? null;
 
   // Panel background
   ctx.save();
@@ -1934,8 +2570,6 @@ export function drawDockPanel(
 
   const headerText = `ORBIT: ${dock.targetName.toUpperCase()}`;
   ctx.font = 'bold 10px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText(headerText, screenW / 2, headerY);
 
@@ -1950,15 +2584,14 @@ export function drawDockPanel(
 
   _lastDockButtons = [];
 
-  for (let i = 0; i < btnCount; i++) {
-    const act = DOCK_ACTIONS[i];
+  for (const [i, act] of DOCK_ACTIONS.entries()) {
     const bx = btnStartX + i * (btnW + btnGap);
     const by = btnY;
 
     _lastDockButtons.push({ ...act, x: bx, y: by, w: btnW, h: btnH });
 
     const isLeave = act.action === 'leave';
-    const isStub = !dock.docked || (!isLeave && act.action !== 'scan');
+    const isStub = !dock.docked || (!isLeave && act.action !== 'scan' && act.action !== 'ships');
 
     // Button border
     ctx.strokeStyle = isStub ? G_FAINT : G_BRIGHT;
@@ -1987,20 +2620,345 @@ export function drawDockPanel(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_DIM;
-  ctx.fillText(statusText, screenW / 2, panelY + panelH - 18);
+  ctx.fillText(statusText, screenW / 2, panelY + 84);
+
+  // Fleet summary row
+  const fleetState = starIndex != null ? _serverShipsByStarIndex.get(starIndex) : null;
+  const fleetShips = fleetState?.ships ?? [];
+  const buildingShip = fleetState?.building ?? null;
+  if (fleetShips.length > 0 || buildingShip) {
+    ctx.font = '7px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = G_MED;
+    let fleetStr = 'FLEET:';
+    for (const s of fleetShips) {
+      const entry = SHIP_CATALOG[s.typeId as keyof typeof SHIP_CATALOG];
+      if (entry && s.count > 0) fleetStr += ` ${entry.name.toUpperCase()}x${s.count}`;
+    }
+    if (buildingShip) {
+      const bEntry = SHIP_CATALOG[buildingShip.typeId as keyof typeof SHIP_CATALOG];
+      const remaining = Math.max(0, Math.ceil((buildingShip.completeAt - Date.now()) / 1000));
+      if (bEntry) fleetStr += ` [${bEntry.name.toUpperCase()} ${remaining}s]`;
+    }
+    ctx.fillText(fleetStr, panelX + 12, panelY + 96);
+  }
+
+  // Mock starbase extension strip (lower section).
+  const extY = panelY + 112;
+  const extBtnH = 48;
+  const extGap = 8;
+  const extCount = MOCK_EXTENSION_DEFS.length;
+  const extBtnW = Math.floor((panelW - 24 - (extCount - 1) * extGap) / extCount);
+  const extStartX = panelX + 12;
+  ctx.font = '8px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = G_MED;
+  const serverEcon = starIndex != null ? _serverEconomyByStarIndex.get(starIndex) : undefined;
+  const stationReady = isDockedAtStation(dock);
+  const oreNow = Math.floor(serverEcon?.store.ore ?? 0);
+  const foodNow = Math.floor(serverEcon?.store.food ?? 0);
+  const energyNow = Math.floor(serverEcon?.store.energy ?? 0);
+  const stationLevel = serverEcon?.buildings.station.level ?? 1;
+  const stationTag = stationReady ? `STATION LV ${toRoman(stationLevel)}` : 'DOCK AT STATION TO BUILD';
+  ctx.fillText(`STARBASE EXTENSIONS  ${stationTag}  O:${oreNow} F:${foodNow} E:${energyNow}`, panelX + 12, extY - 10);
+
+  _lastExtensionButtons = [];
+  for (const [idx, ext] of MOCK_EXTENSION_DEFS.entries()) {
+    const bx = extStartX + idx * (extBtnW + extGap);
+    const isStationUpgrade = ext.action === 'upgrade_station';
+    const serverBuilding = serverEcon?.buildings[ext.key];
+    const level = serverBuilding?.level ?? 0;
+    const maxBuildingLevel = Math.min(MAX_STATION_LEVEL, serverEcon?.buildings.station.level ?? 1);
+    const nextLevel = Math.min(MAX_STATION_LEVEL, level + 1);
+    const isMaxLevel = isStationUpgrade ? level >= MAX_STATION_LEVEL : level >= maxBuildingLevel;
+    const effectiveCost = isStationUpgrade
+      ? {
+          ore: 420 + STATION_UPGRADE_COST_STEP.ore * Math.max(0, level - 1),
+          food: 420 + STATION_UPGRADE_COST_STEP.food * Math.max(0, level - 1),
+          energy: 420 + STATION_UPGRADE_COST_STEP.energy * Math.max(0, level - 1),
+        }
+      : {
+          ore: ext.cost.ore * nextLevel,
+          food: ext.cost.food * nextLevel,
+          energy: ext.cost.energy * nextLevel,
+        };
+    const activeBuildCount = serverEcon
+      ? Object.values(serverEcon.buildings).filter((candidate) => candidate.status === 'UPGRADING').length
+      : 0;
+    const canAfford = serverEcon
+      ? serverEcon.store.ore >= effectiveCost.ore && serverEcon.store.food >= effectiveCost.food && serverEcon.store.energy >= effectiveCost.energy
+      : false;
+    const isActive = serverBuilding ? serverBuilding.status === 'UPGRADING' : false;
+    const isLocked = serverBuilding ? serverBuilding.status === 'LOCKED' : true;
+    const progress = serverBuilding && serverBuilding.status === 'UPGRADING' && serverBuilding.completeAt != null
+      ? Math.max(0, Math.min(100, Math.floor(((ext.buildMs - Math.max(0, serverBuilding.completeAt - nowMs)) / ext.buildMs) * 100)))
+      : 0;
+    const enabled = stationReady && canAfford && !isActive && !isMaxLevel && !isLocked && activeBuildCount === 0;
+    const tierLabel = isStationUpgrade ? `${ext.label} ${toRoman(nextLevel)}` : `${ext.label} ${toRoman(nextLevel)}`;
+
+    _lastExtensionButtons.push({
+      action: ext.action,
+      label: tierLabel,
+      x: bx,
+      y: extY,
+      w: extBtnW,
+      h: extBtnH,
+      enabled,
+    });
+
+    roundedRect(ctx, bx, extY, extBtnW, extBtnH, 3);
+    ctx.fillStyle = enabled ? 'rgba(20, 80, 60, 0.6)' : 'rgba(20, 35, 30, 0.5)';
+    ctx.fill();
+    roundedRect(ctx, bx, extY, extBtnW, extBtnH, 3);
+    ctx.strokeStyle = enabled ? G_BRIGHT : isMaxLevel ? G_MED : G_FAINT;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = enabled ? G_BRIGHT : G_MED;
+    ctx.font = 'bold 8px monospace';
+    ctx.fillText(tierLabel, bx + extBtnW / 2, extY + 4);
+
+    ctx.font = '7px monospace';
+    if (isMaxLevel) {
+      ctx.fillStyle = G_MED;
+      if (isStationUpgrade) {
+        ctx.fillText('MAX LV VIII', bx + extBtnW / 2, extY + 18);
+      } else {
+        ctx.fillText(`BUILT LV ${toRoman(level)}`, bx + extBtnW / 2, extY + 18);
+        ctx.fillStyle = G_DIM;
+        ctx.fillText('UPGRADE STATION', bx + extBtnW / 2, extY + 32);
+      }
+    } else if (isActive) {
+      ctx.fillStyle = G_MED;
+      ctx.fillText(`${progress}%`, bx + extBtnW / 2, extY + 18);
+      const barX = bx + 6;
+      const barY = extY + 32;
+      const barW = extBtnW - 12;
+      const fillW = Math.floor((barW * progress) / 100);
+      ctx.fillStyle = 'rgba(79, 255, 176, 0.2)';
+      ctx.fillRect(barX, barY, barW, 6);
+      ctx.fillStyle = G_BRIGHT;
+      ctx.fillRect(barX, barY, fillW, 6);
+    } else {
+      ctx.fillStyle = G_MED;
+      ctx.fillText(`C:${effectiveCost.ore}/${effectiveCost.food}/${effectiveCost.energy}`, bx + extBtnW / 2, extY + 18);
+      const isBusy = activeBuildCount > 0 && !isActive;
+      const statusLabel = !stationReady
+        ? 'DOCK STATION'
+        : enabled
+          ? (level >= 1 ? 'UPGRADE' : 'BUILD')
+          : isBusy
+            ? (level >= 1 ? `BUILT LV ${toRoman(level)}` : 'BUSY')
+            : 'LOCKED';
+      ctx.fillStyle = enabled ? G_BRIGHT : G_DIM;
+      ctx.fillText(statusLabel, bx + extBtnW / 2, extY + 32);
+    }
+  }
 
   ctx.restore();
 }
 
 /** Hit-test dock panel buttons. Returns the action if a button was clicked, null otherwise. */
-export function hitTestDockPanel(screenPos: Vec2): DockAction | null {
+export function hitTestDockPanel(screenPos: Vec2): DockPanelAction | null {
+  // Check ship panel buttons first (on top)
+  if (_shipPanelOpen) {
+    for (const btn of _lastShipButtons) {
+      if (
+        screenPos.x >= btn.x && screenPos.x <= btn.x + btn.w &&
+        screenPos.y >= btn.y && screenPos.y <= btn.y + btn.h
+      ) {
+        if (btn.enabled) {
+          _pendingBuyShipRequest = { shipTypeId: btn.shipTypeId, quantity: 1 };
+          return 'buy_ships';
+        }
+        return 'ships'; // consume click even if can't afford
+      }
+    }
+    // Click was outside ship buttons — close panel, fall through to dock buttons
+    _shipPanelOpen = false;
+  }
+
+  for (const btn of _lastExtensionButtons) {
+    if (
+      screenPos.x >= btn.x && screenPos.x <= btn.x + btn.w &&
+      screenPos.y >= btn.y && screenPos.y <= btn.y + btn.h
+    ) {
+      if (btn.enabled) return btn.action;
+      return null;
+    }
+  }
+
   for (const btn of _lastDockButtons) {
     if (
       screenPos.x >= btn.x && screenPos.x <= btn.x + btn.w &&
       screenPos.y >= btn.y && screenPos.y <= btn.y + btn.h
     ) {
+      if (btn.action === 'ships') {
+        const serverEcon = _lastEconomyStarIndex == null ? null : _serverEconomyByStarIndex.get(_lastEconomyStarIndex);
+        if (serverEcon && serverEcon.buildings.dock.level >= 1) {
+          _shipPanelOpen = !_shipPanelOpen;
+        }
+        return 'ships';
+      }
       return btn.action;
     }
   }
   return null;
+}
+
+// ── Ship Panel ──────────────────────────────────────────────────────────────
+
+let _shipPanelOpen = false;
+
+type ShipButton = {
+  shipTypeId: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  enabled: boolean;
+};
+
+let _lastShipButtons: ShipButton[] = [];
+
+export function drawShipPanel(r: Renderer): void {
+  if (!_shipPanelOpen) return;
+  const serverEcon = _lastEconomyStarIndex == null ? null : _serverEconomyByStarIndex.get(_lastEconomyStarIndex);
+  if (!serverEcon) { _shipPanelOpen = false; return; }
+
+  const dockLevel = serverEcon.buildings.dock.level;
+  if (dockLevel < 1) { _shipPanelOpen = false; return; }
+
+  const available = getAvailableShipTypes(dockLevel);
+  if (available.length === 0) { _shipPanelOpen = false; return; }
+
+  const shipState = _lastEconomyStarIndex == null ? null : _serverShipsByStarIndex.get(_lastEconomyStarIndex);
+  const building = shipState?.building ?? null;
+  const fleet = shipState?.ships ?? [];
+  const nowMs = Date.now();
+  const isBuilding = building != null && building.completeAt > nowMs;
+
+  const { ctx } = r;
+  const dpr = window.devicePixelRatio || 1;
+  const screenW = r.width / dpr;
+  const screenH = r.height / dpr;
+
+  const tier = getDockTier(dockLevel);
+  const tierLvl = getDockTierLevel(dockLevel);
+
+  // Panel dimensions
+  const cols = Math.min(available.length, 4);
+  const rows = Math.ceil(available.length / cols);
+  const cellW = 90;
+  const cellH = 62;
+  const gap = 6;
+  const panelW = cols * cellW + (cols - 1) * gap + 24;
+  const panelH = rows * cellH + (rows - 1) * gap + 44;
+  const panelX = (screenW - panelW) / 2;
+  const panelY = screenH - panelH - 200;
+
+  ctx.save();
+
+  // Background
+  ctx.fillStyle = 'rgba(0, 10, 5, 0.95)';
+  ctx.strokeStyle = G_BRIGHT;
+  ctx.lineWidth = 1.5;
+  roundedRect(ctx, panelX, panelY, panelW, panelH, 6);
+  ctx.fill();
+  ctx.stroke();
+
+  // Header
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText(`SPACE DOCK T${tier} LV${tierLvl} — BUILD SHIPS`, screenW / 2, panelY + 8);
+
+  // Ship buttons
+  _lastShipButtons = [];
+  const startX = panelX + 12;
+  const startY = panelY + 28;
+
+  for (const [i, ship] of available.entries()) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const bx = startX + col * (cellW + gap);
+    const by = startY + row * (cellH + gap);
+
+    const canAfford =
+      serverEcon.store.ore >= ship.cost.ore &&
+      serverEcon.store.food >= ship.cost.food &&
+      serverEcon.store.energy >= ship.cost.energy;
+
+    const isBuildingThis = isBuilding && building!.typeId === ship.id;
+    const ownedCount = fleet.find((s) => s.typeId === ship.id)?.count ?? 0;
+    const enabled = canAfford && !isBuilding;
+
+    _lastShipButtons.push({ shipTypeId: ship.id, x: bx, y: by, w: cellW, h: cellH, enabled });
+
+    // Button bg
+    roundedRect(ctx, bx, by, cellW, cellH, 3);
+    ctx.fillStyle = enabled ? 'rgba(20, 80, 60, 0.6)' : isBuildingThis ? 'rgba(30, 60, 50, 0.7)' : 'rgba(20, 35, 30, 0.5)';
+    ctx.fill();
+    roundedRect(ctx, bx, by, cellW, cellH, 3);
+    ctx.strokeStyle = enabled ? G_BRIGHT : isBuildingThis ? G_MED : G_FAINT;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Ship name + owned count
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.font = 'bold 8px monospace';
+    ctx.fillStyle = enabled || isBuildingThis ? G_BRIGHT : G_MED;
+    const nameLabel = ownedCount > 0 ? `${ship.name.toUpperCase()} (${ownedCount})` : ship.name.toUpperCase();
+    ctx.fillText(nameLabel, bx + cellW / 2, by + 4);
+
+    // Stats
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_MED;
+    ctx.fillText(`A:${ship.offense} D:${ship.defense} S:${ship.speed}`, bx + cellW / 2, by + 16);
+
+    if (isBuildingThis) {
+      // Progress bar
+      const totalMs = ship.buildSeconds * 1000;
+      const remainMs = Math.max(0, building!.completeAt - nowMs);
+      const progress = Math.max(0, Math.min(100, Math.floor(((totalMs - remainMs) / totalMs) * 100)));
+      ctx.fillStyle = G_MED;
+      ctx.fillText(`BUILDING ${progress}%`, bx + cellW / 2, by + 28);
+      const barX = bx + 6;
+      const barY = by + 40;
+      const barW = cellW - 12;
+      const fillW = Math.floor((barW * progress) / 100);
+      ctx.fillStyle = 'rgba(79, 255, 176, 0.2)';
+      ctx.fillRect(barX, barY, barW, 6);
+      ctx.fillStyle = G_BRIGHT;
+      ctx.fillRect(barX, barY, fillW, 6);
+      const secsLeft = Math.ceil(remainMs / 1000);
+      ctx.fillStyle = G_DIM;
+      ctx.fillText(`${secsLeft}s`, bx + cellW / 2, by + 50);
+    } else {
+      // Cost
+      ctx.fillStyle = canAfford ? G_BRIGHT : G_DIM;
+      ctx.fillText(`${ship.cost.ore}/${ship.cost.food}/${ship.cost.energy}`, bx + cellW / 2, by + 28);
+
+      // Action label
+      const statusLabel = isBuilding ? 'BUSY' : enabled ? 'BUILD' : 'LOCKED';
+      ctx.fillStyle = enabled ? G_BRIGHT : G_DIM;
+      ctx.fillText(statusLabel, bx + cellW / 2, by + 42);
+    }
+  }
+
+  ctx.restore();
+}
+
+export function isShipPanelOpen(): boolean {
+  return _shipPanelOpen;
+}
+
+export function closeShipPanel(): void {
+  _shipPanelOpen = false;
 }

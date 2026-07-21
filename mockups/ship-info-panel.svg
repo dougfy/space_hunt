@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 300" style="background:#050a08">
+  <defs>
+    <style>
+      text { font-family: monospace; }
+    </style>
+  </defs>
+
+  <!-- Panel -->
+  <rect x="10" y="10" width="340" height="280" rx="6" fill="rgba(0,10,5,0.95)" stroke="#4fffb0" stroke-width="1.5"/>
+
+  <!-- Header -->
+  <line x1="30" y1="34" x2="80" y2="34" stroke="#1a5c3f" stroke-width="1"/>
+  <text x="180" y="38" text-anchor="middle" fill="#4fffb0" font-size="11" font-weight="bold">SHIP INFO</text>
+  <line x1="270" y1="34" x2="330" y2="34" stroke="#1a5c3f" stroke-width="1"/>
+
+  <!-- Ship name -->
+  <text x="180" y="62" text-anchor="middle" fill="#4fffb0" font-size="14" font-weight="bold">SCOUT</text>
+  <line x1="120" y1="70" x2="240" y2="70" stroke="#0d3020" stroke-width="1"/>
+
+  <!-- Ship silhouette (large) -->
+  <g transform="translate(100, 130)">
+    <polygon points="0,-40 -20,20 0,10 20,20" fill="none" stroke="#4fffb0" stroke-width="2"/>
+    <line x1="-10" y1="20" x2="-16" y2="34" stroke="#4fffb0" stroke-width="1.5"/>
+    <line x1="10" y1="20" x2="16" y2="34" stroke="#4fffb0" stroke-width="1.5"/>
+    <line x1="0" y1="10" x2="0" y2="34" stroke="#4fffb0" stroke-width="1.5"/>
+    <!-- Engine glow -->
+    <ellipse cx="-13" cy="38" rx="4" ry="6" fill="none" stroke="#2a9968" stroke-width="1" opacity="0.6"/>
+    <ellipse cx="0" cy="38" rx="4" ry="6" fill="none" stroke="#2a9968" stroke-width="1" opacity="0.6"/>
+    <ellipse cx="13" cy="38" rx="4" ry="6" fill="none" stroke="#2a9968" stroke-width="1" opacity="0.6"/>
+  </g>
+
+  <!-- Stats -->
+  <g transform="translate(200, 95)">
+    <text x="0" y="0" fill="#2a9968" font-size="9">ATK:</text>
+    <text x="50" y="0" fill="#4fffb0" font-size="9" font-weight="bold">10</text>
+    <!-- ATK bar -->
+    <rect x="70" y="-8" width="60" height="6" rx="2" fill="#0d3020"/>
+    <rect x="70" y="-8" width="7" height="6" rx="2" fill="#4fffb0"/>
+
+    <text x="0" y="18" fill="#2a9968" font-size="9">DEF:</text>
+    <text x="50" y="18" fill="#4fffb0" font-size="9" font-weight="bold">20</text>
+    <rect x="70" y="10" width="60" height="6" rx="2" fill="#0d3020"/>
+    <rect x="70" y="10" width="14" height="6" rx="2" fill="#4fffb0"/>
+
+    <text x="0" y="36" fill="#2a9968" font-size="9">SPD:</text>
+    <text x="50" y="36" fill="#4fffb0" font-size="9" font-weight="bold">7</text>
+    <rect x="70" y="28" width="60" height="6" rx="2" fill="#0d3020"/>
+    <rect x="70" y="28" width="42" height="6" rx="2" fill="#ffb84d"/>
+
+    <text x="0" y="54" fill="#2a9968" font-size="9">TRN:</text>
+    <text x="50" y="54" fill="#2a9968" font-size="9">0</text>
+    <rect x="70" y="46" width="60" height="6" rx="2" fill="#0d3020"/>
+
+    <text x="0" y="72" fill="#2a9968" font-size="9">PTS:</text>
+    <text x="50" y="72" fill="#4fffb0" font-size="9" font-weight="bold">1</text>
+  </g>
+
+  <!-- Location info -->
+  <line x1="30" y1="200" x2="330" y2="200" stroke="#0d3020" stroke-width="1"/>
+  <text x="50" y="220" fill="#2a9968" font-size="9">Location:</text>
+  <text x="140" y="220" fill="#4fffb0" font-size="9">QUOEN I</text>
+  <text x="50" y="238" fill="#2a9968" font-size="9">Status:</text>
+  <text x="140" y="238" fill="#4fffb0" font-size="9">⚓ DOCKED</text>
+  <text x="50" y="256" fill="#2a9968" font-size="9">Tier:</text>
+  <text x="140" y="256" fill="#4fffb0" font-size="9">1</text>
+
+  <!-- Buttons -->
+  <rect x="80" y="268" width="80" height="18" rx="3" fill="rgba(20,80,60,0.6)" stroke="#4fffb0" stroke-width="1"/>
+  <text x="120" y="281" text-anchor="middle" fill="#4fffb0" font-size="9" font-weight="bold">MOVE</text>
+  <rect x="190" y="268" width="80" height="18" rx="3" fill="none" stroke="#2a9968" stroke-width="1"/>
+  <text x="230" y="281" text-anchor="middle" fill="#2a9968" font-size="9">BACK</text>
+</svg>

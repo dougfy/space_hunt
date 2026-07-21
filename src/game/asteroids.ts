@@ -6,7 +6,6 @@ import {
   ASTEROID_GAP, SPAWN_CLEAR_RADIUS, MAP_HALF_X, MAP_HALF_Y,
   AVOID_LOOKAHEAD, SHIP_MAX_SPEED,
   ASTEROID_NAME_PREFIXES, ASTEROID_NAME_SUFFIXES,
-  SYSTEM_SIZE,
 } from './constants';
 import {
   vec2, add, sub, scale, normalize, magnitude, sqrMagnitude,
@@ -41,8 +40,11 @@ export function getAsteroidSurfaceInfo(a: Asteroid, p: Vec2): SurfaceInfo {
   let inside = false;
 
   for (let i = 0, j = n - 1; i < n; j = i++) {
-    const vi = add(a.pos, a.pts[i]);
-    const vj = add(a.pos, a.pts[j]);
+    const pointI = a.pts[i];
+    const pointJ = a.pts[j];
+    if (!pointI || !pointJ) continue;
+    const vi = add(a.pos, pointI);
+    const vj = add(a.pos, pointJ);
     const e = sub(vi, vj);
     const e2 = sqrMagnitude(e);
     const t = e2 > 1e-8 ? Math.max(0, Math.min(1, dot(sub(p, vj), e) / e2)) : 0;
@@ -72,8 +74,7 @@ export function distanceToAsteroidSurface(a: Asteroid, p: Vec2): number {
 
 export function computeAvoidance(from: Vec2, asteroids: Asteroid[], impactBuffer: number): Vec2 {
   let steer = vec2(0, 0);
-  for (let i = 0; i < asteroids.length; i++) {
-    const a = asteroids[i];
+  for (const a of asteroids) {
     const info = getAsteroidSurfaceInfo(a, from);
     const influence = impactBuffer + AVOID_LOOKAHEAD;
     if (info.inside || info.edge < influence) {
@@ -95,8 +96,7 @@ export function computeAvoidance(from: Vec2, asteroids: Asteroid[], impactBuffer
 
 export function resolveShipCollisions(state: GameState): void {
   const { ship, asteroids, impactBufferWorld } = state;
-  for (let i = 0; i < asteroids.length; i++) {
-    const a = asteroids[i];
+  for (const a of asteroids) {
     const info = getAsteroidSurfaceInfo(a, ship.pos);
     if (info.inside || info.edge < impactBufferWorld) {
       const off = info.inside ? sub(info.nearest, ship.pos) : sub(ship.pos, info.nearest);
@@ -150,8 +150,8 @@ export function generateAsteroids(seed: string): {
     const pts = genAsteroidPoints(rng, radius);
 
     let br = 0;
-    for (let k = 0; k < pts.length; k++) {
-      br = Math.max(br, magnitude(pts[k]));
+    for (const point of pts) {
+      br = Math.max(br, magnitude(point));
     }
 
     // Keep origin clear for ship spawn
@@ -159,9 +159,9 @@ export function generateAsteroids(seed: string): {
 
     // Reject overlaps
     let ok = true;
-    for (let j = 0; j < asteroids.length; j++) {
-      const need = br + asteroids[j].r + ASTEROID_GAP;
-      if (sqrMagnitude(sub(pos, asteroids[j].pos)) < need * need) {
+    for (const asteroid of asteroids) {
+      const need = br + asteroid.r + ASTEROID_GAP;
+      if (sqrMagnitude(sub(pos, asteroid.pos)) < need * need) {
         ok = false;
         break;
       }
@@ -232,15 +232,15 @@ export function generateRingAsteroids(
     const pts = genAsteroidPoints(rng, radius);
 
     let br = 0;
-    for (let k = 0; k < pts.length; k++) {
-      br = Math.max(br, magnitude(pts[k]));
+    for (const point of pts) {
+      br = Math.max(br, magnitude(point));
     }
 
     // Reject overlaps with existing asteroids
     let ok = true;
-    for (let j = 0; j < asteroids.length; j++) {
-      const need = br + asteroids[j].r + ASTEROID_GAP;
-      if (sqrMagnitude(sub(pos, asteroids[j].pos)) < need * need) {
+    for (const asteroid of asteroids) {
+      const need = br + asteroid.r + ASTEROID_GAP;
+      if (sqrMagnitude(sub(pos, asteroid.pos)) < need * need) {
         ok = false;
         break;
       }
@@ -265,11 +265,10 @@ export function getNearbyAsteroids(
   radius: number,
 ): number[] {
   const indices: number[] = [];
-  const r2 = radius * radius;
-  for (let i = 0; i < asteroids.length; i++) {
-    const d2 = sqrMagnitude(sub(asteroids[i].pos, center));
+  for (const [i, asteroid] of asteroids.entries()) {
+    const d2 = sqrMagnitude(sub(asteroid.pos, center));
     // Include if asteroid center is within radius + its own bounding radius
-    const threshold = radius + asteroids[i].r;
+    const threshold = radius + asteroid.r;
     if (d2 < threshold * threshold) {
       indices.push(i);
     }

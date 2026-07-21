@@ -10,9 +10,9 @@ import { normalizeShipShape } from './ship';
 import { addRemoteProjectiles } from './shooting';
 
 export interface DevvitBridge {
-  /** Start the game in solo preview mode (no networking) */
-  beginPreview(): void;
-  /** Activate multiplayer networking (call after beginPreview or standalone) */
+  /** Start rendering in splash/preview mode (no networking) */
+  beginSplash(): void;
+  /** Activate multiplayer networking */
   beginPlay(): void;
   /** Set the player's display name */
   setPlayerName(name: string): void;
@@ -60,25 +60,39 @@ export function createDevvitBridge(
   callbacks = cb;
 
   return {
-    beginPreview() {
-      if (!canvas || !pendingSeed) return;
-      // Start game loop without networking callbacks (solo preview)
+    beginSplash() {
+      if (!canvas || !pendingSeed) {
+        console.log(`[BRIDGE] beginSplash bail: canvas=${!!canvas} seed=${!!pendingSeed}`);
+        return;
+      }
+      if (getGameState()) {
+        console.log(`[BRIDGE] beginSplash bail: game already running`);
+        return;
+      }
       startGame(canvas, pendingSeed, pendingName, pendingShape, null);
+      const gs = getGameState();
+      console.log(`[BRIDGE] beginSplash: tier=${gs?.galaxy.tier} splashMode=${gs?.splashMode} asteroids=${gs?.asteroids.length}`);
     },
 
     beginPlay() {
-      if (!canvas || !callbacks || !pendingSeed) return;
+      if (!canvas || !callbacks || !pendingSeed) {
+        console.log(`[BRIDGE] beginPlay bail: canvas=${!!canvas} callbacks=${!!callbacks} seed=${!!pendingSeed}`);
+        return;
+      }
       const s = getGameState();
+      console.log(`[BRIDGE] beginPlay: gameState=${!!s} splashMode=${s?.splashMode}`);
       if (s && s.splashMode) {
         // Transition from splash to real game — stop splash, start fresh
         stopGame();
         startGame(canvas, pendingSeed, pendingName, pendingShape, callbacks);
+        console.log(`[BRIDGE] beginPlay: transitioned from splash to play, tier=${getGameState()?.galaxy.tier}`);
       } else if (s) {
         // Game already running (non-splash) — just activate networking
         setGameCallbacks(callbacks);
       } else {
         // Start fresh with networking
         startGame(canvas, pendingSeed, pendingName, pendingShape, callbacks);
+        console.log(`[BRIDGE] beginPlay: started fresh, tier=${getGameState()?.galaxy.tier}`);
       }
     },
 
@@ -115,7 +129,9 @@ export function createDevvitBridge(
       if (!s) return;
       // payload = "podId:mine(0|1)"
       const parts = payload.split(':');
-      const podId = parseInt(parts[0], 10);
+      const rawPodId = parts[0];
+      if (!rawPodId) return;
+      const podId = parseInt(rawPodId, 10);
       const mine = parts[1] === '1';
       if (!isNaN(podId)) {
         applyPodCollected(s, podId, mine);

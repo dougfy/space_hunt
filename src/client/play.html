@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>spacehunt</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+      #game-canvas { width: 100%; height: 100%; display: block; }
+
+      /* Overlay UI (inline mode only) */
+      #overlay {
+        position: absolute;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        pointer-events: none;
+      }
+      #overlay.visible { display: flex; }
+      #icon-bar {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        z-index: 100;
+        pointer-events: auto;
+        display: flex;
+        gap: 6px;
+      }
+      .icon-btn {
+        background: transparent;
+        border: 2px solid #4fffb0;
+        color: #4fffb0;
+        font-size: 18px;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        line-height: 1;
+      }
+      .icon-btn:hover { background: rgba(79, 255, 176, 0.1); }
+      .icon-btn.active { background: rgba(79, 255, 176, 0.2); }
+
+      #help-panel {
+        display: none;
+        position: absolute;
+        top: 56px;
+        right: 12px;
+        z-index: 99;
+        pointer-events: auto;
+        background: rgba(0, 0, 0, 0.92);
+        border: 1px solid #3a7a5a;
+        padding: 12px 16px;
+        font-family: monospace;
+        font-size: 11px;
+        color: #8ff7cf;
+        width: min(92vw, 420px);
+        max-height: min(78vh, 640px);
+        overflow-y: auto;
+      }
+      #help-panel.visible { display: block; }
+      #help-panel h3 {
+        color: #4fffb0;
+        font-size: 11px;
+        margin: 0 0 4px 0;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      .help-row { margin: 3px 0; color: #5a9a7a; }
+      .help-row b { color: #8ff7cf; }
+      .help-block { margin-top: 10px; }
+      .help-caption {
+        margin: 3px 0 7px;
+        color: #5a9a7a;
+      }
+      .icon-family {
+        margin-top: 8px;
+        border-top: 1px solid rgba(79, 255, 176, 0.18);
+        padding-top: 8px;
+      }
+      .icon-family h4 {
+        margin: 0 0 4px 0;
+        font-size: 10px;
+        color: #8ff7cf;
+        text-transform: uppercase;
+        letter-spacing: 0.7px;
+      }
+      .icon-strip {
+        display: grid;
+        grid-template-columns: repeat(8, minmax(0, 1fr));
+        gap: 4px;
+      }
+      .icon-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        padding: 3px 1px;
+        border: 1px solid rgba(79, 255, 176, 0.2);
+        background: rgba(12, 28, 20, 0.45);
+      }
+      .icon-card img {
+        width: 20px;
+        height: 20px;
+        image-rendering: pixelated;
+      }
+      .icon-tier {
+        font-size: 9px;
+        color: #6ab89a;
+        line-height: 1;
+      }
+
+      #btn-row {
+        position: absolute;
+        bottom: 24px;
+        left: 0;
+        right: 0;
+        display: flex;
+        justify-content: center;
+        gap: 16px;
+        pointer-events: auto;
+      }
+      .play-btn {
+        font-family: monospace;
+        font-size: 15px;
+        font-weight: bold;
+        letter-spacing: 1px;
+        padding: 12px 24px;
+        cursor: pointer;
+        text-transform: uppercase;
+        border: 2px solid;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #play-here {
+        background: transparent;
+        border-color: #4fffb0;
+        color: #4fffb0;
+      }
+      #play-here:hover { background: rgba(79, 255, 176, 0.15); }
+      #play-full {
+        background: rgba(40, 80, 100, 0.8);
+        border-color: #5ba8c8;
+        color: #c8e8f8;
+      }
+      #play-full:hover { background: rgba(60, 110, 140, 0.9); }
+
+      /* Settings panel */
+      #settings-panel {
+        position: absolute;
+        top: 56px;
+        right: 12px;
+        z-index: 101;
+        display: none;
+        flex-direction: column;
+        gap: 5px;
+        background: rgba(10, 20, 30, 0.95);
+        border: 2px solid #4fffb0;
+        padding: 10px;
+        pointer-events: auto;
+        min-width: 180px;
+      }
+      #settings-panel.visible { display: flex; }
+      #settings-panel h3 {
+        color: #4fffb0;
+        font-family: monospace;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin: 0 0 3px 0;
+      }
+      .shape-btn {
+        background: transparent;
+        border: 1px solid #3a7a5a;
+        color: #8ff7cf;
+        font-family: monospace;
+        font-size: 11px;
+        padding: 6px 9px;
+        cursor: pointer;
+        text-align: left;
+        text-transform: uppercase;
+        line-height: 1.1;
+      }
+      .shape-btn:hover { background: rgba(79, 255, 176, 0.1); border-color: #4fffb0; }
+      .shape-btn.selected { background: rgba(79, 255, 176, 0.2); border-color: #4fffb0; color: #4fffb0; }
+
+      /* Ghost list */
+      #ghost-list {
+        max-height: 132px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .ghost-row {
+        font-family: monospace;
+        font-size: 10px;
+        color: #8ff7cf;
+        display: flex;
+        justify-content: space-between;
+        gap: 6px;
+        padding: 2px 0;
+        border-bottom: 1px solid rgba(79, 255, 176, 0.15);
+      }
+      .ghost-name { color: #4fffb0; font-weight: bold; }
+      .ghost-coords { color: #6ab89a; }
+      .ghost-empty {
+        font-family: monospace;
+        font-size: 10px;
+        color: #5a7a6a;
+        font-style: italic;
+      }
+      #ship-name-input {
+        background: rgba(10, 20, 30, 0.9);
+        border: 1px solid #3a7a5a;
+        color: #8ff7cf;
+        font-family: monospace;
+        font-size: 11px;
+        padding: 6px 9px;
+        outline: none;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      #ship-name-input:focus {
+        border-color: #4fffb0;
+      }
+      #settings-version {
+        font-family: monospace;
+        font-size: 9px;
+        color: #5a7a6a;
+        text-align: right;
+        margin-top: 2px;
+        border-top: 1px solid rgba(79, 255, 176, 0.15);
+        padding-top: 4px;
+      }
+      #debug-log {
+        display: none;
+        max-height: 200px;
+        overflow-y: auto;
+        background: rgba(0, 0, 0, 0.8);
+        border: 1px solid #3a7a5a;
+        padding: 6px;
+        font-family: monospace;
+        font-size: 9px;
+        color: #6ab89a;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      #debug-log.visible { display: block; }
+      #debug-toggle {
+        background: transparent;
+        border: 1px solid #3a7a5a;
+        color: #5a7a6a;
+        font-family: monospace;
+        font-size: 10px;
+        padding: 4px 8px;
+        cursor: pointer;
+        margin-top: 4px;
+      }
+      #debug-toggle:hover { border-color: #4fffb0; color: #8ff7cf; }
+      #debug-copy {
+        background: transparent;
+        border: 1px solid #3a7a5a;
+        color: #5a7a6a;
+        font-family: monospace;
+        font-size: 10px;
+        padding: 4px 6px;
+        cursor: pointer;
+        margin-top: 4px;
+        margin-left: 4px;
+      }
+      #debug-copy:hover { border-color: #4fffb0; color: #8ff7cf; }
+
+    </style>
+  </head>
+  <body>
+    <canvas id="game-canvas"></canvas>
+    <div id="icon-bar">
+      <button id="settings-btn" class="icon-btn" title="Settings">&#x2699;</button>
+      <button id="help-btn" class="icon-btn" title="Help">?</button>
+    </div>
+    <div id="help-panel">
+      <h3>Controls</h3>
+      <div class="help-row"><b>Click</b> — move to target</div>
+      <div class="help-row"><b>WASD / Arrows / hjkl</b> — rotate &amp; thrust</div>
+      <div class="help-row"><b>Space</b> — fire</div>
+      <div class="help-row"><b>Right-click</b> — cancel target</div>
+
+      <h3 style="margin-top:8px">Navigation</h3>
+      <div class="help-row">Fly near a star to enter its system</div>
+      <div class="help-row">Fly near a belt ring to explore it</div>
+      <div class="help-row">Collect fuel pods to keep moving</div>
+
+      <div class="help-block">
+        <h3>Build Progression</h3>
+        <div class="help-caption">Station level unlocks higher structure tiers. Mine boosts ore, Solar boosts energy, Hab supports expansion.</div>
+
+        <div class="icon-family">
+          <h4>Station I-VIII</h4>
+          <div class="icon-strip">
+            <div class="icon-card"><img src="/icons/station-level-1.svg" alt="Station I" /><span class="icon-tier">I</span></div>
+            <div class="icon-card"><img src="/icons/station-level-2.svg" alt="Station II" /><span class="icon-tier">II</span></div>
+            <div class="icon-card"><img src="/icons/station-level-3.svg" alt="Station III" /><span class="icon-tier">III</span></div>
+            <div class="icon-card"><img src="/icons/station-level-4.svg" alt="Station IV" /><span class="icon-tier">IV</span></div>
+            <div class="icon-card"><img src="/icons/station-level-5.svg" alt="Station V" /><span class="icon-tier">V</span></div>
+            <div class="icon-card"><img src="/icons/station-level-6.svg" alt="Station VI" /><span class="icon-tier">VI</span></div>
+            <div class="icon-card"><img src="/icons/station-level-7.svg" alt="Station VII" /><span class="icon-tier">VII</span></div>
+            <div class="icon-card"><img src="/icons/station-level-8.svg" alt="Station VIII" /><span class="icon-tier">VIII</span></div>
+          </div>
+        </div>
+
+        <div class="icon-family">
+          <h4>Mine I-VIII</h4>
+          <div class="icon-strip">
+            <div class="icon-card"><img src="/icons/mine-level-1.svg" alt="Mine I" /><span class="icon-tier">I</span></div>
+            <div class="icon-card"><img src="/icons/mine-level-2.svg" alt="Mine II" /><span class="icon-tier">II</span></div>
+            <div class="icon-card"><img src="/icons/mine-level-3.svg" alt="Mine III" /><span class="icon-tier">III</span></div>
+            <div class="icon-card"><img src="/icons/mine-level-4.svg" alt="Mine IV" /><span class="icon-tier">IV</span></div>
+            <div class="icon-card"><img src="/icons/mine-level-5.svg" alt="Mine V" /><span class="icon-tier">V</span></div>
+            <div class="icon-card"><img src="/icons/mine-level-6.svg" alt="Mine VI" /><span class="icon-tier">VI</span></div>
+            <div class="icon-card"><img src="/icons/mine-level-7.svg" alt="Mine VII" /><span class="icon-tier">VII</span></div>
+            <div class="icon-card"><img src="/icons/mine-level-8.svg" alt="Mine VIII" /><span class="icon-tier">VIII</span></div>
+          </div>
+        </div>
+
+        <div class="icon-family">
+          <h4>Solar Array I-VIII</h4>
+          <div class="icon-strip">
+            <div class="icon-card"><img src="/icons/solar-array-level-1.svg" alt="Solar I" /><span class="icon-tier">I</span></div>
+            <div class="icon-card"><img src="/icons/solar-array-level-2.svg" alt="Solar II" /><span class="icon-tier">II</span></div>
+            <div class="icon-card"><img src="/icons/solar-array-level-3.svg" alt="Solar III" /><span class="icon-tier">III</span></div>
+            <div class="icon-card"><img src="/icons/solar-array-level-4.svg" alt="Solar IV" /><span class="icon-tier">IV</span></div>
+            <div class="icon-card"><img src="/icons/solar-array-level-5.svg" alt="Solar V" /><span class="icon-tier">V</span></div>
+            <div class="icon-card"><img src="/icons/solar-array-level-6.svg" alt="Solar VI" /><span class="icon-tier">VI</span></div>
+            <div class="icon-card"><img src="/icons/solar-array-level-7.svg" alt="Solar VII" /><span class="icon-tier">VII</span></div>
+            <div class="icon-card"><img src="/icons/solar-array-level-8.svg" alt="Solar VIII" /><span class="icon-tier">VIII</span></div>
+          </div>
+        </div>
+
+        <div class="icon-family">
+          <h4>Hab I-VIII</h4>
+          <div class="icon-strip">
+            <div class="icon-card"><img src="/icons/hab-level-1.svg" alt="Hab I" /><span class="icon-tier">I</span></div>
+            <div class="icon-card"><img src="/icons/hab-level-2.svg" alt="Hab II" /><span class="icon-tier">II</span></div>
+            <div class="icon-card"><img src="/icons/hab-level-3.svg" alt="Hab III" /><span class="icon-tier">III</span></div>
+            <div class="icon-card"><img src="/icons/hab-level-4.svg" alt="Hab IV" /><span class="icon-tier">IV</span></div>
+            <div class="icon-card"><img src="/icons/hab-level-5.svg" alt="Hab V" /><span class="icon-tier">V</span></div>
+            <div class="icon-card"><img src="/icons/hab-level-6.svg" alt="Hab VI" /><span class="icon-tier">VI</span></div>
+            <div class="icon-card"><img src="/icons/hab-level-7.svg" alt="Hab VII" /><span class="icon-tier">VII</span></div>
+            <div class="icon-card"><img src="/icons/hab-level-8.svg" alt="Hab VIII" /><span class="icon-tier">VIII</span></div>
+          </div>
+        </div>
+
+        <div class="icon-family">
+          <h4>Space Dock T1-T3</h4>
+          <div class="help-caption">Required to build ships. Higher tiers unlock more powerful vessels.</div>
+          <div class="icon-strip">
+            <div class="icon-card"><img src="/icons/dock-level-1.svg" alt="Dock T1" /><span class="icon-tier">T1</span></div>
+            <div class="icon-card"><img src="/icons/dock-level-2.svg" alt="Dock T2" /><span class="icon-tier">T2</span></div>
+            <div class="icon-card"><img src="/icons/dock-level-3.svg" alt="Dock T3" /><span class="icon-tier">T3</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="help-block">
+        <h3>Ship Types</h3>
+        <div class="help-caption">Ships are built at a Space Dock. Each type has unique stats and dock prerequisites.</div>
+
+        <div class="icon-family">
+          <h4>Dock T1 Lv1</h4>
+          <div class="icon-strip">
+            <div class="icon-card"><img src="/icons/ship-scout.svg" alt="Scout" /><span class="icon-tier">Scout</span></div>
+            <div class="icon-card"><img src="/icons/ship-freighter.svg" alt="Freighter" /><span class="icon-tier">Freighter</span></div>
+            <div class="icon-card"><img src="/icons/ship-probe-basic.svg" alt="B-Probe" /><span class="icon-tier">B-Probe</span></div>
+          </div>
+        </div>
+
+        <div class="icon-family">
+          <h4>Dock T1 Lv3</h4>
+          <div class="icon-strip">
+            <div class="icon-card"><img src="/icons/ship-destroyer.svg" alt="Destroyer" /><span class="icon-tier">Destroyer</span></div>
+            <div class="icon-card"><img src="/icons/ship-colony.svg" alt="Colony Ship" /><span class="icon-tier">Colony</span></div>
+            <div class="icon-card"><img src="/icons/ship-troop-transport.svg" alt="Troop Transport" /><span class="icon-tier">Troop</span></div>
+            <div class="icon-card"><img src="/icons/ship-probe-enhanced.svg" alt="E-Probe" /><span class="icon-tier">E-Probe</span></div>
+            <div class="icon-card"><img src="/icons/ship-wrecker.svg" alt="Wrecker" /><span class="icon-tier">Wrecker</span></div>
+            <div class="icon-card"><img src="/icons/ship-raider.svg" alt="Raider" /><span class="icon-tier">Raider</span></div>
+          </div>
+        </div>
+
+        <div class="icon-family">
+          <h4>Dock T2</h4>
+          <div class="icon-strip">
+            <div class="icon-card"><img src="/icons/ship-frigate.svg" alt="Frigate" /><span class="icon-tier">Frigate</span></div>
+            <div class="icon-card"><img src="/icons/ship-battleship.svg" alt="Battleship" /><span class="icon-tier">Battleship</span></div>
+          </div>
+        </div>
+
+        <div class="icon-family">
+          <h4>Dock T3</h4>
+          <div class="icon-strip">
+            <div class="icon-card"><img src="/icons/ship-command-cruiser.svg" alt="Command Cruiser" /><span class="icon-tier">Cmd Cruiser</span></div>
+            <div class="icon-card"><img src="/icons/ship-dreadnought.svg" alt="Dreadnought" /><span class="icon-tier">Dreadnought</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="settings-panel">
+      <h3>Ship Name</h3>
+      <input id="ship-name-input" type="text" maxlength="16" placeholder="pilot" autocomplete="off" />
+      <h3 style="margin-top:10px">Ship Shape</h3>
+      <button class="shape-btn selected" data-shape="arrow">▶ Arrow</button>
+      <button class="shape-btn" data-shape="delta">◆ Delta</button>
+      <button class="shape-btn" data-shape="needle">│ Needle</button>
+      <button class="shape-btn" data-shape="blade">◇ Blade</button>
+      <h3 style="margin-top:10px">Steering</h3>
+      <div id="steering-info" style="font-size:10px;color:#5a7a6a;margin:4px 0">Auto-detects: click=mouse, WASD/arrows=keyboard</div>
+      <h3 style="margin-top:10px">Nearby Ships</h3>
+      <div id="ghost-list"><span class="ghost-empty">none</span></div>
+      <div id="settings-version">v0.0.0</div>
+      <button id="debug-toggle">DEBUG LOG</button><button id="debug-copy" title="Copy log">&#x2398;</button>
+      <div id="debug-log"></div>
+    </div>
+    <div id="overlay">
+      <div id="btn-row">
+        <button id="play-here" class="play-btn">&#9654; Join Here</button>
+        <button id="play-full" class="play-btn">&#x29C9; Join Full Size</button>
+      </div>
+    </div>
+    <script type="module" src="game.ts"></script>
+  </body>
+</html>

@@ -2,9 +2,24 @@
 // Initializes the canvas game engine with the Devvit bridge.
 // Detects inline vs expanded mode and shows overlay buttons when inline.
 
-import { context, getWebViewMode, requestExpandedMode } from '@devvit/web/client';
-import { createDevvitBridge, getGameState, setExternalStarNames, refreshGalaxyStarNames } from '../game';
+import { context, requestExpandedMode } from '@devvit/web/client';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, createDevvitBridge, getGameState, setExternalStarNames, refreshGalaxyStarNames, setServerStarEconomy, setServerShipState } from '../game';
 import type { DevvitBridge } from '../game';
+import type { ShipShape } from '../game';
+import { normalizeSharedShipShape } from '../shared/api';
+import type {
+  BuildBuildingRequest,
+  ClaimPodResponse,
+  ClaimedPodsResponse,
+  PlayerProfileResponse,
+  PoseUpdateRequest,
+  PostShotsRequest,
+  RoomPosesResponse,
+  SaveProfileRequest,
+  StarEconomyResponse,
+  StarShipsResponse,
+  ShotsResponse,
+} from '../shared/api';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) throw new Error('Canvas #game-canvas not found');
@@ -27,39 +42,18 @@ async function loadRealStarNames(): Promise<void> {
     // Ignore cache parse/storage issues.
   }
 
-  try {
-    const url = 'https://cdn.jsdelivr.net/gh/dariusk/corpora@master/data/astronomy/stars.json';
-    const res = await fetch(url, { cache: 'force-cache' });
-    if (!res.ok) return;
-    const data = await res.json() as { stars?: string[] };
-    const names = Array.isArray(data.stars) ? data.stars : [];
-    if (names.length > 0) {
-      try {
-        localStorage.setItem(cacheKey, JSON.stringify(names));
-      } catch {
-        // Ignore storage quota/privacy mode issues.
-      }
-      setExternalStarNames(names);
-      refreshGalaxyStarNames();
-    }
-  } catch {
-    // Internet fetch is optional; fallback names remain active.
-  }
+  // External CDN fetch violates Devvit CSP; fallback names only.
 }
 
 void loadRealStarNames();
 
-const overlay = document.getElementById('overlay')!;
-const playHereBtn = document.getElementById('play-here')!;
-const playFullBtn = document.getElementById('play-full')!;
-
 // ── Mode detection ──────────────────────────────────────────────────────────
-const mode = getWebViewMode();
-const isInline = mode === 'inline';
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const overlay = document.getElementById('overlay') ?? document.createElement('div');
+const isInline = !!(globalThis as any).__INLINE_MODE__ || overlay.classList.contains('visible');
 
-if (isInline) {
-  overlay.classList.add('visible');
-}
+const playHereBtn = document.getElementById('play-here') ?? document.createElement('button');
+const playFullBtn = document.getElementById('play-full') ?? document.createElement('button');
 
 // ── Devvit context ──────────────────────────────────────────────────────────
 const username = context.username ?? 'pilot';
@@ -94,16 +88,18 @@ debugToggle.addEventListener('click', () => debugLog.classList.toggle('visible')
 const debugCopy = document.getElementById('debug-copy')!;
 debugCopy.addEventListener('click', () => {
   const text = debugLog.textContent || '';
-  navigator.clipboard.writeText(text).then(() => {
+  void navigator.clipboard.writeText(text).then(() => {
     debugCopy.textContent = '\u2713';
     setTimeout(() => { debugCopy.innerHTML = '&#x2398;'; }, 1500);
   });
 });
 
+console.log(`[INIT] isInline=${isInline} username=${username} postId=${postId}`);
+
 const sessionId = `${username}:${Math.random().toString(36).slice(2, 8)}`;
 
 // ── Ship shape state ────────────────────────────────────────────────────────
-let currentShape = 'arrow';
+let currentShape: ShipShape = 'arrow';
 let currentName = username;
 
 
@@ -112,11 +108,12 @@ let currentName = username;
 const bridge: DevvitBridge = createDevvitBridge(canvas, {
   onPose(x, y, angle, name, tier, starIndex, bodyIndex) {
     const sentName = name || currentName;
+    const payload: PoseUpdateRequest = { x, y, angle, username: sentName, sessionId, shape: currentShape, tier, starIndex, bodyIndex };
     // Send pose to server via Devvit API route
     fetch('/api/pose', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ x, y, angle, username: sentName, sessionId, shape: currentShape, tier, starIndex, bodyIndex }),
+      body: JSON.stringify(payload),
     }).catch(() => {});
   },
   onClaimPod(podId) {
@@ -127,63 +124,73 @@ const bridge: DevvitBridge = createDevvitBridge(canvas, {
       body: JSON.stringify({ podId, username }),
     })
       .then(r => r.json())
-      .then((res: { success: boolean; podId: number; mine: boolean }) => {
+      .then((res: ClaimPodResponse) => {
         if (res.success) {
           bridge.setPodCollected(`${res.podId}:${res.mine ? '1' : '0'}`);
         }
       })
-      .catch(() => {
-        // Auto-approve on network failure (offline mode)
-        bridge.setPodCollected(`${podId}:1`);
-      });
+      .catch(() => {});
   },
   onFire(projectiles) {
     // Send fired shots to server
-    const payload = projectiles.map(p => ({
-      id: p.id,
-      origin: p.origin,
-      angle: p.angle,
-      speed: p.speed,
-      spawnTime: Date.now() / 1000,
-    }));
+    const payload: PostShotsRequest = {
+      sessionId,
+      shots: projectiles.map(p => ({
+        id: p.id,
+        origin: p.origin,
+        angle: p.angle,
+        speed: p.speed,
+        spawnTime: Date.now() / 1000,
+      })),
+    };
     fetch('/api/shots', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, shots: payload }),
+      body: JSON.stringify(payload),
     }).catch(() => {});
   },
 });
 
-// ── Configure and start solo preview ────────────────────────────────────────
 bridge.setPlayerName(username);
 bridge.setShipShape('arrow');
 bridge.setSharedWorldSeed(postId);
-bridge.beginPreview(); // Start rendering immediately (ship + asteroids, no network)
 
-// ── Load user profile from server ───────────────────────────────────────────
-const profileReady = fetch(`/api/profile?username=${encodeURIComponent(username)}`)
-  .then(r => r.json())
-  .then((profile: { name: string; shape: string }) => {
+// Start rendering immediately (splash/preview mode — no networking yet)
+bridge.beginSplash();
 
-    if (profile.name) {
-      currentName = profile.name;
-      bridge.setPlayerName(profile.name);
-      const nameInput = document.getElementById('ship-name-input') as HTMLInputElement | null;
-      if (nameInput) nameInput.value = profile.name;
-    }
-    if (profile.shape && profile.shape !== 'arrow') {
-      currentShape = profile.shape;
-      bridge.setShipShape(profile.shape);
-      document.querySelectorAll<HTMLButtonElement>('.shape-btn').forEach(b => {
-        b.classList.toggle('selected', b.dataset.shape === profile.shape);
-      });
-    }
-  })
-  .catch(() => {});
+// ── Load user profile from server (deferred until play) ────────────────────
+let profileReady: Promise<void> | null = null;
+
+function loadPlayerProfile(): Promise<void> {
+  if (profileReady) return profileReady;
+  
+  profileReady = fetch(`/api/profile?username=${encodeURIComponent(username)}`)
+    .then(r => r.json())
+    .then((profile: PlayerProfileResponse) => {
+      if (profile.name) {
+        currentName = profile.name;
+        bridge.setPlayerName(profile.name);
+        const nameInput = document.getElementById('ship-name-input') as HTMLInputElement | null;
+        if (nameInput) nameInput.value = profile.name;
+      }
+      if (profile.shape && profile.shape !== 'arrow') {
+        currentShape = profile.shape;
+        bridge.setShipShape(profile.shape);
+        document.querySelectorAll<HTMLButtonElement>('.shape-btn').forEach(b => {
+          b.classList.toggle('selected', b.dataset.shape === profile.shape);
+        });
+      }
+    })
+    .catch(() => {});
+  
+  return profileReady;
+}
 
 // ── Realtime ghost updates (poll for now, replace with SSE/WS later) ────────
 let ghostPollInterval: ReturnType<typeof setInterval> | null = null;
 let shotPollInterval: ReturnType<typeof setInterval> | null = null;
+let economyPollInterval: ReturnType<typeof setInterval> | null = null;
+let ghostListInterval: ReturnType<typeof setInterval> | null = null;
 
 async function pollGhosts() {
   try {
@@ -193,7 +200,7 @@ async function pollGhosts() {
     const bodyIndex = gs?.galaxy.currentBodyIndex ?? -1;
     const res = await fetch(`/api/room-poses?postId=${encodeURIComponent(postId)}&exclude=${encodeURIComponent(sessionId)}&tier=${tier}&starIndex=${starIndex}&bodyIndex=${bodyIndex}`);
     if (res.ok) {
-      const data = await res.json() as { items: Array<{ username: string; x: number; y: number; angle: number; shape: string }> };
+      const data = await res.json() as RoomPosesResponse;
       if (data.items) {
         // Map server response to RemotePoseItem format
         const mapped = data.items.map((item, i) => ({
@@ -217,7 +224,7 @@ async function pollShots() {
   try {
     const res = await fetch(`/api/shots?postId=${encodeURIComponent(postId)}&exclude=${encodeURIComponent(sessionId)}`);
     if (res.ok) {
-      const data = await res.json() as { shots: Array<{ id: string; shooterId: string; origin: { x: number; y: number }; angle: number; speed: number; spawnTime: number }> };
+      const data = await res.json() as ShotsResponse;
       if (data.shots && data.shots.length) {
         bridge.addRemoteShots(JSON.stringify(data));
       }
@@ -227,16 +234,79 @@ async function pollShots() {
   }
 }
 
+async function pollEconomy() {
+  try {
+    const gs = getGameState();
+    if (!gs) return;
+    const starIndex = gs.galaxy.currentStarIndex;
+    if (starIndex < 0) return;
+    const pendingBuild = consumePendingBuildRequest();
+    if (pendingBuild) {
+      const payload: BuildBuildingRequest = {
+        username,
+        starIndex,
+        buildType: pendingBuild.buildType,
+      };
+      await fetch('/api/buildings/buy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => null);
+    }
+    const pendingShip = consumePendingBuyShipRequest();
+    if (pendingShip) {
+      try {
+        const shipRes = await fetch('/api/ships/buy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username,
+            starIndex,
+            shipTypeId: pendingShip.shipTypeId,
+            quantity: pendingShip.quantity,
+          }),
+        });
+        if (!shipRes.ok) {
+          const err = await shipRes.json().catch(() => ({ message: 'unknown' }));
+          console.warn('[SHIPS] buy failed:', err);
+        }
+      } catch (e) {
+        console.warn('[SHIPS] buy error:', e);
+      }
+    }
+    const res = await fetch(`/api/buildings?username=${encodeURIComponent(username)}&starIndex=${starIndex}`);
+    if (!res.ok) return;
+    const data = await res.json() as StarEconomyResponse;
+    setServerStarEconomy({
+      starIndex: data.starIndex,
+      store: data.store,
+      rates: data.rates,
+      cap: data.cap,
+      buildings: data.buildings,
+    });
+    // Poll ship state
+    const shipsRes = await fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${starIndex}`);
+    if (shipsRes.ok) {
+      const shipsData = await shipsRes.json() as StarShipsResponse;
+      setServerShipState(starIndex, shipsData.ships, shipsData.building);
+    }
+  } catch {
+    // Ignore temporary network errors.
+  }
+}
+
 // ── Activate multiplayer networking ─────────────────────────────────────────
 function startMultiplayer() {
   bridge.beginPlay(); // Activate networking callbacks on existing game
   ghostPollInterval = setInterval(pollGhosts, 250);
   shotPollInterval = setInterval(pollShots, 250);
+  economyPollInterval = setInterval(pollEconomy, 1500);
+  void pollEconomy();
 
   // Fetch already-claimed pods so late-joiners see correct state
   fetch(`/api/claimed-pods?postId=${encodeURIComponent(postId)}`)
     .then(r => r.json())
-    .then((data: { podIds: number[] }) => {
+    .then((data: ClaimedPodsResponse) => {
       if (data.podIds && data.podIds.length) {
         bridge.setCollectedPods(data.podIds);
       }
@@ -244,17 +314,35 @@ function startMultiplayer() {
     .catch(() => {});
 }
 
-// In expanded mode, start immediately (user already chose to play).
-// In inline mode, wait until user presses "Play Here".
+// In expanded mode, start immediately. In inline mode, wait for button press.
 if (!isInline) {
-  profileReady.then(() => startMultiplayer());
+  console.log('[INIT] Expanded mode — loading profile then starting multiplayer');
+  void loadPlayerProfile().then(() => startMultiplayer()).catch(() => startMultiplayer());
 }
+
+// ── Overlay button handlers (inline mode) ───────────────────────────────────
+playHereBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+playHereBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  overlay.classList.remove('visible');
+  void loadPlayerProfile().then(() => startMultiplayer()).catch(() => startMultiplayer());
+});
+
+playFullBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+playFullBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  overlay.classList.remove('visible');
+  void loadPlayerProfile().then(() => {
+    setTimeout(() => requestExpandedMode(e, 'game'), 100);
+  });
+});
 
 // ── Cleanup on page hide ────────────────────────────────────────────────────
 window.addEventListener('pagehide', () => {
   if (ghostPollInterval) clearInterval(ghostPollInterval);
   if (ghostListInterval) clearInterval(ghostListInterval);
   if (shotPollInterval) clearInterval(shotPollInterval);
+  if (economyPollInterval) clearInterval(economyPollInterval);
   bridge.quit();
 });
 
@@ -276,7 +364,6 @@ shipNameInput.addEventListener('input', () => {
   saveProfile();
 });
 shipNameInput.addEventListener('pointerdown', (e) => e.stopPropagation());
-let ghostListInterval: ReturnType<typeof setInterval> | null = null;
 
 settingsBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 settingsBtn.addEventListener('click', (e) => {
@@ -326,7 +413,7 @@ settingsPanel.addEventListener('click', (e) => e.stopPropagation());
 shapeButtons.forEach(btn => {
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
-    const shape = btn.dataset.shape!;
+    const shape = normalizeSharedShipShape(btn.dataset.shape);
     currentShape = shape;
     bridge.setShipShape(shape);
     shapeButtons.forEach(b => b.classList.remove('selected'));
@@ -341,28 +428,13 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 function saveProfile() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    const payload: SaveProfileRequest = { username, name: currentName, shape: currentShape };
     fetch('/api/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, name: currentName, shape: currentShape }),
+      body: JSON.stringify(payload),
     }).catch(() => {});
   }, 500);
 }
 
-// ── Overlay button handlers (inline mode) ───────────────────────────────────
-if (isInline) {
-  playHereBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-  playHereBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    overlay.classList.remove('visible');
-    startMultiplayer();
-  });
 
-  playFullBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-  playFullBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    overlay.classList.remove('visible');
-    startMultiplayer();
-    requestExpandedMode(e, 'game');
-  });
-}

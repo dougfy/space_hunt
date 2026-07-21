@@ -164,14 +164,14 @@ function applyWorldShift(state: GameState, shift: Vec2): void {
   state.worldOffset = desired;
 
   if (sqrMagnitude(actual) > 0) {
-    for (let i = 0; i < state.asteroids.length; i++) {
-      state.asteroids[i].pos = sub(state.asteroids[i].pos, actual);
+    for (const asteroid of state.asteroids) {
+      asteroid.pos = sub(asteroid.pos, actual);
     }
-    for (let i = 0; i < state.pods.length; i++) {
-      state.pods[i].pos = sub(state.pods[i].pos, actual);
+    for (const pod of state.pods) {
+      pod.pos = sub(pod.pos, actual);
     }
-    for (let i = 0; i < state.shooting.projectiles.length; i++) {
-      state.shooting.projectiles[i].origin = sub(state.shooting.projectiles[i].origin, actual);
+    for (const projectile of state.shooting.projectiles) {
+      projectile.origin = sub(projectile.origin, actual);
     }
     if (state.tgtActive) {
       state.tgtPos = sub(state.tgtPos, actual);

@@ -1,7 +1,7 @@
 // ── Space Hunt Inline Entry (Attract Mode) ──────────────────────────────────
 // Shows the game running in the background with overlay buttons.
 // "Play Here" dismisses overlay and starts gameplay inline.
-// "Play Full Size" requests expanded mode.
+// "Play Full Size" requests expanded mode (loads 'game' entrypoint).
 
 import { context, requestExpandedMode } from '@devvit/web/client';
 import { createDevvitBridge } from '../game';
@@ -18,28 +18,31 @@ const playFullBtn = document.getElementById('play-full')!;
 const username = context.username ?? 'pilot';
 const postId = context.postId ?? 'standalone:dev';
 
-// ── Create bridge (game runs in attract/demo mode) ──────────────────────────
+// ── Create bridge (game runs in splash/attract mode — no networking) ────────
 const bridge: DevvitBridge = createDevvitBridge(canvas, {
-  onPose(_x, _y, _angle) {
-    // No pose reporting in attract mode
-  },
+  onPose() {},
   onClaimPod(podId) {
-    // Auto-approve in attract mode
     bridge.setPodCollected(`${podId}:1`);
   },
+  onFire() {},
 });
 
 bridge.setPlayerName(username);
 bridge.setShipShape('arrow');
 bridge.setSharedWorldSeed(postId);
-bridge.beginPlay();
+bridge.beginSplash();
 
 // ── Button handlers ─────────────────────────────────────────────────────────
-playHereBtn.addEventListener('click', () => {
-  // Dismiss overlay, game continues inline
+playHereBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+playHereBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
   overlay.style.display = 'none';
+  // Start multiplayer inline
+  bridge.beginPlay();
 });
 
+playFullBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 playFullBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
   requestExpandedMode(e, 'game');
 });

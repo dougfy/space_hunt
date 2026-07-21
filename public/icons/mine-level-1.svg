@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <rect width="256" height="256" fill="#00110B"/>
+  <g stroke="#4FFFB0" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Level 1 Mine: pickaxe -->
+    <path d="M64 188 L146 106 L208 126"/>
+    <path d="M146 106 L160 72"/>
+  </g>
+</svg>

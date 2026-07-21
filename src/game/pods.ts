@@ -15,8 +15,7 @@ export function generateFuelPods(asteroids: Asteroid[], seed: string): FuelPod[]
   const pods: FuelPod[] = [];
   let id = 0;
 
-  for (let ai = 0; ai < asteroids.length; ai++) {
-    const a = asteroids[ai];
+  for (const [ai, a] of asteroids.entries()) {
     const n = a.pts.length;
     if (n < 3) continue;
 
@@ -25,7 +24,10 @@ export function generateFuelPods(asteroids: Asteroid[], seed: string): FuelPod[]
     let totalPerimeter = 0;
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
-      const seg = magnitude(sub(a.pts[j], a.pts[i]));
+      const start = a.pts[i];
+      const end = a.pts[j];
+      if (!start || !end) continue;
+      const seg = magnitude(sub(end, start));
       perimeter.push(seg);
       totalPerimeter += seg;
     }
@@ -36,16 +38,19 @@ export function generateFuelPods(asteroids: Asteroid[], seed: string): FuelPod[]
       let edge = 0;
       let edgeFrac = 0;
       for (let i = 0; i < n; i++) {
-        accum += perimeter[i];
+        const segment = perimeter[i];
+        if (segment === undefined) continue;
+        accum += segment;
         if (accum >= t) {
           edge = i;
-          edgeFrac = 1 - (accum - t) / perimeter[i];
+          edgeFrac = 1 - (accum - t) / segment;
           break;
         }
       }
 
       const pA = a.pts[edge];
       const pB = a.pts[(edge + 1) % n];
+      if (!pA || !pB) continue;
       const surfacePoint = add(a.pos, add(pA, scale(sub(pB, pA), edgeFrac)));
       const outward = normalize(sub(surfacePoint, a.pos));
       const podPos = add(surfacePoint, scale(outward, POD_SURFACE_OFFSET));
@@ -71,8 +76,7 @@ export function updatePodDiscovery(state: GameState): void {
   const { ship, pods } = state;
   const viewDist = state.camera.orthoSize * 2.5; // pods revealed in view range
 
-  for (let i = 0; i < pods.length; i++) {
-    const pod = pods[i];
+  for (const pod of pods) {
     if (pod.discovered || pod.collected) continue;
     const d = magnitude(sub(pod.pos, ship.pos));
     if (d < viewDist) {
@@ -85,8 +89,7 @@ export function checkPodCollection(state: GameState): number[] {
   const { ship, pods } = state;
   const collected: number[] = [];
 
-  for (let i = 0; i < pods.length; i++) {
-    const pod = pods[i];
+  for (const pod of pods) {
     if (pod.collected || pod.claimRequested) continue;
     if (!pod.discovered) continue;
 
