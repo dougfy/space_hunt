@@ -9,7 +9,6 @@ import type {
   BuildType,
   ResourceStore,
   ShipBuildingState,
-  ShipTypeId,
   StarEconomyResponse,
   StarEconomyState,
   StarShipsState,
@@ -23,6 +22,8 @@ import type {
   SaveProfileRequest,
   ShotItem,
   ShotsResponse,
+  UpgradeShipRequest,
+  UpgradeShipResponse,
 } from '../../shared/api';
 import { normalizeSharedShipShape } from '../../shared/api';
 import {
@@ -36,7 +37,7 @@ import {
   normalizeStarBuildings,
   reconcileStarBuildings,
 } from '../../shared/buildings';
-import { SHIP_CATALOG, canBuildShip } from '../../shared/ships';
+import { SHIP_CATALOG, canBuildShip, getUpgradeTarget, canUpgradeShip } from '../../shared/ships';
 
 const ECONOMY_FIELD = 'economy';
 const DEFAULT_STORE: ResourceStore = { ore: 640, food: 640, energy: 640 };
@@ -287,10 +288,15 @@ export async function loadProfile(
   username: string,
 ): Promise<PlayerProfileResponse> {
   const raw = await store.hGetAll(`profile:${username}`);
-  return {
+  const result: PlayerProfileResponse = {
     name: raw.name || '',
-    shape: normalizeSharedShipShape(raw.shape),
   };
+  if (raw.lastPosition) {
+    try {
+      result.lastPosition = JSON.parse(raw.lastPosition);
+    } catch { /* ignore bad data */ }
+  }
+  return result;
 }
 
 export async function loadStarEconomy(
@@ -416,7 +422,7 @@ export async function saveProfile(
 ): Promise<void> {
   const fields: Record<string, string> = {};
   if (body.name !== undefined) fields.name = body.name;
-  if (body.shape !== undefined) fields.shape = body.shape;
+  if (body.lastPosition !== undefined) fields.lastPosition = JSON.stringify(body.lastPosition);
   if (Object.keys(fields).length > 0) {
     await store.hSet(`profile:${body.username}`, fields);
   }
@@ -485,7 +491,13 @@ export async function loadStarShips(
   const starData = normalizeStarShipData(profile.stars[key]);
   const hadBuilding = !!starData.building;
   reconcileShipBuilding(starData, now);
-  if (hadBuilding && !starData.building) {
+
+  // Seed starter Scout if fleet is completely empty (first load)
+  if (starData.ships.length === 0 && !starData.building) {
+    starData.ships.push({ typeId: 1, count: 1 });
+    profile.stars[key] = starData;
+    await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
+  } else if (hadBuilding && !starData.building) {
     // Building completed — save updated state
     profile.stars[key] = starData;
     await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
@@ -542,4 +554,216 @@ export async function buyShip(
   await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(shipsProfile) });
 
   return { ok: true, ships: starData.ships, building: starData.building, store: current.store };
+}
+
+export async function upgradeShip(
+  store: RedisGameStore,
+  body: UpgradeShipRequest,
+  now = Date.now(),
+): Promise<UpgradeShipResponse> {
+  const { username, starIndex, fromTypeId } = body;
+
+  // Validate upgrade path
+  const targetId = getUpgradeTarget(fromTypeId);
+  if (!targetId) throw new Error(`No upgrade available for ship type ${fromTypeId}`);
+
+  const targetCatalog = SHIP_CATALOG[targetId];
+  if (!targetCatalog) throw new Error(`Unknown target ship type: ${targetId}`);
+
+  // Load economy and check dock level
+  const economy = await loadEconomyProfile(store, username);
+  const key = starKey(starIndex);
+  const base = normalizeStarState(economy.stars[key] ?? {}, now);
+  const reconciledBuildings = reconcileStarBuildings(base.buildings, now);
+  const current: StarEconomyState = tickStarEconomy({
+    ...base,
+    buildings: reconciledBuildings,
+    rates: computeResourceRatesFromBuildings(reconciledBuildings),
+    cap: computeResourceCapFromBuildings(reconciledBuildings),
+  }, now);
+
+  const dockLevel = current.buildings.dock.level;
+  if (dockLevel < 1) throw new Error('No dock built at this star');
+  if (!canUpgradeShip(fromTypeId, dockLevel)) throw new Error('Dock level too low for this upgrade');
+
+  // Load ships and check ownership
+  const shipsRaw = await store.hGet(`profile:${username}`, SHIPS_FIELD);
+  const shipsProfile = parseShipsProfile(shipsRaw);
+  const starData = normalizeStarShipData(shipsProfile.stars[key]);
+  reconcileShipBuilding(starData, now);
+
+  if (starData.building) throw new Error('Already building a ship at this star');
+
+  // Check player owns at least one of the source ship
+  const sourceSlot = starData.ships.find((s) => s.typeId === fromTypeId);
+  if (!sourceSlot || sourceSlot.count < 1) throw new Error('You do not own this ship type at this star');
+
+  // Check resource cost
+  if (!hasEnoughResources(current.store, targetCatalog.cost)) throw new Error('Insufficient resources');
+
+  // Deduct resources
+  current.store = subtractResources(current.store, targetCatalog.cost);
+  current.lastTickMs = now;
+  economy.stars[key] = current;
+  await saveEconomyProfile(store, username, economy);
+
+  // Remove one of the source ship
+  sourceSlot.count -= 1;
+  starData.ships = starData.ships.filter((s) => s.count > 0);
+
+  // Start building the upgraded ship
+  starData.building = { typeId: targetId, completeAt: now + targetCatalog.buildSeconds * 1000 };
+  shipsProfile.stars[key] = starData;
+  await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(shipsProfile) });
+
+  return { ok: true, ships: starData.ships, building: starData.building, store: current.store };
+}
+
+/**
+ * Debug: instantly complete all in-progress builds (buildings + ships) at a star.
+ */
+export async function completeAllBuilds(
+  store: RedisGameStore,
+  username: string,
+  starIndex: number,
+  now = Date.now(),
+): Promise<{ ok: true }> {
+  const key = starKey(starIndex);
+
+  // Complete building upgrades
+  const economy = await loadEconomyProfile(store, username);
+  const base = normalizeStarState(economy.stars[key] ?? {}, now);
+  let changed = false;
+  for (const type of Object.keys(base.buildings) as Array<keyof typeof base.buildings>) {
+    const b = base.buildings[type];
+    if (b.status === 'UPGRADING' && b.completeAt != null && b.completeAt > now) {
+      b.completeAt = now;
+      changed = true;
+    }
+  }
+
+  // Fill resources to cap
+  base.store = { ore: base.cap, food: base.cap, energy: base.cap };
+  changed = true;
+
+  if (changed) {
+    const reconciledBuildings = reconcileStarBuildings(base.buildings, now);
+    const next: StarEconomyState = tickStarEconomy({
+      ...base,
+      buildings: reconciledBuildings,
+      rates: computeResourceRatesFromBuildings(reconciledBuildings),
+      cap: computeResourceCapFromBuildings(reconciledBuildings),
+    }, now);
+    economy.stars[key] = next;
+    await saveEconomyProfile(store, username, economy);
+  }
+
+  // Complete ship builds
+  const shipsRaw = await store.hGet(`profile:${username}`, SHIPS_FIELD);
+  const shipsProfile = parseShipsProfile(shipsRaw);
+  const starData = normalizeStarShipData(shipsProfile.stars[key]);
+  if (starData.building && starData.building.completeAt > now) {
+    starData.building.completeAt = now;
+    reconcileShipBuilding(starData, now);
+    shipsProfile.stars[key] = starData;
+    await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(shipsProfile) });
+  }
+
+  return { ok: true };
+}
+
+// ── Star Claim Registry ─────────────────────────────────────────────────────
+
+import { generateStarPositions, getDefaultHomeStarIndex, pickNextHomeStar } from '../../shared/galaxy-positions';
+
+export type StarClaimResponse = {
+  homeStar: number;
+  claimed: Array<{ starIndex: number; username: string }>;
+};
+
+/**
+ * Claim or retrieve a user's home star for a post.
+ * First user gets center star; subsequent users spiral outward.
+ * Migrates existing players: if they have economy data at a star, claim that star.
+ */
+export async function claimHomeStar(
+  store: RedisGameStore,
+  postId: string,
+  username: string,
+): Promise<StarClaimResponse> {
+  const registryKey = `stars:${postId}`;
+  const allClaims = await store.hGetAll(registryKey);
+
+  // Check if user already has a claim
+  for (const [key, owner] of Object.entries(allClaims)) {
+    if (owner === username) {
+      const starIndex = parseInt(key.replace('s:', ''), 10);
+      const claimed = Object.entries(allClaims).map(([k, v]) => ({
+        starIndex: parseInt(k.replace('s:', ''), 10),
+        username: v,
+      }));
+      return { homeStar: starIndex, claimed };
+    }
+  }
+
+  // Migration: check if user already has economy data at any star
+  const economy = await loadEconomyProfile(store, username);
+  const existingStarKeys = Object.keys(economy.stars); // e.g. ["s:47"]
+  let migratedStarIndex: number | null = null;
+  if (existingStarKeys.length > 0) {
+    // Pick the star with the most developed buildings
+    let bestLevel = -1;
+    for (const sk of existingStarKeys) {
+      const idx = parseInt(sk.replace('s:', ''), 10);
+      if (Number.isNaN(idx)) continue;
+      const starData = economy.stars[sk];
+      if (!starData?.buildings) continue;
+      const totalLevel = Object.values(starData.buildings).reduce(
+        (sum, b) => sum + ((b as { level?: number }).level ?? 0), 0,
+      );
+      if (totalLevel > bestLevel) {
+        bestLevel = totalLevel;
+        migratedStarIndex = idx;
+      }
+    }
+  }
+
+  const stars = generateStarPositions(postId);
+  const claimedIndices = Object.keys(allClaims).map((k) => parseInt(k.replace('s:', ''), 10));
+
+  let newStarIndex: number;
+  if (migratedStarIndex != null) {
+    // Existing player — claim their built-up star
+    newStarIndex = migratedStarIndex;
+    // If another user already claimed this star (shouldn't happen normally), still honor the migration
+    // since the economy data proves this player was here first
+  } else if (claimedIndices.length === 0) {
+    newStarIndex = getDefaultHomeStarIndex(stars);
+  } else {
+    newStarIndex = pickNextHomeStar(stars, claimedIndices);
+  }
+
+  // Persist the claim
+  await store.hSet(registryKey, { [`s:${newStarIndex}`]: username });
+
+  // Re-read to get consistent snapshot (in case of concurrent writes)
+  const updatedClaims = await store.hGetAll(registryKey);
+  const claimed = Object.entries(updatedClaims).map(([k, v]) => ({
+    starIndex: parseInt(k.replace('s:', ''), 10),
+    username: v,
+  }));
+
+  return { homeStar: newStarIndex, claimed };
+}
+
+/** Get all claimed stars for a post (no mutation). */
+export async function getClaimedStars(
+  store: RedisGameStore,
+  postId: string,
+): Promise<Array<{ starIndex: number; username: string }>> {
+  const allClaims = await store.hGetAll(`stars:${postId}`);
+  return Object.entries(allClaims).map(([k, v]) => ({
+    starIndex: parseInt(k.replace('s:', ''), 10),
+    username: v,
+  }));
 }

@@ -3,10 +3,10 @@
 // Detects inline vs expanded mode and shows overlay buttons when inline.
 
 import { context, requestExpandedMode } from '@devvit/web/client';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, createDevvitBridge, getGameState, setExternalStarNames, refreshGalaxyStarNames, setServerStarEconomy, setServerShipState } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, createDevvitBridge, getGameState, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setStarClaims, setServerStarEconomy, setServerShipState } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
-import { normalizeSharedShipShape } from '../shared/api';
+import { getFleetShape } from '../shared/ships';
 import type {
   BuildBuildingRequest,
   ClaimPodResponse,
@@ -56,8 +56,10 @@ const playHereBtn = document.getElementById('play-here') ?? document.createEleme
 const playFullBtn = document.getElementById('play-full') ?? document.createElement('button');
 
 // ── Devvit context ──────────────────────────────────────────────────────────
+const _t0 = performance.now();
 const username = context.username ?? 'pilot';
 const postId = context.postId ?? 'standalone:dev';
+console.log(`[PERF] context resolved in ${(performance.now() - _t0).toFixed(0)}ms`);
 
 // Set version in settings panel (Vite replaces __APP_VERSION__ in JS modules)
 declare const __APP_VERSION__: string;
@@ -99,8 +101,9 @@ console.log(`[INIT] isInline=${isInline} username=${username} postId=${postId}`)
 const sessionId = `${username}:${Math.random().toString(36).slice(2, 8)}`;
 
 // ── Ship shape state ────────────────────────────────────────────────────────
-let currentShape: ShipShape = 'arrow';
+let currentShape: ShipShape = 'scout';
 let currentName = username;
+let playerHomeStarIndex: number | null = null;
 
 
 
@@ -152,20 +155,22 @@ const bridge: DevvitBridge = createDevvitBridge(canvas, {
 });
 
 bridge.setPlayerName(username);
-bridge.setShipShape('arrow');
+bridge.setShipShape('scout');
 bridge.setSharedWorldSeed(postId);
 
 // Start rendering immediately (splash/preview mode — no networking yet)
+const _tSplash = performance.now();
 bridge.beginSplash();
+console.log(`[PERF] beginSplash (galaxy+asteroids) in ${(performance.now() - _tSplash).toFixed(0)}ms`);
 
 // ── Load user profile from server (deferred until play) ────────────────────
 let profileReady: Promise<void> | null = null;
 
 function loadPlayerProfile(): Promise<void> {
   if (profileReady) return profileReady;
-  
-  profileReady = fetch(`/api/profile?username=${encodeURIComponent(username)}`)
-    .then(r => r.json())
+  const _tProfile = performance.now();
+  profileReady = fetch(`/api/profile?username=${encodeURIComponent(username)}&postId=${encodeURIComponent(postId)}`)
+    .then(r => { console.log(`[PERF] /api/profile fetch in ${(performance.now() - _tProfile).toFixed(0)}ms`); return r.json(); })
     .then((profile: PlayerProfileResponse) => {
       if (profile.name) {
         currentName = profile.name;
@@ -173,12 +178,21 @@ function loadPlayerProfile(): Promise<void> {
         const nameInput = document.getElementById('ship-name-input') as HTMLInputElement | null;
         if (nameInput) nameInput.value = profile.name;
       }
-      if (profile.shape && profile.shape !== 'arrow') {
-        currentShape = profile.shape;
-        bridge.setShipShape(profile.shape);
-        document.querySelectorAll<HTMLButtonElement>('.shape-btn').forEach(b => {
-          b.classList.toggle('selected', b.dataset.shape === profile.shape);
-        });
+      if (profile.homeStar != null) {
+        console.log(`[STAR] assigned home star: ${profile.homeStar}`);
+        playerHomeStarIndex = profile.homeStar;
+        relocateToHomeStar(profile.homeStar);
+      }
+      // Mark other players' stars as foreign
+      if (profile.claimed && profile.claimed.length > 0) {
+        setStarClaims(profile.claimed, username);
+      }
+      // Restore last position if different from home star
+      if (profile.lastPosition && profile.homeStar != null) {
+        const lp = profile.lastPosition;
+        if (lp.starIndex !== profile.homeStar || lp.tier !== 3 || lp.bodyIndex !== 0) {
+          restorePosition(lp.starIndex, lp.tier, lp.bodyIndex);
+        }
       }
     })
     .catch(() => {});
@@ -206,7 +220,7 @@ async function pollGhosts() {
         const mapped = data.items.map((item, i) => ({
           slot: i + 1,
           name: item.username,
-          shape: item.shape || 'arrow',
+          shape: item.shape || 'scout',
           x: item.x,
           y: item.y,
           a: item.angle,
@@ -274,7 +288,40 @@ async function pollEconomy() {
         console.warn('[SHIPS] buy error:', e);
       }
     }
+    const pendingUpgrade = consumePendingUpgradeShipRequest();
+    if (pendingUpgrade) {
+      try {
+        const upgradeRes = await fetch('/api/ships/upgrade', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username,
+            starIndex,
+            fromTypeId: pendingUpgrade.fromTypeId,
+          }),
+        });
+        if (!upgradeRes.ok) {
+          const err = await upgradeRes.json().catch(() => ({ message: 'unknown' }));
+          console.warn('[SHIPS] upgrade failed:', err);
+        }
+      } catch (e) {
+        console.warn('[SHIPS] upgrade error:', e);
+      }
+    }
+    if (consumePendingCompleteBuilds()) {
+      try {
+        await fetch('/api/debug/complete-builds', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, starIndex }),
+        });
+      } catch (e) {
+        console.warn('[DEBUG] complete-builds error:', e);
+      }
+    }
+    const _tBldg = performance.now();
     const res = await fetch(`/api/buildings?username=${encodeURIComponent(username)}&starIndex=${starIndex}`);
+    console.log(`[PERF] /api/buildings fetch in ${(performance.now() - _tBldg).toFixed(0)}ms`);
     if (!res.ok) return;
     const data = await res.json() as StarEconomyResponse;
     setServerStarEconomy({
@@ -285,14 +332,58 @@ async function pollEconomy() {
       buildings: data.buildings,
     });
     // Poll ship state
+    const _tShips = performance.now();
     const shipsRes = await fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${starIndex}`);
+    console.log(`[PERF] /api/ships fetch in ${(performance.now() - _tShips).toFixed(0)}ms`);
     if (shipsRes.ok) {
       const shipsData = await shipsRes.json() as StarShipsResponse;
       setServerShipState(starIndex, shipsData.ships, shipsData.building);
+      // Update ship shape based on HOME star fleet only
+      if (starIndex === playerHomeStarIndex) {
+        const fleetShape = getFleetShape(shipsData.ships);
+        if (fleetShape !== currentShape) {
+          currentShape = fleetShape;
+          bridge.setShipShape(fleetShape);
+        }
+      }
+    }
+    // If at a different star, also poll home star for ship shape
+    if (playerHomeStarIndex != null && starIndex !== playerHomeStarIndex) {
+      try {
+        const homeShipsRes = await fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${playerHomeStarIndex}`);
+        if (homeShipsRes.ok) {
+          const homeShipsData = await homeShipsRes.json() as StarShipsResponse;
+          setServerShipState(playerHomeStarIndex, homeShipsData.ships, homeShipsData.building);
+          const fleetShape = getFleetShape(homeShipsData.ships);
+          if (fleetShape !== currentShape) {
+            currentShape = fleetShape;
+            bridge.setShipShape(fleetShape);
+          }
+        }
+      } catch { /* ignore */ }
     }
   } catch {
     // Ignore temporary network errors.
   }
+}
+
+// ── Save position periodically ──────────────────────────────────────────────
+let _lastSavedPosition = '';
+function savePositionIfChanged() {
+  const gs = getGameState();
+  if (!gs) return;
+  const pos = JSON.stringify({
+    starIndex: gs.galaxy.currentStarIndex,
+    tier: gs.galaxy.tier,
+    bodyIndex: gs.galaxy.currentBodyIndex,
+  });
+  if (pos === _lastSavedPosition) return;
+  _lastSavedPosition = pos;
+  fetch('/api/profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, lastPosition: JSON.parse(pos) }),
+  }).catch(() => {});
 }
 
 // ── Activate multiplayer networking ─────────────────────────────────────────
@@ -301,6 +392,7 @@ function startMultiplayer() {
   ghostPollInterval = setInterval(pollGhosts, 250);
   shotPollInterval = setInterval(pollShots, 250);
   economyPollInterval = setInterval(pollEconomy, 1500);
+  setInterval(savePositionIfChanged, 5000);
   void pollEconomy();
 
   // Fetch already-claimed pods so late-joiners see correct state
@@ -339,6 +431,7 @@ playFullBtn.addEventListener('click', (e) => {
 
 // ── Cleanup on page hide ────────────────────────────────────────────────────
 window.addEventListener('pagehide', () => {
+  savePositionIfChanged();
   if (ghostPollInterval) clearInterval(ghostPollInterval);
   if (ghostListInterval) clearInterval(ghostListInterval);
   if (shotPollInterval) clearInterval(shotPollInterval);
@@ -349,7 +442,6 @@ window.addEventListener('pagehide', () => {
 // ── Settings panel ──────────────────────────────────────────────────────────
 const settingsBtn = document.getElementById('settings-btn')!;
 const settingsPanel = document.getElementById('settings-panel')!;
-const shapeButtons = settingsPanel.querySelectorAll<HTMLButtonElement>('.shape-btn');
 const ghostListEl = document.getElementById('ghost-list')!;
 const shipNameInput = document.getElementById('ship-name-input') as HTMLInputElement;
 
@@ -410,25 +502,12 @@ function escapeHtml(s: string): string {
 settingsPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
 settingsPanel.addEventListener('click', (e) => e.stopPropagation());
 
-shapeButtons.forEach(btn => {
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const shape = normalizeSharedShipShape(btn.dataset.shape);
-    currentShape = shape;
-    bridge.setShipShape(shape);
-    shapeButtons.forEach(b => b.classList.remove('selected'));
-    btn.classList.add('selected');
-    settingsPanel.classList.remove('visible');
-    saveProfile();
-  });
-});
-
 // ── Save profile (debounced) ────────────────────────────────────────────────
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 function saveProfile() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    const payload: SaveProfileRequest = { username, name: currentName, shape: currentShape };
+    const payload: SaveProfileRequest = { username, name: currentName };
     fetch('/api/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -437,4 +516,94 @@ function saveProfile() {
   }, 500);
 }
 
+// ── Admin Panel (only for authorized user) ──────────────────────────────────
+try {
+const ADMIN_USERS = ['WeirdAd4511', 'Fred', 'weirdad4511', 'fred'];
+const adminBtn = document.getElementById('admin-btn');
+const adminPanel = document.getElementById('admin-panel');
+const adminClaims = document.getElementById('admin-claims');
+const adminStatus = document.getElementById('admin-status');
+
+console.log('[ADMIN] elements:', !!adminBtn, !!adminPanel, !!adminClaims, !!adminStatus, 'username=', username);
+if (adminBtn && adminPanel && ADMIN_USERS.some(u => u.toLowerCase() === username.toLowerCase())) {
+  adminBtn.style.display = 'inline-flex';
+  console.log('[ADMIN] button shown');
+}
+
+adminBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+adminBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  settingsPanel.classList.remove('visible');
+  helpPanel.classList.remove('visible');
+  const opening = !adminPanel.classList.contains('visible');
+  adminPanel.classList.toggle('visible');
+  if (opening) refreshAdminClaims();
+});
+adminPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
+adminPanel.addEventListener('click', (e) => e.stopPropagation());
+
+async function refreshAdminClaims() {
+  adminStatus.textContent = 'loading...';
+  try {
+    const res = await fetch(`/api/stars/claimed?postId=${encodeURIComponent(postId)}`);
+    const data = await res.json() as { claimed: Array<{ starIndex: number; username: string }> };
+    if (!data.claimed || data.claimed.length === 0) {
+      adminClaims.innerHTML = '<span style="color:#776655">no claims</span>';
+    } else {
+      adminClaims.innerHTML = data.claimed
+        .sort((a, b) => a.starIndex - b.starIndex)
+        .map(c => `<div class="admin-claim-row"><span class="admin-claim-star">Star ${c.starIndex}</span><span class="admin-claim-user">${escapeHtml(c.username)}</span></div>`)
+        .join('');
+    }
+    adminStatus.textContent = `${data.claimed?.length ?? 0} claim(s)`;
+  } catch (e) {
+    adminStatus.textContent = 'error loading claims';
+  }
+}
+
+document.getElementById('admin-refresh')!.addEventListener('click', () => refreshAdminClaims());
+
+document.getElementById('admin-reset-claims')!.addEventListener('click', async () => {
+  adminStatus.textContent = 'resetting claims...';
+  try {
+    const res = await fetch('/api/stars/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ postId }),
+    });
+    const data = await res.json();
+    adminStatus.textContent = `cleared ${data.cleared} claim(s) — reload to re-assign`;
+    refreshAdminClaims();
+  } catch { adminStatus.textContent = 'error'; }
+});
+
+document.getElementById('admin-reset-all')!.addEventListener('click', async () => {
+  adminStatus.textContent = 'full reset in progress...';
+  try {
+    const res = await fetch('/api/admin/reset-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ postId, adminUser: username }),
+    });
+    const data = await res.json();
+    adminStatus.textContent = `reset: ${data.usersCleared} users, ${data.claimsCleared} claims — reload`;
+    refreshAdminClaims();
+  } catch { adminStatus.textContent = 'error'; }
+});
+
+document.getElementById('admin-complete-builds')!.addEventListener('click', async () => {
+  const gs = getGameState();
+  const starIndex = gs?.galaxy.currentStarIndex ?? -1;
+  if (starIndex < 0) { adminStatus!.textContent = 'not at a star'; return; }
+  adminStatus!.textContent = 'completing builds...';
+  try {
+    await fetch('/api/debug/complete-builds', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, starIndex }),
+    });
+    adminStatus!.textContent = 'builds completed';
+  } catch { adminStatus!.textContent = 'error'; }
+});
+} catch (adminErr) { console.error('[ADMIN] init error:', adminErr); }
 

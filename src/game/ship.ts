@@ -13,30 +13,148 @@ import { computeAvoidance, resolveShipCollisions } from './asteroids';
 import { NavigationTier } from './galaxy';
 
 export function getShipShapePoints(shape: ShipShape): Vec2[] {
+  // Silhouettes derived from SVG icons (hull + nacelles as single polygon)
   switch (shape) {
-    case 'delta':
+    case 'scout':
+    default:
+      // Kite / arrow with tail notch — matches ship-scout.svg
       return [
-        vec2(0, 1), vec2(-0.78, -0.72), vec2(0, -0.22), vec2(0.78, -0.72),
+        vec2(0, 0.72), vec2(0.4, -0.4), vec2(0, -0.2), vec2(-0.4, -0.4),
       ];
-    case 'needle':
+    case 'destroyer':
+      // Elongated hex hull with side nacelles — matches ship-destroyer.svg
       return [
-        vec2(0, 1), vec2(-0.26, -0.98), vec2(0, -0.58), vec2(0.26, -0.98),
+        vec2(0, 0.8),
+        vec2(0.3, 0.2), vec2(0.3, 0.0),
+        vec2(0.5, -0.1), vec2(0.5, -0.4),
+        vec2(0.3, -0.3), vec2(0.3, -0.6),
+        vec2(0, -0.8),
+        vec2(-0.3, -0.6), vec2(-0.3, -0.3),
+        vec2(-0.5, -0.4), vec2(-0.5, -0.1),
+        vec2(-0.3, 0.0), vec2(-0.3, 0.2),
       ];
-    case 'blade':
+    case 'frigate':
+      // Wider hull with larger nacelles — matches ship-frigate.svg
       return [
-        vec2(0, 1), vec2(-0.86, -0.18), vec2(-0.18, -0.92), vec2(0.58, -0.58),
+        vec2(0, 0.8),
+        vec2(0.4, 0.3), vec2(0.4, 0.1),
+        vec2(0.6, 0.0), vec2(0.6, -0.4),
+        vec2(0.4, -0.3), vec2(0.4, -0.5),
+        vec2(0.2, -0.8),
+        vec2(-0.2, -0.8),
+        vec2(-0.4, -0.5), vec2(-0.4, -0.3),
+        vec2(-0.6, -0.4), vec2(-0.6, 0.0),
+        vec2(-0.4, 0.1), vec2(-0.4, 0.3),
       ];
-    case 'arrow':
+    case 'battleship':
+      // Broad heavy hull with large nacelles — matches ship-battleship.svg
+      return [
+        vec2(0, 0.9),
+        vec2(0.5, 0.4), vec2(0.5, 0.2),
+        vec2(0.7, 0.1), vec2(0.7, -0.5),
+        vec2(0.5, -0.4), vec2(0.5, -0.6),
+        vec2(0.3, -0.9),
+        vec2(-0.3, -0.9),
+        vec2(-0.5, -0.6), vec2(-0.5, -0.4),
+        vec2(-0.7, -0.5), vec2(-0.7, 0.1),
+        vec2(-0.5, 0.2), vec2(-0.5, 0.4),
+      ];
+    case 'cruiser':
+      // Imposing hull, large nacelles, antenna spike — matches ship-command-cruiser.svg
+      return [
+        vec2(0, 1.14),
+        vec2(0.56, 0.44), vec2(0.56, 0.24),
+        vec2(0.8, 0.14), vec2(0.8, -0.56),
+        vec2(0.56, -0.46), vec2(0.56, -0.66),
+        vec2(0.3, -0.96),
+        vec2(-0.3, -0.96),
+        vec2(-0.56, -0.66), vec2(-0.56, -0.46),
+        vec2(-0.8, -0.56), vec2(-0.8, 0.14),
+        vec2(-0.56, 0.24), vec2(-0.56, 0.44),
+      ];
+    case 'dreadnought':
+      // Massive fortress, very wide nacelles — matches ship-dreadnought.svg
+      return [
+        vec2(0, 1.0),
+        vec2(0.6, 0.5), vec2(0.66, 0.2),
+        vec2(0.9, 0.1), vec2(0.9, -0.6),
+        vec2(0.66, -0.5), vec2(0.66, -0.7),
+        vec2(0.3, -1.0),
+        vec2(-0.3, -1.0),
+        vec2(-0.66, -0.7), vec2(-0.66, -0.5),
+        vec2(-0.9, -0.6), vec2(-0.9, 0.1),
+        vec2(-0.66, 0.2), vec2(-0.6, 0.5),
+      ];
+  }
+}
+
+export type ShipDetail =
+  | { type: 'circle'; center: Vec2; radius: number }
+  | { type: 'line'; from: Vec2; to: Vec2 };
+
+/** Internal detail strokes for each ship shape (local coords, same scale as outline). */
+export function getShipDetailElements(shape: ShipShape): ShipDetail[] {
+  switch (shape) {
+    case 'scout':
     default:
       return [
-        vec2(0, 1), vec2(-0.58, -0.72), vec2(0, -0.5), vec2(0.58, -0.72),
+        { type: 'circle', center: vec2(0, 0.1), radius: 0.1 },
+      ];
+    case 'destroyer':
+      return [
+        { type: 'circle', center: vec2(0, 0.05), radius: 0.12 },
+        { type: 'line', from: vec2(0, -0.15), to: vec2(0, -0.45) },
+      ];
+    case 'frigate':
+      return [
+        { type: 'circle', center: vec2(0, 0.0), radius: 0.16 },
+        { type: 'line', from: vec2(-0.1, -0.25), to: vec2(-0.1, -0.55) },
+        { type: 'line', from: vec2(0.1, -0.25), to: vec2(0.1, -0.55) },
+      ];
+    case 'battleship':
+      return [
+        { type: 'circle', center: vec2(0, 0.15), radius: 0.15 },
+        { type: 'line', from: vec2(-0.15, -0.1), to: vec2(-0.15, -0.55) },
+        { type: 'line', from: vec2(0.15, -0.1), to: vec2(0.15, -0.55) },
+        { type: 'line', from: vec2(-0.15, -0.1), to: vec2(0.15, -0.1) },
+        { type: 'line', from: vec2(-0.15, -0.55), to: vec2(0.15, -0.55) },
+      ];
+    case 'cruiser':
+      return [
+        { type: 'circle', center: vec2(0, 0.3), radius: 0.18 },
+        { type: 'line', from: vec2(-0.15, -0.05), to: vec2(-0.15, -0.5) },
+        { type: 'line', from: vec2(0.15, -0.05), to: vec2(0.15, -0.5) },
+        { type: 'line', from: vec2(-0.15, -0.05), to: vec2(0.15, -0.05) },
+        { type: 'line', from: vec2(-0.15, -0.5), to: vec2(0.15, -0.5) },
+        { type: 'line', from: vec2(0, 1.14), to: vec2(0, 1.3) }, // antenna
+      ];
+    case 'dreadnought':
+      return [
+        { type: 'line', from: vec2(-0.25, 0.2), to: vec2(0.25, 0.2) },
+        { type: 'line', from: vec2(-0.25, -0.4), to: vec2(0.25, -0.4) },
+        { type: 'line', from: vec2(-0.25, 0.2), to: vec2(-0.25, -0.4) },
+        { type: 'line', from: vec2(0.25, 0.2), to: vec2(0.25, -0.4) },
+        { type: 'line', from: vec2(-0.1, -0.4), to: vec2(-0.1, -0.7) },
+        { type: 'line', from: vec2(0, -0.4), to: vec2(0, -0.7) },
+        { type: 'line', from: vec2(0.1, -0.4), to: vec2(0.1, -0.7) },
+        { type: 'line', from: vec2(-0.08, 1.0), to: vec2(-0.12, 1.15) }, // antenna L
+        { type: 'line', from: vec2(0.08, 1.0), to: vec2(0.12, 1.15) },  // antenna R
       ];
   }
 }
 
 export function normalizeShipShape(shape: string): ShipShape {
-  if (shape === 'delta' || shape === 'needle' || shape === 'blade') return shape;
-  return 'arrow';
+  switch (shape) {
+    case 'scout':
+    case 'destroyer':
+    case 'frigate':
+    case 'battleship':
+    case 'cruiser':
+    case 'dreadnought':
+      return shape;
+    default:
+      return 'scout';
+  }
 }
 
 export function updateShip(state: GameState, dt: number, safeZone: { minX: number; maxX: number; minY: number; maxY: number }): void {

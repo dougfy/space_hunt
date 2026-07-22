@@ -17,16 +17,19 @@ export type DecrementResponse = {
   count: number;
 };
 
-export type SharedShipShape = 'arrow' | 'delta' | 'needle' | 'blade';
+export type SharedShipShape = 'scout' | 'destroyer' | 'frigate' | 'battleship' | 'cruiser' | 'dreadnought';
 
 export function normalizeSharedShipShape(shape: string | undefined): SharedShipShape {
   switch (shape) {
-    case 'delta':
-    case 'needle':
-    case 'blade':
+    case 'scout':
+    case 'destroyer':
+    case 'frigate':
+    case 'battleship':
+    case 'cruiser':
+    case 'dreadnought':
       return shape;
     default:
-      return 'arrow';
+      return 'scout';
   }
 }
 
@@ -104,7 +107,9 @@ export type ShotsResponse = {
 
 export type PlayerProfileResponse = {
   name: string;
-  shape: SharedShipShape;
+  homeStar?: number;
+  lastPosition?: { starIndex: number; tier: number; bodyIndex: number };
+  claimed?: Array<{ starIndex: number; username: string }>;
 };
 
 export type ResourceStore = {
@@ -162,7 +167,7 @@ export type BuildBuildingResponse = StarEconomyResponse & {
 export type SaveProfileRequest = {
   username: string;
   name?: string;
-  shape?: SharedShipShape;
+  lastPosition?: { starIndex: number; tier: number; bodyIndex: number };
 };
 
 // ── Ship Types ──────────────────────────────────────────────────────────────
@@ -199,4 +204,17 @@ export type StarShipsResponse = {
   starIndex: number;
   ships: StarShipsState;
   building: ShipBuildingState | null;
+};
+
+export type UpgradeShipRequest = {
+  username: string;
+  starIndex: number;
+  fromTypeId: ShipTypeId;
+};
+
+export type UpgradeShipResponse = {
+  ok: true;
+  ships: StarShipsState;
+  building: ShipBuildingState | null;
+  store: ResourceStore;
 };

@@ -22,11 +22,11 @@ import {
   drawGalaxyView, drawSystemView, drawPlanetView, drawTierHUD,
   drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
-  worldToScreen, isPointCoveredByOpenPlanetPanel,
+  worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
 } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
-import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, applyStarNames } from './galaxy';
+import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, applyStarNames, generateSystem } from './galaxy';
 import { checkDocking, updateDocking, undock } from './dock';
 
 let gameState: GameState | null = null;
@@ -50,6 +50,110 @@ export function getGameState(): GameState | null {
 export function refreshGalaxyStarNames(): void {
   if (!gameState) return;
   applyStarNames(gameState.galaxy.stars);
+}
+
+/**
+ * Mark stars as owned by other players (foreign).
+ * Called after profile load with the claimed stars list.
+ */
+export function setStarClaims(claims: Array<{ starIndex: number; username: string }>, myUsername: string): void {
+  if (!gameState) return;
+  for (const claim of claims) {
+    const star = gameState.galaxy.stars[claim.starIndex];
+    if (!star) continue;
+    if (claim.username === myUsername) {
+      star.owner = 'player';
+      star.discovered = true;
+    } else {
+      star.owner = 'foreign';
+      star.discovered = true;
+    }
+  }
+}
+
+/**
+ * Relocate the player to a different home star.
+ * Called after profile load reveals the server-assigned star differs from the default.
+ * Only applies when the game is in play mode (not splash).
+ */
+export function relocateToHomeStar(starIndex: number): void {
+  if (!gameState) return;
+  if (gameState.galaxy.homeStarIndex === starIndex) return; // already there
+
+  const star = gameState.galaxy.stars[starIndex];
+  if (!star) { console.warn(`[RELOCATE] invalid starIndex ${starIndex}`); return; }
+
+  // Update home and current star
+  gameState.galaxy.homeStarIndex = starIndex;
+  gameState.galaxy.currentStarIndex = starIndex;
+  star.owner = 'player';
+  star.discovered = true;
+
+  // Generate system for the new home star
+  gameState.galaxy.bodies = generateSystem(star);
+
+  // Place ship at first body (station planet) in Planet tier
+  const stationBody = gameState.galaxy.bodies[0];
+  if (stationBody) {
+    gameState.galaxy.tier = NavigationTier.Planet;
+    gameState.galaxy.currentBodyIndex = 0;
+    const stationFeature = stationBody.features.find(f => f.type === 'station');
+    if (stationFeature) {
+      const sx = Math.cos(stationFeature.angle) * stationFeature.dist;
+      const sy = Math.sin(stationFeature.angle) * stationFeature.dist;
+      const awayX = Math.cos(stationFeature.angle);
+      const awayY = Math.sin(stationFeature.angle);
+      gameState.ship.pos = vec2(sx + awayX * 0.6, sy + awayY * 0.6);
+      gameState.ship.ang = stationFeature.angle + Math.PI;
+    }
+  }
+
+  console.log(`[RELOCATE] moved to star ${starIndex} (${star.name})`);
+}
+
+/**
+ * Restore player to a saved position (star + tier + body).
+ * Called on reload to resume where the player left off.
+ */
+export function restorePosition(starIndex: number, tier: number, bodyIndex: number): void {
+  if (!gameState) return;
+
+  const star = gameState.galaxy.stars[starIndex];
+  if (!star) { console.warn(`[RESTORE] invalid starIndex ${starIndex}`); return; }
+
+  star.discovered = true;
+  gameState.galaxy.currentStarIndex = starIndex;
+
+  if (tier === NavigationTier.Galaxy) {
+    // At galaxy view — place ship near the star
+    gameState.galaxy.tier = NavigationTier.Galaxy;
+    gameState.ship.pos = vec2(star.x, star.y);
+  } else if (tier === NavigationTier.System) {
+    // At system view — generate system, place ship in system center
+    gameState.galaxy.bodies = generateSystem(star);
+    gameState.galaxy.tier = NavigationTier.System;
+    gameState.ship.pos = vec2(0, 5);
+  } else {
+    // Planet tier — generate system, go to specific body
+    gameState.galaxy.bodies = generateSystem(star);
+    const bi = Math.min(bodyIndex, gameState.galaxy.bodies.length - 1);
+    gameState.galaxy.currentBodyIndex = bi;
+    gameState.galaxy.tier = NavigationTier.Planet;
+    const body = gameState.galaxy.bodies[bi];
+    if (body) {
+      const stationFeature = body.features.find(f => f.type === 'station');
+      if (stationFeature) {
+        const sx = Math.cos(stationFeature.angle) * stationFeature.dist;
+        const sy = Math.sin(stationFeature.angle) * stationFeature.dist;
+        gameState.ship.pos = vec2(sx + Math.cos(stationFeature.angle) * 0.6, sy + Math.sin(stationFeature.angle) * 0.6);
+        gameState.ship.ang = stationFeature.angle + Math.PI;
+      } else {
+        gameState.ship.pos = vec2(0, 3);
+      }
+    }
+  }
+
+  console.log(`[RESTORE] position star=${starIndex} tier=${tier} body=${bodyIndex}`);
 }
 
 /** Swap in real callbacks after the game starts. */
@@ -236,6 +340,14 @@ function update(dt: number): void {
     }
   }
 
+  // Consume pending extension action from BUILD panel
+  if (gameState.dock) {
+    const extAction = consumePendingExtensionAction();
+    if (extAction) {
+      triggerDockPanelAction(extAction as any, gameState.dock);
+    }
+  }
+
   // Process input (ship targeting, etc.)
   processInput(inputState, gameState, gameState.camera, screenW, screenH);
 
@@ -354,6 +466,23 @@ function update(dt: number): void {
     : gameState.ship.pos;
   const transition = checkTierTransition(worldShipPos, gameState.galaxy);
   if (transition) {
+    // Ship gate: scouts cannot enter Galaxy tier
+    if (transition.newTier === NavigationTier.Galaxy && gameState.shipShape === 'scout') {
+      // Block exit — bounce ship back toward system center
+      const center = SYSTEM_SIZE / 2;
+      const dx = center - gameState.ship.pos.x;
+      const dy = center - gameState.ship.pos.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d > 0) {
+        gameState.ship.pos = vec2(
+          gameState.ship.pos.x + (dx / d) * 0.5,
+          gameState.ship.pos.y + (dy / d) * 0.5,
+        );
+      }
+      gameState.ship.vel = vec2(0, 0);
+      gameState.tgtActive = false;
+      // Don't apply transition
+    } else {
     console.log('[TRANSITION] from tier=', gameState.galaxy.tier, 'to=', transition.newTier, 'shipPos=', gameState.ship.pos, 'worldShipPos=', worldShipPos, 'starIdx=', transition.starIndex, 'bodyIdx=', transition.bodyIndex);
     const newPos = applyTransition(gameState.galaxy, transition, gameState.ship.pos);
     gameState.ship.pos = newPos;
@@ -391,6 +520,7 @@ function update(dt: number): void {
       gameState.asteroidNames = [];
       gameState.pods = [];
     }
+    } // end else (non-scout gate)
   }
   } // end splash mode guard
 

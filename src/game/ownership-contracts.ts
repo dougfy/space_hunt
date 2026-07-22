@@ -27,4 +27,4 @@ export type StarOwnershipEvent =
     owner: StarOwner;
   };
 
-export type StarVisualTone = 'blue' | 'green' | 'white';
+export type StarVisualTone = 'blue' | 'green' | 'white' | 'red' | 'orange';

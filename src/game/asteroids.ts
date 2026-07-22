@@ -14,7 +14,7 @@ import {
 
 // ── Ring Constants ──────────────────────────────────────────────────────────
 export const BELT_HALF_WIDTH = 3.0; // radial half-extent of belt (units from orbit center line)
-export const RING_ASTEROID_COUNT = 120; // number of asteroids around the full ring
+export const RING_ASTEROID_COUNT = 0; // DEBUG: disabled for testing
 
 export interface SurfaceInfo {
   nearest: Vec2;

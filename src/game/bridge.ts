@@ -3,7 +3,7 @@
 // Replaces the Unity SendMessage bridge with direct function calls.
 
 import type { Projectile, ShipShape } from './types';
-import { startGame, stopGame, getGameState, setGameCallbacks } from './game-loop';
+import { startGame, stopGame, getGameState, setGameCallbacks, relocateToHomeStar, restorePosition } from './game-loop';
 import { setRemotePoses, RemotePoseItem } from './ghosts';
 import { applyPodCollected } from './pods';
 import { normalizeShipShape } from './ship';
@@ -50,7 +50,7 @@ let canvas: HTMLCanvasElement | null = null;
 let callbacks: DevvitCallbacks | null = null;
 let pendingSeed: string | null = null;
 let pendingName = 'pilot';
-let pendingShape: ShipShape = 'arrow';
+let pendingShape: ShipShape = 'scout';
 
 export function createDevvitBridge(
   targetCanvas: HTMLCanvasElement,
@@ -82,10 +82,25 @@ export function createDevvitBridge(
       const s = getGameState();
       console.log(`[BRIDGE] beginPlay: gameState=${!!s} splashMode=${s?.splashMode}`);
       if (s && s.splashMode) {
+        // Save state assigned during splash (from profile load + restore)
+        const savedHomeStar = s.galaxy.homeStarIndex;
+        const savedStarIndex = s.galaxy.currentStarIndex;
+        const savedTier = s.galaxy.tier;
+        const savedBodyIndex = s.galaxy.currentBodyIndex;
         // Transition from splash to real game — stop splash, start fresh
         stopGame();
         startGame(canvas, pendingSeed, pendingName, pendingShape, callbacks);
-        console.log(`[BRIDGE] beginPlay: transitioned from splash to play, tier=${getGameState()?.galaxy.tier}`);
+        // Re-apply home star if it was changed during splash
+        const defaultHome = getGameState()?.galaxy.homeStarIndex;
+        if (savedHomeStar !== defaultHome) {
+          relocateToHomeStar(savedHomeStar);
+        }
+        // Restore position if it differs from home star default
+        const gs = getGameState();
+        if (gs && (savedStarIndex !== savedHomeStar || savedTier !== 3 || savedBodyIndex !== 0)) {
+          restorePosition(savedStarIndex, savedTier, savedBodyIndex);
+        }
+        console.log(`[BRIDGE] beginPlay: transitioned from splash to play, tier=${getGameState()?.galaxy.tier} homeStar=${getGameState()?.galaxy.homeStarIndex}`);
       } else if (s) {
         // Game already running (non-splash) — just activate networking
         setGameCallbacks(callbacks);

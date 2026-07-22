@@ -11,7 +11,7 @@ export const SHIP_ARRIVE_RADIUS = 1.25;
 export const SHIP_SIZE = 0.08;
 export const SHIP_RADIUS = 0.16;
 
-export const ASTEROID_COUNT = 60;
+export const ASTEROID_COUNT = 0; // DEBUG: disabled for testing
 export const ASTEROID_MIN_RADIUS = 0.28;
 export const ASTEROID_MAX_RADIUS = 0.7;
 export const ASTEROID_GAP = 0.45;

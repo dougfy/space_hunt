@@ -20,12 +20,17 @@ import type {
   StarEconomyResponse,
   StarShipsResponse,
   ShotsResponse,
+  UpgradeShipRequest,
+  UpgradeShipResponse,
 } from '../../shared/api';
 import {
   buyBuilding,
   buyShip,
+  claimHomeStar,
   claimPod,
+  completeAllBuilds,
   getClaimedPods,
+  getClaimedStars,
   loadStarEconomy,
   loadStarShips,
   listActiveShots,
@@ -33,6 +38,7 @@ import {
   loadProfile,
   saveProfile,
   upgradeBuilding,
+  upgradeShip,
   storePose,
   storeShots,
 } from '../core/game-service';
@@ -202,10 +208,72 @@ api.get('/shots', async (c) => {
 /** Get a user's profile (ship name + shape). */
 api.get('/profile', async (c) => {
   const user = c.req.query('username');
+  const postId = c.req.query('postId');
   if (!user) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
 
   const response = await loadProfile(redis, user);
+
+  // If postId provided, also resolve home star claim
+  if (postId) {
+    const claim = await claimHomeStar(redis, postId, user);
+    return c.json<PlayerProfileResponse>({ ...response, homeStar: claim.homeStar, claimed: claim.claimed });
+  }
+
   return c.json<PlayerProfileResponse>(response);
+});
+
+/** Get all claimed stars for a post. */
+api.get('/stars/claimed', async (c) => {
+  const postId = c.req.query('postId');
+  if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
+  const claimed = await getClaimedStars(redis, postId);
+  return c.json({ claimed });
+});
+
+/** Debug: reset star claims for a post so they re-assign on next load. */
+api.post('/stars/reset', async (c) => {
+  const body = await c.req.json<{ postId: string }>();
+  if (!body.postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
+  const allClaims = await redis.hGetAll(`stars:${body.postId}`);
+  const keys = Object.keys(allClaims);
+  if (keys.length > 0) {
+    await redis.hDel(`stars:${body.postId}`, keys);
+  }
+  return c.json({ ok: true, cleared: keys.length });
+});
+
+/** Admin: full reset — clear claims, economy, and ships for all users of a post. */
+api.post('/admin/reset-all', async (c) => {
+  const body = await c.req.json<{ postId: string; adminUser: string }>();
+  if (!body.postId || !body.adminUser) return c.json<ErrorResponse>({ status: 'error', message: 'postId and adminUser required' }, 400);
+
+  // Get all claims to find users
+  const registryKey = `stars:${body.postId}`;
+  const allClaims = await redis.hGetAll(registryKey);
+  const users = Object.values(allClaims);
+
+  // Clear each user's economy and ships data
+  let cleared = 0;
+  for (const user of users) {
+    try {
+      await redis.hDel(`profile:${user}`, ['economy', 'ships']);
+      cleared++;
+    } catch { /* ignore */ }
+  }
+
+  // Clear star claims
+  const keys = Object.keys(allClaims);
+  if (keys.length > 0) {
+    await redis.hDel(registryKey, keys);
+  }
+
+  // Clear poses and shots
+  try {
+    const poseKeys = Object.keys(await redis.hGetAll(`poses:${body.postId}`));
+    if (poseKeys.length > 0) await redis.hDel(`poses:${body.postId}`, poseKeys);
+  } catch { /* ignore */ }
+
+  return c.json({ ok: true, usersCleared: cleared, claimsCleared: keys.length });
 });
 
 /** Save a user's profile (ship name + shape). */
@@ -317,6 +385,40 @@ api.post('/ships/buy', async (c) => {
     return c.json<BuyShipResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to buy ship';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+/** Upgrade a ship in-place (requires dock, must own the ship). */
+api.post('/ships/upgrade', async (c) => {
+  const body = await c.req.json<UpgradeShipRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!Number.isInteger(body.starIndex) || body.starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
+  }
+  if (!body.fromTypeId) return c.json<ErrorResponse>({ status: 'error', message: 'fromTypeId required' }, 400);
+
+  try {
+    const response = await upgradeShip(redis, body);
+    return c.json<UpgradeShipResponse>(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to upgrade ship';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+/** Debug: instantly complete all builds at a star. */
+api.post('/debug/complete-builds', async (c) => {
+  const body = await c.req.json<{ username: string; starIndex: number }>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!Number.isInteger(body.starIndex) || body.starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
+  }
+  try {
+    const response = await completeAllBuilds(redis, body.username, body.starIndex);
+    return c.json(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to complete builds';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
   }
 });

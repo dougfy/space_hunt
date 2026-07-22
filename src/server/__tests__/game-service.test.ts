@@ -48,7 +48,7 @@ describe('game service backend routines', () => {
       angle: 0.5,
       username: 'alpha',
       sessionId: 'alpha:1',
-      shape: 'delta',
+      shape: 'destroyer',
       tier: 2,
       starIndex: 3,
       bodyIndex: 4,
@@ -60,7 +60,7 @@ describe('game service backend routines', () => {
       angle: 0.75,
       username: 'beta',
       sessionId: 'beta:1',
-      shape: 'blade',
+      shape: 'frigate',
       tier: 1,
       starIndex: 3,
       bodyIndex: -1,
@@ -73,7 +73,7 @@ describe('game service backend routines', () => {
       y: 9,
       angle: 1,
       username: 'stale',
-      shape: 'needle',
+      shape: 'battleship',
       tier: 2,
       starIndex: 3,
       bodyIndex: 4,
@@ -88,7 +88,7 @@ describe('game service backend routines', () => {
     }, now);
 
     expect(response.items).toEqual([
-      { username: 'alpha', x: 1, y: 2, angle: 0.5, shape: 'delta' },
+      { username: 'alpha', x: 1, y: 2, angle: 0.5, shape: 'destroyer' },
     ]);
     expect(poseBucket['stale:1']).toBeUndefined();
   });
@@ -137,7 +137,7 @@ describe('game service backend routines', () => {
     const profile = await loadProfile(store, 'pilot');
     await saveProfile(store, { username: 'pilot', name: 'Ace' });
 
-    expect(profile).toEqual({ name: 'Pilot', shape: 'arrow' });
+    expect(profile).toEqual({ name: 'Pilot' });
     expect(store.data['profile:pilot']).toEqual({ name: 'Ace', shape: 'bogus' });
   });
 

@@ -28,7 +28,7 @@ const bridge: DevvitBridge = createDevvitBridge(canvas, {
 });
 
 bridge.setPlayerName(username);
-bridge.setShipShape('arrow');
+bridge.setShipShape('scout');
 bridge.setSharedWorldSeed(postId);
 bridge.beginSplash();
 

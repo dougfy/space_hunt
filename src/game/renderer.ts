@@ -11,7 +11,7 @@ import {
   BASE_ORTHO, SHIP_SIZE,
 } from './constants';
 import { vec2, add, sub, normalize, magnitude, scale, createRng } from './math';
-import { getShipShapePoints } from './ship';
+import { getShipShapePoints, getShipDetailElements } from './ship';
 import { getAsteroidSurfaceInfo } from './asteroids';
 
 export interface Renderer {
@@ -177,6 +177,29 @@ export function drawShip(
   worldPts.push({ x: firstWorldPoint.x, y: firstWorldPoint.y });
 
   drawPolyline(r, camera, worldPts, color, lineWidth, false);
+
+  // Draw internal detail elements
+  const details = getShipDetailElements(shape);
+  const detailLineWidth = lineWidth * 0.7;
+  for (const d of details) {
+    if (d.type === 'circle') {
+      const center: Vec2 = {
+        x: pos.x + right.x * (d.center.x * size) + forward.x * (d.center.y * size),
+        y: pos.y + right.y * (d.center.x * size) + forward.y * (d.center.y * size),
+      };
+      drawCircle(r, camera, center, d.radius * size, color, detailLineWidth);
+    } else {
+      const from: Vec2 = {
+        x: pos.x + right.x * (d.from.x * size) + forward.x * (d.from.y * size),
+        y: pos.y + right.y * (d.from.x * size) + forward.y * (d.from.y * size),
+      };
+      const to: Vec2 = {
+        x: pos.x + right.x * (d.to.x * size) + forward.x * (d.to.y * size),
+        y: pos.y + right.y * (d.to.x * size) + forward.y * (d.to.y * size),
+      };
+      drawLine(r, camera, from, to, color, detailLineWidth);
+    }
+  }
 }
 
 export function drawAsteroid(
@@ -716,7 +739,7 @@ function drawStarburst(
   coreR: number,
   rayLen: number,
   brightness: number, // 0-1
-  palette: 'green' | 'blue' | 'white' = 'green',
+  palette: 'green' | 'blue' | 'white' | 'red' | 'orange' = 'green',
   cardinalBoost = 1,
 ) {
   const a = 0.4 + brightness * 0.6;
@@ -724,27 +747,47 @@ function drawStarburst(
     ? '110, 190, 255'
     : palette === 'white'
       ? '245, 250, 255'
-      : '79, 255, 176';
+      : palette === 'red'
+        ? '255, 100, 80'
+        : palette === 'orange'
+          ? '255, 180, 60'
+          : '79, 255, 176';
   const cMid = palette === 'blue'
     ? '150, 215, 255'
     : palette === 'white'
       ? '220, 235, 250'
-      : '150, 255, 210';
+      : palette === 'red'
+        ? '255, 150, 130'
+        : palette === 'orange'
+          ? '255, 200, 120'
+          : '150, 255, 210';
   const cSoft = palette === 'blue'
     ? '30, 70, 120'
     : palette === 'white'
       ? '80, 95, 115'
-      : '30, 120, 80';
+      : palette === 'red'
+        ? '120, 30, 20'
+        : palette === 'orange'
+          ? '120, 70, 10'
+          : '30, 120, 80';
   const cBloom = palette === 'blue'
     ? '180, 220, 255'
     : palette === 'white'
       ? '238, 246, 255'
-      : '180, 255, 220';
+      : palette === 'red'
+        ? '255, 180, 160'
+        : palette === 'orange'
+          ? '255, 220, 150'
+          : '180, 255, 220';
   const cCore = palette === 'blue'
     ? '170, 220, 255'
     : palette === 'white'
       ? '245, 250, 255'
-      : '150, 255, 200';
+      : palette === 'red'
+        ? '255, 160, 140'
+        : palette === 'orange'
+          ? '255, 210, 120'
+          : '150, 255, 200';
 
   // ── 1. Wide soft green halo ──
   ctx.save();
@@ -858,7 +901,7 @@ export function drawGalaxyView(
   const galaxyView = buildGalaxyViewModel(galaxy);
 
   // Pre-compute screen positions for visible stars
-  const screenStars: { star: GalaxyStar; tone: 'blue' | 'green' | 'white'; sx: number; sy: number }[] = [];
+  const screenStars: { star: GalaxyStar; tone: 'blue' | 'green' | 'white' | 'red' | 'orange'; sx: number; sy: number }[] = [];
   for (const starView of galaxyView.stars) {
     const star = galaxy.stars[starView.index];
     if (!star) continue;
@@ -921,6 +964,10 @@ export function drawGalaxyView(
         ctx.fillStyle = dist < 15 ? 'rgb(165, 220, 255)' : 'rgba(120, 185, 245, 0.85)';
       } else if (tone === 'white') {
         ctx.fillStyle = dist < 15 ? 'rgb(240, 248, 255)' : 'rgba(210, 225, 240, 0.85)';
+      } else if (tone === 'red') {
+        ctx.fillStyle = dist < 15 ? 'rgb(255, 130, 110)' : 'rgba(255, 100, 80, 0.85)';
+      } else if (tone === 'orange') {
+        ctx.fillStyle = dist < 15 ? 'rgb(255, 200, 100)' : 'rgba(255, 180, 60, 0.85)';
       } else {
         ctx.fillStyle = dist < 15 ? G_BRIGHT : G_MED;
       }
@@ -2067,38 +2114,19 @@ export function drawPlanetView(
 
 // ── Right-edge slide-out panels (planet view) ──────────────────────────────
 
-interface StubPanel {
+type PanelTab = {
   title: string;
   icon: string;
-  rows: string[];
-}
+  /** If true, tab is greyed out when not docked */
+  requiresDock?: boolean;
+};
 
-const DEFAULT_STATUS_ROWS: string[] = ['DOCK: in orbit'];
-
-const PLANET_PANELS_BASE: Omit<StubPanel, 'rows'>[] = [
-  {
-    title: 'STATUS',
-    icon: '\u25B3', // △
-  },
-  {
-    title: 'COMMS',
-    icon: '\u25CE', // ◎
-  },
-  {
-    title: 'NAV',
-    icon: '\u2316', // ⌖
-  },
+const PANEL_TABS: PanelTab[] = [
+  { title: 'STATUS', icon: '\u25B3' },       // △
+  { title: 'BUILD',  icon: '\u2302', requiresDock: true },  // ⌂
+  { title: 'SHIPS',  icon: '\u{1F680}', requiresDock: true }, // 🚀
+  { title: 'FLEET',  icon: '\u2694' },        // ⚔
 ];
-
-let _lastStatusRows: string[] = DEFAULT_STATUS_ROWS;
-
-function getPlanetPanels(statusRows: string[]): StubPanel[] {
-  return [
-    { ...PLANET_PANELS_BASE[0]!, rows: statusRows },
-    { ...PLANET_PANELS_BASE[1]!, rows: ['No signals detected', '── scan to discover ──'] },
-    { ...PLANET_PANELS_BASE[2]!, rows: ['ORBIT: stable', 'VECTOR: holding'] },
-  ];
-}
 
 function buildMockPlanetStatusRows(
   starIndex: number,
@@ -2127,27 +2155,36 @@ function buildMockPlanetStatusRows(
   return rows;
 }
 
-// -1 = all closed, 0..2 = which panel is open
+// -1 = all closed, 0..3 = which panel is open
 let _openPanel = -1;
 
 // Layout constants
 const TAB_W = 28;      // width of the vertical tab strip
-const TAB_H = 72;      // height of each tab
-const TAB_GAP = 6;
-const PANEL_W = 170;   // width of the slide-out body
+const TAB_H = 56;      // height of each tab (smaller to fit 4)
+const TAB_GAP = 4;
 const ROW_H = 14;
 const PANEL_PAD = 10;
 
+// Per-tab panel widths
+const PANEL_WIDTHS: number[] = [180, 280, 260, 180]; // STATUS, BUILD, SHIPS, FLEET
+
+function getEffectivePanelW(tabIndex: number, screenW: number): number {
+  const base = PANEL_WIDTHS[tabIndex] ?? 180;
+  const maxW = screenW - TAB_W - 16;
+  return Math.min(base, maxW);
+}
+
 export function togglePlanetPanel(index: number): void {
+  if (index < 0 || index >= PANEL_TABS.length) return;
   _openPanel = _openPanel === index ? -1 : index;
 }
 
 /** Get the tab rects for hit testing */
 function getPanelTabRects(screenH: number) {
-  const panelCount = PLANET_PANELS_BASE.length;
+  const panelCount = PANEL_TABS.length;
   const totalH = panelCount * TAB_H + (panelCount - 1) * TAB_GAP;
   const startY = (screenH - totalH) / 2;
-  return PLANET_PANELS_BASE.map((_, i) => ({
+  return PANEL_TABS.map((_, i) => ({
     y: startY + i * (TAB_H + TAB_GAP),
   }));
 }
@@ -2177,14 +2214,19 @@ export function hitTestPlanetPanels(
 
   // Check if click is inside the open panel body
   if (_openPanel >= 0) {
-    const p = getPlanetPanels(_lastStatusRows)[_openPanel];
     const openRect = tabRects[_openPanel];
-    if (!p || !openRect) return -1;
-    const bodyH = p.rows.length * ROW_H + PANEL_PAD * 2 + 20;
-    const panelX = screenW - TAB_W - PANEL_W;
-    const tabY = openRect.y;
-    const panelY = tabY;
-    if (sx >= panelX && sx <= screenW - TAB_W && sy >= panelY && sy <= panelY + Math.max(bodyH, TAB_H)) {
+    if (!openRect) return -1;
+    const panelW = getEffectivePanelW(_openPanel, screenW);
+    const panelX = screenW - TAB_W - panelW;
+    const panelY = openRect.y;
+    const bodyH = _lastPanelBodyH > 0 ? _lastPanelBodyH : TAB_H;
+    if (sx >= panelX && sx <= screenW - TAB_W && sy >= panelY && sy <= panelY + bodyH) {
+      // Handle interactive clicks inside BUILD / SHIPS tabs
+      if (_openPanel === 1) {
+        hitTestBuildPanel(sx, sy);
+      } else if (_openPanel === 2) {
+        hitTestShipsPanel(sx, sy);
+      }
       return -2; // inside panel body — consume click
     }
   }
@@ -2203,8 +2245,7 @@ export function isPointCoveredByOpenPlanetPanel(
 
   const tabRects = getPanelTabRects(screenH);
   const openRect = tabRects[_openPanel];
-  const p = getPlanetPanels(_lastStatusRows)[_openPanel];
-  if (!openRect || !p) return false;
+  if (!openRect) return false;
 
   const tabX = screenW - TAB_W;
   // Occlude tab strip itself.
@@ -2213,11 +2254,68 @@ export function isPointCoveredByOpenPlanetPanel(
   }
 
   // Occlude open panel body.
-  const bodyH = p.rows.length * ROW_H + PANEL_PAD * 2 + 22;
-  const panelX = screenW - TAB_W - PANEL_W;
+  const panelW = getEffectivePanelW(_openPanel, screenW);
+  const panelX = screenW - TAB_W - panelW;
   const panelY = openRect.y;
-  const panelH = Math.max(bodyH, TAB_H);
-  return sx >= panelX && sx <= screenW - TAB_W && sy >= panelY && sy <= panelY + panelH;
+  const bodyH = _lastPanelBodyH > 0 ? _lastPanelBodyH : TAB_H;
+  return sx >= panelX && sx <= screenW - TAB_W && sy >= panelY && sy <= panelY + bodyH;
+}
+
+// Track last drawn panel body height for hit testing
+let _lastPanelBodyH = 0;
+
+// Track docked state for greying out tabs
+let _panelsDocked = false;
+let _panelsStarIndex: number | null = null;
+
+/** Called before drawing to set panel context */
+export function setPanelContext(docked: boolean, starIndex: number | null): void {
+  _panelsDocked = docked;
+  _panelsStarIndex = starIndex;
+}
+
+// Hit test helpers for interactive panels (called from hitTestPlanetPanels)
+function hitTestBuildPanel(sx: number, sy: number): void {
+  // Check COMPLETE button
+  if (_completeButton) {
+    const cb = _completeButton;
+    if (sx >= cb.x && sx <= cb.x + cb.w && sy >= cb.y && sy <= cb.y + cb.h) {
+      _pendingCompleteBuilds = true;
+      return;
+    }
+  }
+  // Check extension buttons
+  for (const btn of _lastExtensionButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      if (btn.enabled) {
+        _pendingExtensionAction = btn.action;
+      }
+      return;
+    }
+  }
+}
+
+function hitTestShipsPanel(sx: number, sy: number): void {
+  for (const btn of _lastShipButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      if (btn.enabled) {
+        if (btn.isUpgrade && btn.upgradeFromTypeId != null) {
+          _pendingUpgradeShipRequest = { fromTypeId: btn.upgradeFromTypeId };
+        } else {
+          _pendingBuyShipRequest = { shipTypeId: btn.shipTypeId, quantity: 1 };
+        }
+      }
+      return;
+    }
+  }
+}
+
+// Pending extension action from BUILD panel click
+let _pendingExtensionAction: string | null = null;
+export function consumePendingExtensionAction(): string | null {
+  const a = _pendingExtensionAction;
+  _pendingExtensionAction = null;
+  return a;
 }
 
 function drawPlanetPanels(
@@ -2226,101 +2324,570 @@ function drawPlanetPanels(
   screenH: number,
   statusRows: string[],
 ) {
-  _lastStatusRows = statusRows;
-  const panels = getPlanetPanels(statusRows);
   const tabRects = getPanelTabRects(screenH);
   const tabX = screenW - TAB_W;
 
   ctx.save();
 
-  for (let i = 0; i < panels.length; i++) {
-    const p = panels[i];
+  for (let i = 0; i < PANEL_TABS.length; i++) {
+    const tab = PANEL_TABS[i];
     const rect = tabRects[i];
-    if (!p || !rect) continue;
+    if (!tab || !rect) continue;
     const ty = rect.y;
     const isOpen = _openPanel === i;
+    const isDisabled = tab.requiresDock && !_panelsDocked;
 
     // ── Tab (vertical, right edge) ──
     ctx.fillStyle = isOpen ? 'rgba(0, 30, 15, 0.9)' : 'rgba(0, 10, 5, 0.7)';
     roundedRect(ctx, tabX - 4, ty, TAB_W + 4, TAB_H, 4);
     ctx.fill();
 
-    ctx.strokeStyle = isOpen ? G_BRIGHT : G_DIM;
+    ctx.strokeStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : G_DIM;
     ctx.lineWidth = 1.5;
     roundedRect(ctx, tabX - 4, ty, TAB_W + 4, TAB_H, 4);
     ctx.stroke();
 
     // Icon at top of tab
-    ctx.font = '14px monospace';
+    ctx.font = '12px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = isOpen ? G_BRIGHT : G_MED;
-    ctx.fillText(p.icon, tabX + TAB_W / 2, ty + 18);
+    ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : G_MED;
+    ctx.fillText(tab.icon, tabX + TAB_W / 2, ty + 16);
 
     // Vertical title text
     ctx.save();
-    ctx.translate(tabX + TAB_W / 2, ty + TAB_H / 2 + 8);
+    ctx.translate(tabX + TAB_W / 2, ty + TAB_H / 2 + 6);
     ctx.rotate(-Math.PI / 2);
-    ctx.font = 'bold 7px monospace';
+    ctx.font = 'bold 6px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = isOpen ? G_BRIGHT : G_DIM;
-    ctx.fillText(p.title, 0, 0);
+    ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : G_DIM;
+    ctx.fillText(tab.title, 0, 0);
     ctx.restore();
 
-    // Arrow indicator
-    ctx.font = '10px monospace';
-    ctx.fillStyle = isOpen ? G_BRIGHT : G_DIM;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(isOpen ? '\u203A' : '\u2039', tabX + TAB_W / 2, ty + TAB_H - 10);
-
-    // ── Slide-out body (only when open) ──
-    if (isOpen) {
-      const bodyH = p.rows.length * ROW_H + PANEL_PAD * 2 + 22;
-      const panelX = screenW - TAB_W - PANEL_W;
+    // ── Slide-out body (only when open and not disabled) ──
+    if (isOpen && !isDisabled) {
+      const panelW = getEffectivePanelW(i, screenW);
+      const panelX = screenW - TAB_W - panelW;
       const panelY = ty;
-      const drawH = Math.max(bodyH, TAB_H);
 
-      // Panel background
-      ctx.fillStyle = 'rgba(0, 10, 5, 0.88)';
-      roundedRect(ctx, panelX, panelY, PANEL_W, drawH, 4);
-      ctx.fill();
-
-      ctx.strokeStyle = G_BRIGHT;
-      ctx.lineWidth = 1;
-      roundedRect(ctx, panelX, panelY, PANEL_W, drawH, 4);
-      ctx.stroke();
-
-      // Panel title
-      ctx.font = 'bold 10px monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      ctx.fillStyle = G_BRIGHT;
-      ctx.fillText(`${p.icon} ${p.title}`, panelX + PANEL_PAD, panelY + PANEL_PAD);
-
-      // Separator line
-      ctx.strokeStyle = G_DIM;
-      ctx.lineWidth = 0.5;
-      ctx.beginPath();
-      ctx.moveTo(panelX + PANEL_PAD, panelY + 22);
-      ctx.lineTo(panelX + PANEL_W - PANEL_PAD, panelY + 22);
-      ctx.stroke();
-
-      // Rows
-      ctx.font = '8px monospace';
-      ctx.fillStyle = G_MED;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      for (let r = 0; r < p.rows.length; r++) {
-        const row = p.rows[r];
-        if (!row) continue;
-        ctx.fillText(row, panelX + PANEL_PAD, panelY + 28 + r * ROW_H);
+      // Draw panel body based on tab index
+      let bodyH: number;
+      switch (i) {
+        case 0: bodyH = drawStatusPanelBody(ctx, panelX, panelY, panelW, statusRows); break;
+        case 1: bodyH = drawBuildPanelBody(ctx, panelX, panelY, panelW); break;
+        case 2: bodyH = drawShipsPanelBody(ctx, panelX, panelY, panelW); break;
+        case 3: bodyH = drawFleetPanelBody(ctx, panelX, panelY, panelW); break;
+        default: bodyH = TAB_H;
       }
+      _lastPanelBodyH = bodyH;
+    } else if (isOpen && isDisabled) {
+      // Show "DOCK TO ACCESS" message
+      const panelW = getEffectivePanelW(i, screenW);
+      const panelX = screenW - TAB_W - panelW;
+      const panelY = ty;
+      const bodyH = TAB_H;
+      ctx.fillStyle = 'rgba(0, 10, 5, 0.88)';
+      roundedRect(ctx, panelX, panelY, panelW, bodyH, 4);
+      ctx.fill();
+      ctx.strokeStyle = G_FAINT;
+      ctx.lineWidth = 1;
+      roundedRect(ctx, panelX, panelY, panelW, bodyH, 4);
+      ctx.stroke();
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = G_FAINT;
+      ctx.fillText('DOCK TO ACCESS', panelX + panelW / 2, panelY + bodyH / 2);
+      _lastPanelBodyH = bodyH;
     }
   }
 
   ctx.restore();
+}
+
+// ── Panel body renderers ──────────────────────────────────────────────────
+
+function drawPanelFrame(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  title: string, icon: string,
+): void {
+  ctx.fillStyle = 'rgba(0, 10, 5, 0.88)';
+  roundedRect(ctx, x, y, w, h, 4);
+  ctx.fill();
+  ctx.strokeStyle = G_BRIGHT;
+  ctx.lineWidth = 1;
+  roundedRect(ctx, x, y, w, h, 4);
+  ctx.stroke();
+
+  // Title
+  ctx.font = 'bold 9px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText(`${icon} ${title}`, x + PANEL_PAD, y + PANEL_PAD);
+
+  // Separator
+  ctx.strokeStyle = G_DIM;
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(x + PANEL_PAD, y + 22);
+  ctx.lineTo(x + w - PANEL_PAD, y + 22);
+  ctx.stroke();
+}
+
+/** STATUS panel: resources, fuel, shields */
+function drawStatusPanelBody(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+  statusRows: string[],
+): number {
+  const bodyH = Math.max(TAB_H, statusRows.length * ROW_H + PANEL_PAD * 2 + 24);
+  drawPanelFrame(ctx, x, y, w, bodyH, 'STATUS', '\u25B3');
+
+  ctx.font = '8px monospace';
+  ctx.fillStyle = G_MED;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  for (let r = 0; r < statusRows.length; r++) {
+    const row = statusRows[r];
+    if (!row) continue;
+    ctx.fillText(row, x + PANEL_PAD, y + 28 + r * ROW_H);
+  }
+  return bodyH;
+}
+
+/** BUILD panel: starbase extension upgrade buttons */
+function drawBuildPanelBody(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  const starIndex = _panelsStarIndex;
+  const serverEcon = starIndex != null ? _serverEconomyByStarIndex.get(starIndex) : undefined;
+  const nowMs = Date.now();
+
+  // Calculate height: header + resource row + extension grid (2 rows of 3)
+  const extBtnH = 52;
+  const extGap = 6;
+  const gridRows = 2;
+  const bodyH = 28 + 16 + gridRows * (extBtnH + extGap) + 20;
+
+  drawPanelFrame(ctx, x, y, w, bodyH, 'BUILD', '\u2302');
+
+  // Resource readout
+  const oreNow = Math.floor(serverEcon?.store.ore ?? 0);
+  const foodNow = Math.floor(serverEcon?.store.food ?? 0);
+  const energyNow = Math.floor(serverEcon?.store.energy ?? 0);
+  const stationLevel = serverEcon?.buildings.station.level ?? 1;
+  ctx.font = '7px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = G_MED;
+  ctx.fillText(`STATION LV ${toRoman(stationLevel)}  O:${oreNow} F:${foodNow} E:${energyNow}`, x + PANEL_PAD, y + 28);
+
+  // COMPLETE button (if any build in progress)
+  const hasActiveBuild = serverEcon
+    ? Object.values(serverEcon.buildings).some((b) => b.status === 'UPGRADING')
+    : false;
+  const fleetState = starIndex != null ? _serverShipsByStarIndex.get(starIndex) : null;
+  const buildingShip = fleetState?.building ?? null;
+  const hasActiveShipBuild = buildingShip != null && buildingShip.completeAt > Date.now();
+  if (hasActiveBuild || hasActiveShipBuild) {
+    const cbW = 54;
+    const cbH = 12;
+    const cbX = x + w - cbW - PANEL_PAD;
+    const cbY = y + 26;
+    _completeButton = { x: cbX, y: cbY, w: cbW, h: cbH };
+    roundedRect(ctx, cbX, cbY, cbW, cbH, 2);
+    ctx.fillStyle = 'rgba(80, 40, 0, 0.6)';
+    ctx.fill();
+    roundedRect(ctx, cbX, cbY, cbW, cbH, 2);
+    ctx.strokeStyle = '#ffb84d';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.font = 'bold 6px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffb84d';
+    ctx.fillText('COMPLETE', cbX + cbW / 2, cbY + cbH / 2);
+  } else {
+    _completeButton = null;
+  }
+
+  // Extension grid: 3 columns x 2 rows
+  const gridStartY = y + 44;
+  const cols = 3;
+  const extBtnW = Math.floor((w - PANEL_PAD * 2 - (cols - 1) * extGap) / cols);
+  const gridStartX = x + PANEL_PAD;
+
+  const stationReady = _panelsDocked; // simplified: docked = can build
+
+  _lastExtensionButtons = [];
+  for (const [idx, ext] of MOCK_EXTENSION_DEFS.entries()) {
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    const bx = gridStartX + col * (extBtnW + extGap);
+    const by = gridStartY + row * (extBtnH + extGap);
+
+    const isStationUpgrade = ext.action === 'upgrade_station';
+    const serverBuilding = serverEcon?.buildings[ext.key];
+    const level = serverBuilding?.level ?? 0;
+    const maxBuildingLevel = Math.min(MAX_STATION_LEVEL, serverEcon?.buildings.station.level ?? 1);
+    const nextLevel = Math.min(MAX_STATION_LEVEL, level + 1);
+    const isMaxLevel = isStationUpgrade ? level >= MAX_STATION_LEVEL : level >= maxBuildingLevel;
+    const effectiveCost = isStationUpgrade
+      ? {
+          ore: 420 + STATION_UPGRADE_COST_STEP.ore * Math.max(0, level - 1),
+          food: 420 + STATION_UPGRADE_COST_STEP.food * Math.max(0, level - 1),
+          energy: 420 + STATION_UPGRADE_COST_STEP.energy * Math.max(0, level - 1),
+        }
+      : {
+          ore: ext.cost.ore * nextLevel,
+          food: ext.cost.food * nextLevel,
+          energy: ext.cost.energy * nextLevel,
+        };
+    const activeBuildCount = serverEcon
+      ? Object.values(serverEcon.buildings).filter((c) => c.status === 'UPGRADING').length
+      : 0;
+    const canAfford = serverEcon
+      ? serverEcon.store.ore >= effectiveCost.ore && serverEcon.store.food >= effectiveCost.food && serverEcon.store.energy >= effectiveCost.energy
+      : false;
+    const isActive = serverBuilding ? serverBuilding.status === 'UPGRADING' : false;
+    const isLocked = serverBuilding ? serverBuilding.status === 'LOCKED' : true;
+    const progress = serverBuilding && serverBuilding.status === 'UPGRADING' && serverBuilding.completeAt != null
+      ? Math.max(0, Math.min(100, Math.floor(((ext.buildMs - Math.max(0, serverBuilding.completeAt - nowMs)) / ext.buildMs) * 100)))
+      : 0;
+    const enabled = stationReady && canAfford && !isActive && !isMaxLevel && !isLocked && activeBuildCount === 0;
+    const tierLabel = `${ext.label} ${toRoman(nextLevel)}`;
+
+    _lastExtensionButtons.push({ action: ext.action, label: tierLabel, x: bx, y: by, w: extBtnW, h: extBtnH, enabled });
+
+    roundedRect(ctx, bx, by, extBtnW, extBtnH, 3);
+    ctx.fillStyle = enabled ? 'rgba(20, 80, 60, 0.6)' : 'rgba(20, 35, 30, 0.5)';
+    ctx.fill();
+    roundedRect(ctx, bx, by, extBtnW, extBtnH, 3);
+    ctx.strokeStyle = enabled ? G_BRIGHT : isMaxLevel ? G_MED : G_FAINT;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = enabled ? G_BRIGHT : G_MED;
+    ctx.font = 'bold 7px monospace';
+    ctx.fillText(tierLabel, bx + extBtnW / 2, by + 4);
+
+    ctx.font = '6px monospace';
+    if (isMaxLevel) {
+      ctx.fillStyle = G_MED;
+      ctx.fillText(isStationUpgrade ? 'MAX' : `LV ${toRoman(level)}`, bx + extBtnW / 2, by + 18);
+    } else if (isActive) {
+      ctx.fillStyle = G_MED;
+      ctx.fillText(`${progress}%`, bx + extBtnW / 2, by + 18);
+      const barX = bx + 4;
+      const barY = by + 30;
+      const barW = extBtnW - 8;
+      const fillW = Math.floor((barW * progress) / 100);
+      ctx.fillStyle = 'rgba(79, 255, 176, 0.2)';
+      ctx.fillRect(barX, barY, barW, 5);
+      ctx.fillStyle = G_BRIGHT;
+      ctx.fillRect(barX, barY, fillW, 5);
+    } else {
+      ctx.fillStyle = G_DIM;
+      ctx.fillText(`${effectiveCost.ore}/${effectiveCost.food}/${effectiveCost.energy}`, bx + extBtnW / 2, by + 18);
+      const isBusy = activeBuildCount > 0 && !isActive;
+      const statusLabel = enabled
+        ? (level >= 1 ? 'UPGRADE' : 'BUILD')
+        : isBusy
+          ? (level >= 1 ? `LV ${toRoman(level)}` : 'BUSY')
+          : isLocked ? 'LOCKED' : 'NEED RES';
+      ctx.fillStyle = enabled ? G_BRIGHT : G_MED;
+      ctx.fillText(statusLabel, bx + extBtnW / 2, by + 30);
+    }
+  }
+
+  return bodyH;
+}
+
+/** SHIPS panel: ship build grid + upgrade section */
+function drawShipsPanelBody(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  ensureShipIconsLoaded();
+  const starIndex = _panelsStarIndex;
+  const serverEcon = starIndex != null ? _serverEconomyByStarIndex.get(starIndex) : undefined;
+  const fleetState = starIndex != null ? _serverShipsByStarIndex.get(starIndex) : null;
+  const fleetShips = fleetState?.ships ?? [];
+  const buildingShip = fleetState?.building ?? null;
+  const dockLevel = serverEcon?.buildings.dock?.level ?? 0;
+  const nowMs = Date.now();
+
+  // Check if player has any ship on the upgrade path
+  const hasUpgradePathShip = fleetShips.some(
+    (s) => s.count > 0 && UPGRADE_PATH.includes(s.typeId as any),
+  );
+
+  // Show Basic Probe (11) and Colony Ship (8); also show Scout (1) if player has no upgrade-path ship
+  const SHOWN_BUILD_IDS = hasUpgradePathShip ? [11, 8] : [1, 11, 8];
+  const availableShips = Object.values(SHIP_CATALOG).filter(
+    (entry) => SHOWN_BUILD_IDS.includes(entry.id) && entry.dockTier <= dockLevel && entry.dockLevel <= dockLevel,
+  );
+  const cols = 2;
+  const cellW = Math.floor((w - PANEL_PAD * 2 - 6) / cols);
+  const cellH = 56;
+  const cellGap = 6;
+
+  // Upgrade section (player's ship on upgrade path) — shown at top
+  const upgradeEntries: { from: typeof SHIP_CATALOG[keyof typeof SHIP_CATALOG]; to: typeof SHIP_CATALOG[keyof typeof SHIP_CATALOG]; dockLocked: boolean }[] = [];
+  for (const ship of fleetShips) {
+    if (ship.count <= 0) continue;
+    const pathIdx = UPGRADE_PATH.indexOf(ship.typeId as any);
+    if (pathIdx >= 0 && pathIdx < UPGRADE_PATH.length - 1) {
+      const nextTypeId = UPGRADE_PATH[pathIdx + 1]!;
+      const fromEntry = SHIP_CATALOG[ship.typeId as keyof typeof SHIP_CATALOG];
+      const toEntry = SHIP_CATALOG[nextTypeId as keyof typeof SHIP_CATALOG];
+      if (fromEntry && toEntry) {
+        upgradeEntries.push({ from: fromEntry, to: toEntry, dockLocked: toEntry.dockLevel > dockLevel });
+      }
+    }
+  }
+
+  // Calculate body height: upgrade section first, then build grid
+  // Check if there's an active upgrade build to show even without upgradeEntries
+  const isUpgradeBuildActive = buildingShip != null && UPGRADE_PATH.includes(buildingShip.typeId as any) && buildingShip.completeAt > nowMs;
+  const upgradeDisplayH = (upgradeEntries.length > 0 || isUpgradeBuildActive) ? 16 + (cellH + cellGap) : 0;
+  const buildRows = Math.ceil(availableShips.length / cols);
+  const buildH = buildRows > 0 ? 16 + buildRows * (cellH + cellGap) : 0;
+  const bodyH = 28 + upgradeDisplayH + buildH + 12;
+
+  drawPanelFrame(ctx, x, y, w, bodyH, 'SHIPS', '\u{1F680}');
+
+  // Header: dock level
+  ctx.font = '7px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = G_MED;
+  ctx.fillText(dockLevel > 0 ? `DOCK LV ${toRoman(dockLevel)}` : 'NO DOCK', x + PANEL_PAD, y + 28);
+
+  _lastShipButtons = [];
+  const gridStartX = x + PANEL_PAD;
+  let cursorY = y + 40;
+
+  // ── UPGRADE section (top, orange) ──
+  if (upgradeEntries.length > 0 || isUpgradeBuildActive) {
+    ctx.font = 'bold 7px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#ffb84d';
+    ctx.fillText('UPGRADE', x + PANEL_PAD, cursorY);
+    cursorY += 12;
+
+    // Show active upgrade build progress
+    if (isUpgradeBuildActive && upgradeEntries.length === 0) {
+      const buildCatalog = SHIP_CATALOG[buildingShip!.typeId as keyof typeof SHIP_CATALOG];
+      if (buildCatalog) {
+        const bx = gridStartX;
+        const by = cursorY;
+        const fullW = w - PANEL_PAD * 2;
+
+        roundedRect(ctx, bx, by, fullW, cellH, 3);
+        ctx.fillStyle = 'rgba(60, 50, 10, 0.5)';
+        ctx.fill();
+        roundedRect(ctx, bx, by, fullW, cellH, 3);
+        ctx.strokeStyle = '#ffb84d';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        const icon = getShipIcon(buildCatalog.icon);
+        if (icon) {
+          ctx.drawImage(icon, bx + 4, by + cellH - 28, 24, 24);
+        }
+
+        const remaining = Math.max(0, Math.ceil((buildingShip!.completeAt - nowMs) / 1000));
+        const totalBuild = buildCatalog.buildSeconds;
+        const progress = Math.max(0, Math.min(100, Math.floor(((totalBuild - remaining) / totalBuild) * 100)));
+
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.font = 'bold 7px monospace';
+        ctx.fillStyle = '#ffb84d';
+        ctx.fillText(`UPGRADING \u2192 ${buildCatalog.name.toUpperCase()}`, bx + 32, by + 6);
+        ctx.font = '6px monospace';
+        ctx.fillText(`${progress}% (${remaining}s)`, bx + 32, by + 18);
+
+        const barX = bx + 32;
+        const barW = fullW - 40;
+        const fillW = Math.floor((barW * progress) / 100);
+        ctx.fillStyle = 'rgba(255, 184, 77, 0.2)';
+        ctx.fillRect(barX, by + 30, barW, 4);
+        ctx.fillStyle = '#ffb84d';
+        ctx.fillRect(barX, by + 30, fillW, 4);
+      }
+    }
+
+    for (const [idx, ue] of upgradeEntries.entries()) {
+      const bx = gridStartX;
+      const by = cursorY + idx * (cellH + cellGap);
+      const fullW = w - PANEL_PAD * 2;
+
+      const isUpgradeBuild = buildingShip != null && buildingShip.typeId === ue.to.id && buildingShip.completeAt > nowMs;
+      const canAfford = serverEcon
+        ? serverEcon.store.ore >= ue.to.cost.ore && serverEcon.store.food >= ue.to.cost.food && serverEcon.store.energy >= ue.to.cost.energy
+        : false;
+      const isBuilding = buildingShip != null && buildingShip.completeAt > nowMs;
+      const enabled = !isBuilding && canAfford && !ue.dockLocked;
+
+      _lastShipButtons.push({ x: bx, y: by, w: fullW, h: cellH, shipTypeId: ue.to.id, enabled, isUpgrade: true, upgradeFromTypeId: ue.from.id });
+
+      roundedRect(ctx, bx, by, fullW, cellH, 3);
+      ctx.fillStyle = isUpgradeBuild ? 'rgba(60, 50, 10, 0.5)' : enabled ? 'rgba(50, 40, 10, 0.4)' : 'rgba(30, 25, 10, 0.4)';
+      ctx.fill();
+      roundedRect(ctx, bx, by, fullW, cellH, 3);
+      ctx.strokeStyle = isUpgradeBuild ? '#ffb84d' : enabled ? '#ffb84d' : '#665522';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Icon
+      const icon = getShipIcon(ue.to.icon);
+      if (icon) {
+        ctx.drawImage(icon, bx + 4, by + cellH - 28, 24, 24);
+      }
+
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.font = 'bold 7px monospace';
+      ctx.fillStyle = enabled || isUpgradeBuild ? '#ffb84d' : '#997733';
+      ctx.fillText(`${ue.from.name.toUpperCase()} \u2192 ${ue.to.name.toUpperCase()}`, bx + 32, by + 4);
+
+      if (isUpgradeBuild) {
+        const remaining = Math.max(0, Math.ceil((buildingShip!.completeAt - nowMs) / 1000));
+        const totalBuild = ue.to.buildSeconds;
+        const progress = Math.max(0, Math.min(100, Math.floor(((totalBuild - remaining) / totalBuild) * 100)));
+        ctx.font = '6px monospace';
+        ctx.fillStyle = '#ffb84d';
+        ctx.fillText(`UPGRADING ${progress}% (${remaining}s)`, bx + 32, by + 16);
+        const barX = bx + 32;
+        const barW = fullW - 40;
+        const fillW = Math.floor((barW * progress) / 100);
+        ctx.fillStyle = 'rgba(255, 184, 77, 0.2)';
+        ctx.fillRect(barX, by + 28, barW, 4);
+        ctx.fillStyle = '#ffb84d';
+        ctx.fillRect(barX, by + 28, fillW, 4);
+      } else {
+        ctx.font = '6px monospace';
+        ctx.fillStyle = '#997733';
+        ctx.fillText(`${ue.to.cost.ore}/${ue.to.cost.food}/${ue.to.cost.energy}  ${ue.to.buildSeconds}s`, bx + 32, by + 16);
+        const actionLabel = ue.dockLocked ? `NEED DOCK LV ${ue.to.dockLevel}` : enabled ? 'UPGRADE' : 'NEED RES';
+        ctx.fillStyle = enabled ? '#ffb84d' : '#aa7744';
+        ctx.fillText(actionLabel, bx + 32, by + 28);
+      }
+    }
+
+    cursorY += (upgradeEntries.length > 0 ? upgradeEntries.length : 1) * (cellH + cellGap) + 4;
+  }
+
+  // ── BUILD section (Basic Probe + Colony Ship) ──
+  if (availableShips.length > 0) {
+    ctx.font = 'bold 7px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = G_BRIGHT;
+    ctx.fillText('BUILD', x + PANEL_PAD, cursorY);
+    cursorY += 12;
+
+    // Building indicator
+    if (buildingShip && !UPGRADE_PATH.includes(buildingShip.typeId as any)) {
+      const bEntry = SHIP_CATALOG[buildingShip.typeId as keyof typeof SHIP_CATALOG];
+      if (bEntry) {
+        const remaining = Math.max(0, Math.ceil((buildingShip.completeAt - nowMs) / 1000));
+        const totalBuild = bEntry.buildSeconds;
+        const progress = Math.max(0, Math.min(100, Math.floor(((totalBuild - remaining) / totalBuild) * 100)));
+        ctx.fillStyle = G_MED;
+        ctx.font = '7px monospace';
+        ctx.fillText(`BUILDING: ${bEntry.name.toUpperCase()} ${progress}% (${remaining}s)`, x + PANEL_PAD + 40, cursorY - 12);
+      }
+    }
+
+    for (const [idx, entry] of availableShips.entries()) {
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      const bx = gridStartX + col * (cellW + cellGap);
+      const by = cursorY + row * (cellH + cellGap);
+
+      const isBuilding = buildingShip != null && buildingShip.completeAt > nowMs;
+      const canAfford = serverEcon
+        ? serverEcon.store.ore >= entry.cost.ore && serverEcon.store.food >= entry.cost.food && serverEcon.store.energy >= entry.cost.energy
+        : false;
+      const enabled = !isBuilding && canAfford;
+
+      _lastShipButtons.push({ x: bx, y: by, w: cellW, h: cellH, shipTypeId: entry.id, enabled, isUpgrade: false });
+
+      roundedRect(ctx, bx, by, cellW, cellH, 3);
+      ctx.fillStyle = enabled ? 'rgba(20, 60, 80, 0.5)' : 'rgba(15, 25, 35, 0.5)';
+      ctx.fill();
+      roundedRect(ctx, bx, by, cellW, cellH, 3);
+      ctx.strokeStyle = enabled ? G_BRIGHT : G_FAINT;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Ship icon (bottom-left)
+      const icon = getShipIcon(entry.icon);
+      if (icon) {
+        const iconSize = 24;
+        ctx.drawImage(icon, bx + 4, by + cellH - iconSize - 4, iconSize, iconSize);
+      }
+
+      // Ship name + cost
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = enabled ? G_BRIGHT : G_MED;
+      ctx.font = 'bold 7px monospace';
+      ctx.fillText(entry.name.toUpperCase(), bx + 30, by + 4);
+      ctx.font = '6px monospace';
+      ctx.fillStyle = G_DIM;
+      ctx.fillText(`${entry.cost.ore}/${entry.cost.food}/${entry.cost.energy}`, bx + 30, by + 14);
+      ctx.fillText(`${entry.buildSeconds}s  SP:${entry.shipPoints}`, bx + 30, by + 24);
+    }
+  }
+
+  return bodyH;
+}
+
+/** FLEET panel: fleet summary */
+function drawFleetPanelBody(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  const starIndex = _panelsStarIndex;
+  const fleetState = starIndex != null ? _serverShipsByStarIndex.get(starIndex) : null;
+  const fleetShips = fleetState?.ships ?? [];
+
+  const rows: string[] = [];
+  let totalSP = 0;
+  for (const s of fleetShips) {
+    const entry = SHIP_CATALOG[s.typeId as keyof typeof SHIP_CATALOG];
+    if (entry && s.count > 0) {
+      rows.push(`${entry.name.toUpperCase()} x${s.count} (${entry.shipPoints * s.count} SP)`);
+      totalSP += entry.shipPoints * s.count;
+    }
+  }
+  if (rows.length === 0) rows.push('No ships');
+  rows.push(`TOTAL: ${totalSP} SP`);
+
+  const bodyH = Math.max(TAB_H, rows.length * ROW_H + PANEL_PAD * 2 + 24);
+  drawPanelFrame(ctx, x, y, w, bodyH, 'FLEET', '\u2694');
+
+  ctx.font = '8px monospace';
+  ctx.fillStyle = G_MED;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    ctx.fillText(row, x + PANEL_PAD, y + 28 + r * ROW_H);
+  }
+  return bodyH;
 }
 
 /** Draw a tier indicator in the top-right */
@@ -2352,8 +2919,27 @@ export function drawTierHUD(
 
 import type { DockState } from './types';
 import type { DockAction } from './dock';
-import { SHIP_CATALOG, getAvailableShipTypes, getDockTier, getDockTierLevel } from '../shared/ships';
-import type { ShipCatalogEntry } from '../shared/ships';
+import { SHIP_CATALOG, UPGRADE_PATH } from '../shared/ships';
+
+// ── Ship Icon Cache ─────────────────────────────────────────────────────────
+const _shipIconCache = new Map<string, HTMLImageElement>();
+let _shipIconsLoading = false;
+
+function ensureShipIconsLoaded(): void {
+  if (_shipIconsLoading) return;
+  _shipIconsLoading = true;
+  for (const entry of Object.values(SHIP_CATALOG)) {
+    if (_shipIconCache.has(entry.icon)) continue;
+    const img = new Image();
+    img.src = `/icons/${entry.icon}`;
+    _shipIconCache.set(entry.icon, img);
+  }
+}
+
+function getShipIcon(iconFile: string): HTMLImageElement | null {
+  const img = _shipIconCache.get(iconFile);
+  return img && img.complete && img.naturalWidth > 0 ? img : null;
+}
 
 interface DockButton {
   action: DockAction;
@@ -2368,7 +2954,9 @@ interface DockButton {
 let _lastDockButtons: DockButton[] = [];
 
 type DockExtensionAction = 'upgrade_station' | 'extend_habitat' | 'extend_ore' | 'extend_defense' | 'extend_warehouse' | 'extend_dock';
-export type DockPanelAction = DockAction | DockExtensionAction | 'buy_ships';
+export type DockPanelAction = DockAction | DockExtensionAction | 'buy_ships' | 'debug_complete';
+
+let _completeButton: { x: number; y: number; w: number; h: number } | null = null;
 
 type ExtensionButton = {
   action: DockExtensionAction;
@@ -2397,12 +2985,6 @@ const MOCK_EXTENSION_DEFS: MockExtensionState[] = [
   { action: 'extend_dock', label: 'DOCK', key: 'dock', cost: { ore: 500, food: 300, energy: 400 }, buildMs: 600_000 },
 ];
 
-const LEVEL_ONE_TARGET_MINUTES = 5;
-const LEVEL_ONE_MAX_COST = {
-  ore: Math.max(...MOCK_EXTENSION_DEFS.map((def) => def.cost.ore)),
-  food: Math.max(...MOCK_EXTENSION_DEFS.map((def) => def.cost.food)),
-  energy: Math.max(...MOCK_EXTENSION_DEFS.map((def) => def.cost.energy)),
-};
 let _lastExtensionButtons: ExtensionButton[] = [];
 
 type ServerEconomySnapshot = {
@@ -2424,6 +3006,8 @@ const _serverEconomyByStarIndex = new Map<number, ServerEconomySnapshot>();
 let _lastEconomyStarIndex: number | null = null;
 let _pendingBuildRequest: { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' } | null = null;
 let _pendingBuyShipRequest: { shipTypeId: number; quantity: number } | null = null;
+let _pendingUpgradeShipRequest: { fromTypeId: number } | null = null;
+let _pendingCompleteBuilds = false;
 
 export function setServerStarEconomy(snapshot: ServerEconomySnapshot): void {
   _serverEconomyByStarIndex.set(snapshot.starIndex, snapshot);
@@ -2452,6 +3036,18 @@ export function consumePendingBuildRequest(): { buildType: 'station' | 'mine' | 
 export function consumePendingBuyShipRequest(): { shipTypeId: number; quantity: number } | null {
   const next = _pendingBuyShipRequest;
   _pendingBuyShipRequest = null;
+  return next;
+}
+
+export function consumePendingUpgradeShipRequest(): { fromTypeId: number } | null {
+  const next = _pendingUpgradeShipRequest;
+  _pendingUpgradeShipRequest = null;
+  return next;
+}
+
+export function consumePendingCompleteBuilds(): boolean {
+  const next = _pendingCompleteBuilds;
+  _pendingCompleteBuilds = false;
   return next;
 }
 
@@ -2513,14 +3109,14 @@ export function triggerDockPanelAction(action: DockPanelAction, dock?: DockState
     // Ship panel triggered — handled by game loop
     return true;
   }
+  if (action === 'debug_complete') {
+    // Complete builds — already set _pendingCompleteBuilds in hitTest
+    return true;
+  }
   return false;
 }
 
 const DOCK_ACTIONS: { action: DockAction; label: string; icon: string }[] = [
-  { action: 'contact', label: 'CONTACT', icon: '\u{1F4E1}' }, // 📡
-  { action: 'trade',   label: 'TRADE',   icon: '\u{1F4E6}' }, // 📦
-  { action: 'missions',label: 'MISSIONS',icon: '\u2605' },     // ★
-  { action: 'ships',   label: 'SHIPS',   icon: '\u{1F680}' }, // 🚀
   { action: 'scan',    label: 'SCAN',    icon: '\u25CE' },     // ◎
   { action: 'leave',   label: 'LEAVE',   icon: '\u2191' },     // ↑
 ];
@@ -2528,7 +3124,7 @@ const DOCK_ACTIONS: { action: DockAction; label: string; icon: string }[] = [
 export function drawDockPanel(
   r: Renderer,
   dock: DockState,
-  body: SystemBody | null,
+  _body: SystemBody | null,
   starIndex?: number,
 ): void {
   const { ctx } = r;
@@ -2536,283 +3132,78 @@ export function drawDockPanel(
   const screenW = r.width / dpr;
   const screenH = r.height / dpr;
 
-  // Panel dimensions
-  const panelH = 192;
-  const panelW = Math.min(screenW - 24, 480);
-  const panelX = (screenW - panelW) / 2;
-  const panelY = screenH - panelH - 12;
-
-  const nowMs = Date.now();
   _lastEconomyStarIndex = starIndex ?? null;
 
-  // Panel background
+  // Set panel context for right-side tabs
+  setPanelContext(dock.docked, starIndex ?? null);
+
+  // Minimal orbit bar at bottom
+  const barH = 32;
+  const barW = Math.min(screenW - 24, 320);
+  const barX = (screenW - barW) / 2;
+  const barY = screenH - barH - 8;
+
   ctx.save();
-  ctx.fillStyle = 'rgba(0, 10, 5, 0.92)';
-  ctx.strokeStyle = G_BRIGHT;
-  ctx.lineWidth = 1.5;
-  roundedRect(ctx, panelX, panelY, panelW, panelH, 4);
+  ctx.fillStyle = 'rgba(0, 10, 5, 0.85)';
+  ctx.strokeStyle = G_DIM;
+  ctx.lineWidth = 1;
+  roundedRect(ctx, barX, barY, barW, barH, 4);
   ctx.fill();
   ctx.stroke();
 
-  // "ORBIT ESTABLISHED" header line
-  const headerY = panelY + 16;
-  const lineW = panelW * 0.25;
-  ctx.strokeStyle = G_DIM;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(panelX + 12, headerY);
-  ctx.lineTo(panelX + lineW, headerY);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(panelX + panelW - lineW, headerY);
-  ctx.lineTo(panelX + panelW - 12, headerY);
-  ctx.stroke();
-
-  const headerText = `ORBIT: ${dock.targetName.toUpperCase()}`;
-  ctx.font = 'bold 10px monospace';
+  // Orbit status text
+  ctx.font = 'bold 9px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
   ctx.fillStyle = G_BRIGHT;
-  ctx.fillText(headerText, screenW / 2, headerY);
+  ctx.fillText(`\u25CF ORBIT: ${dock.targetName.toUpperCase()}`, barX + 10, barY + barH / 2);
 
-  // Action buttons
-  const btnCount = DOCK_ACTIONS.length;
-  const btnW = 56;
-  const btnH = 52;
-  const btnGap = 8;
-  const totalBtnW = btnCount * btnW + (btnCount - 1) * btnGap;
-  const btnStartX = (screenW - totalBtnW) / 2;
-  const btnY = panelY + 28;
+  // Action buttons (SCAN + LEAVE) on right side of bar
+  const btnW = 48;
+  const btnH = 22;
+  const btnGap = 6;
+  const btnY = barY + (barH - btnH) / 2;
 
   _lastDockButtons = [];
-
   for (const [i, act] of DOCK_ACTIONS.entries()) {
-    const bx = btnStartX + i * (btnW + btnGap);
+    const bx = barX + barW - (DOCK_ACTIONS.length - i) * (btnW + btnGap);
     const by = btnY;
 
     _lastDockButtons.push({ ...act, x: bx, y: by, w: btnW, h: btnH });
 
-    const isLeave = act.action === 'leave';
-    const isStub = !dock.docked || (!isLeave && act.action !== 'scan' && act.action !== 'ships');
-
-    // Button border
-    ctx.strokeStyle = isStub ? G_FAINT : G_BRIGHT;
-    ctx.lineWidth = 1.5;
+    const enabled = dock.docked || act.action === 'leave';
+    ctx.strokeStyle = enabled ? G_BRIGHT : G_FAINT;
+    ctx.lineWidth = 1;
     roundedRect(ctx, bx, by, btnW, btnH, 3);
     ctx.stroke();
 
-    // Icon
-    ctx.font = '18px monospace';
+    ctx.font = '10px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = isStub ? G_FAINT : G_BRIGHT;
-    ctx.fillText(act.icon, bx + btnW / 2, by + 20);
-
-    // Label
-    ctx.font = '8px monospace';
-    ctx.fillStyle = isStub ? G_FAINT : G_MED;
-    ctx.fillText(act.label, bx + btnW / 2, by + btnH - 8);
-  }
-
-  // Status text
-  const statusText = dock.docked
-    ? `You are in a stable orbit around ${dock.targetName}.`
-    : `Approaching ${dock.targetName}...`;
-  ctx.font = '9px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.fillStyle = G_DIM;
-  ctx.fillText(statusText, screenW / 2, panelY + 84);
-
-  // Fleet summary row
-  const fleetState = starIndex != null ? _serverShipsByStarIndex.get(starIndex) : null;
-  const fleetShips = fleetState?.ships ?? [];
-  const buildingShip = fleetState?.building ?? null;
-  if (fleetShips.length > 0 || buildingShip) {
-    ctx.font = '7px monospace';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = G_MED;
-    let fleetStr = 'FLEET:';
-    for (const s of fleetShips) {
-      const entry = SHIP_CATALOG[s.typeId as keyof typeof SHIP_CATALOG];
-      if (entry && s.count > 0) fleetStr += ` ${entry.name.toUpperCase()}x${s.count}`;
-    }
-    if (buildingShip) {
-      const bEntry = SHIP_CATALOG[buildingShip.typeId as keyof typeof SHIP_CATALOG];
-      const remaining = Math.max(0, Math.ceil((buildingShip.completeAt - Date.now()) / 1000));
-      if (bEntry) fleetStr += ` [${bEntry.name.toUpperCase()} ${remaining}s]`;
-    }
-    ctx.fillText(fleetStr, panelX + 12, panelY + 96);
-  }
-
-  // Mock starbase extension strip (lower section).
-  const extY = panelY + 112;
-  const extBtnH = 48;
-  const extGap = 8;
-  const extCount = MOCK_EXTENSION_DEFS.length;
-  const extBtnW = Math.floor((panelW - 24 - (extCount - 1) * extGap) / extCount);
-  const extStartX = panelX + 12;
-  ctx.font = '8px monospace';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillStyle = G_MED;
-  const serverEcon = starIndex != null ? _serverEconomyByStarIndex.get(starIndex) : undefined;
-  const stationReady = isDockedAtStation(dock);
-  const oreNow = Math.floor(serverEcon?.store.ore ?? 0);
-  const foodNow = Math.floor(serverEcon?.store.food ?? 0);
-  const energyNow = Math.floor(serverEcon?.store.energy ?? 0);
-  const stationLevel = serverEcon?.buildings.station.level ?? 1;
-  const stationTag = stationReady ? `STATION LV ${toRoman(stationLevel)}` : 'DOCK AT STATION TO BUILD';
-  ctx.fillText(`STARBASE EXTENSIONS  ${stationTag}  O:${oreNow} F:${foodNow} E:${energyNow}`, panelX + 12, extY - 10);
-
-  _lastExtensionButtons = [];
-  for (const [idx, ext] of MOCK_EXTENSION_DEFS.entries()) {
-    const bx = extStartX + idx * (extBtnW + extGap);
-    const isStationUpgrade = ext.action === 'upgrade_station';
-    const serverBuilding = serverEcon?.buildings[ext.key];
-    const level = serverBuilding?.level ?? 0;
-    const maxBuildingLevel = Math.min(MAX_STATION_LEVEL, serverEcon?.buildings.station.level ?? 1);
-    const nextLevel = Math.min(MAX_STATION_LEVEL, level + 1);
-    const isMaxLevel = isStationUpgrade ? level >= MAX_STATION_LEVEL : level >= maxBuildingLevel;
-    const effectiveCost = isStationUpgrade
-      ? {
-          ore: 420 + STATION_UPGRADE_COST_STEP.ore * Math.max(0, level - 1),
-          food: 420 + STATION_UPGRADE_COST_STEP.food * Math.max(0, level - 1),
-          energy: 420 + STATION_UPGRADE_COST_STEP.energy * Math.max(0, level - 1),
-        }
-      : {
-          ore: ext.cost.ore * nextLevel,
-          food: ext.cost.food * nextLevel,
-          energy: ext.cost.energy * nextLevel,
-        };
-    const activeBuildCount = serverEcon
-      ? Object.values(serverEcon.buildings).filter((candidate) => candidate.status === 'UPGRADING').length
-      : 0;
-    const canAfford = serverEcon
-      ? serverEcon.store.ore >= effectiveCost.ore && serverEcon.store.food >= effectiveCost.food && serverEcon.store.energy >= effectiveCost.energy
-      : false;
-    const isActive = serverBuilding ? serverBuilding.status === 'UPGRADING' : false;
-    const isLocked = serverBuilding ? serverBuilding.status === 'LOCKED' : true;
-    const progress = serverBuilding && serverBuilding.status === 'UPGRADING' && serverBuilding.completeAt != null
-      ? Math.max(0, Math.min(100, Math.floor(((ext.buildMs - Math.max(0, serverBuilding.completeAt - nowMs)) / ext.buildMs) * 100)))
-      : 0;
-    const enabled = stationReady && canAfford && !isActive && !isMaxLevel && !isLocked && activeBuildCount === 0;
-    const tierLabel = isStationUpgrade ? `${ext.label} ${toRoman(nextLevel)}` : `${ext.label} ${toRoman(nextLevel)}`;
-
-    _lastExtensionButtons.push({
-      action: ext.action,
-      label: tierLabel,
-      x: bx,
-      y: extY,
-      w: extBtnW,
-      h: extBtnH,
-      enabled,
-    });
-
-    roundedRect(ctx, bx, extY, extBtnW, extBtnH, 3);
-    ctx.fillStyle = enabled ? 'rgba(20, 80, 60, 0.6)' : 'rgba(20, 35, 30, 0.5)';
-    ctx.fill();
-    roundedRect(ctx, bx, extY, extBtnW, extBtnH, 3);
-    ctx.strokeStyle = enabled ? G_BRIGHT : isMaxLevel ? G_MED : G_FAINT;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = enabled ? G_BRIGHT : G_MED;
-    ctx.font = 'bold 8px monospace';
-    ctx.fillText(tierLabel, bx + extBtnW / 2, extY + 4);
+    ctx.fillStyle = enabled ? G_BRIGHT : G_FAINT;
+    ctx.fillText(act.icon, bx + 12, by + btnH / 2);
 
     ctx.font = '7px monospace';
-    if (isMaxLevel) {
-      ctx.fillStyle = G_MED;
-      if (isStationUpgrade) {
-        ctx.fillText('MAX LV VIII', bx + extBtnW / 2, extY + 18);
-      } else {
-        ctx.fillText(`BUILT LV ${toRoman(level)}`, bx + extBtnW / 2, extY + 18);
-        ctx.fillStyle = G_DIM;
-        ctx.fillText('UPGRADE STATION', bx + extBtnW / 2, extY + 32);
-      }
-    } else if (isActive) {
-      ctx.fillStyle = G_MED;
-      ctx.fillText(`${progress}%`, bx + extBtnW / 2, extY + 18);
-      const barX = bx + 6;
-      const barY = extY + 32;
-      const barW = extBtnW - 12;
-      const fillW = Math.floor((barW * progress) / 100);
-      ctx.fillStyle = 'rgba(79, 255, 176, 0.2)';
-      ctx.fillRect(barX, barY, barW, 6);
-      ctx.fillStyle = G_BRIGHT;
-      ctx.fillRect(barX, barY, fillW, 6);
-    } else {
-      ctx.fillStyle = G_MED;
-      ctx.fillText(`C:${effectiveCost.ore}/${effectiveCost.food}/${effectiveCost.energy}`, bx + extBtnW / 2, extY + 18);
-      const isBusy = activeBuildCount > 0 && !isActive;
-      const statusLabel = !stationReady
-        ? 'DOCK STATION'
-        : enabled
-          ? (level >= 1 ? 'UPGRADE' : 'BUILD')
-          : isBusy
-            ? (level >= 1 ? `BUILT LV ${toRoman(level)}` : 'BUSY')
-            : 'LOCKED';
-      ctx.fillStyle = enabled ? G_BRIGHT : G_DIM;
-      ctx.fillText(statusLabel, bx + extBtnW / 2, extY + 32);
-    }
+    ctx.fillText(act.label, bx + 32, by + btnH / 2);
   }
 
   ctx.restore();
 }
 
-/** Hit-test dock panel buttons. Returns the action if a button was clicked, null otherwise. */
+/** Hit-test dock panel buttons (orbit bar). Returns the action if clicked, null otherwise. */
 export function hitTestDockPanel(screenPos: Vec2): DockPanelAction | null {
-  // Check ship panel buttons first (on top)
-  if (_shipPanelOpen) {
-    for (const btn of _lastShipButtons) {
-      if (
-        screenPos.x >= btn.x && screenPos.x <= btn.x + btn.w &&
-        screenPos.y >= btn.y && screenPos.y <= btn.y + btn.h
-      ) {
-        if (btn.enabled) {
-          _pendingBuyShipRequest = { shipTypeId: btn.shipTypeId, quantity: 1 };
-          return 'buy_ships';
-        }
-        return 'ships'; // consume click even if can't afford
-      }
-    }
-    // Click was outside ship buttons — close panel, fall through to dock buttons
-    _shipPanelOpen = false;
-  }
-
-  for (const btn of _lastExtensionButtons) {
-    if (
-      screenPos.x >= btn.x && screenPos.x <= btn.x + btn.w &&
-      screenPos.y >= btn.y && screenPos.y <= btn.y + btn.h
-    ) {
-      if (btn.enabled) return btn.action;
-      return null;
-    }
-  }
-
   for (const btn of _lastDockButtons) {
     if (
       screenPos.x >= btn.x && screenPos.x <= btn.x + btn.w &&
       screenPos.y >= btn.y && screenPos.y <= btn.y + btn.h
     ) {
-      if (btn.action === 'ships') {
-        const serverEcon = _lastEconomyStarIndex == null ? null : _serverEconomyByStarIndex.get(_lastEconomyStarIndex);
-        if (serverEcon && serverEcon.buildings.dock.level >= 1) {
-          _shipPanelOpen = !_shipPanelOpen;
-        }
-        return 'ships';
-      }
       return btn.action;
     }
   }
   return null;
 }
 
-// ── Ship Panel ──────────────────────────────────────────────────────────────
-
-let _shipPanelOpen = false;
+// ── Ship Panel (now integrated into right-side SHIPS tab) ───────────────────
 
 type ShipButton = {
   shipTypeId: number;
@@ -2821,144 +3212,22 @@ type ShipButton = {
   w: number;
   h: number;
   enabled: boolean;
+  isUpgrade?: boolean;
+  upgradeFromTypeId?: number;
 };
 
 let _lastShipButtons: ShipButton[] = [];
 
-export function drawShipPanel(r: Renderer): void {
-  if (!_shipPanelOpen) return;
-  const serverEcon = _lastEconomyStarIndex == null ? null : _serverEconomyByStarIndex.get(_lastEconomyStarIndex);
-  if (!serverEcon) { _shipPanelOpen = false; return; }
-
-  const dockLevel = serverEcon.buildings.dock.level;
-  if (dockLevel < 1) { _shipPanelOpen = false; return; }
-
-  const available = getAvailableShipTypes(dockLevel);
-  if (available.length === 0) { _shipPanelOpen = false; return; }
-
-  const shipState = _lastEconomyStarIndex == null ? null : _serverShipsByStarIndex.get(_lastEconomyStarIndex);
-  const building = shipState?.building ?? null;
-  const fleet = shipState?.ships ?? [];
-  const nowMs = Date.now();
-  const isBuilding = building != null && building.completeAt > nowMs;
-
-  const { ctx } = r;
-  const dpr = window.devicePixelRatio || 1;
-  const screenW = r.width / dpr;
-  const screenH = r.height / dpr;
-
-  const tier = getDockTier(dockLevel);
-  const tierLvl = getDockTierLevel(dockLevel);
-
-  // Panel dimensions
-  const cols = Math.min(available.length, 4);
-  const rows = Math.ceil(available.length / cols);
-  const cellW = 90;
-  const cellH = 62;
-  const gap = 6;
-  const panelW = cols * cellW + (cols - 1) * gap + 24;
-  const panelH = rows * cellH + (rows - 1) * gap + 44;
-  const panelX = (screenW - panelW) / 2;
-  const panelY = screenH - panelH - 200;
-
-  ctx.save();
-
-  // Background
-  ctx.fillStyle = 'rgba(0, 10, 5, 0.95)';
-  ctx.strokeStyle = G_BRIGHT;
-  ctx.lineWidth = 1.5;
-  roundedRect(ctx, panelX, panelY, panelW, panelH, 6);
-  ctx.fill();
-  ctx.stroke();
-
-  // Header
-  ctx.font = 'bold 10px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.fillStyle = G_BRIGHT;
-  ctx.fillText(`SPACE DOCK T${tier} LV${tierLvl} — BUILD SHIPS`, screenW / 2, panelY + 8);
-
-  // Ship buttons
-  _lastShipButtons = [];
-  const startX = panelX + 12;
-  const startY = panelY + 28;
-
-  for (const [i, ship] of available.entries()) {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const bx = startX + col * (cellW + gap);
-    const by = startY + row * (cellH + gap);
-
-    const canAfford =
-      serverEcon.store.ore >= ship.cost.ore &&
-      serverEcon.store.food >= ship.cost.food &&
-      serverEcon.store.energy >= ship.cost.energy;
-
-    const isBuildingThis = isBuilding && building!.typeId === ship.id;
-    const ownedCount = fleet.find((s) => s.typeId === ship.id)?.count ?? 0;
-    const enabled = canAfford && !isBuilding;
-
-    _lastShipButtons.push({ shipTypeId: ship.id, x: bx, y: by, w: cellW, h: cellH, enabled });
-
-    // Button bg
-    roundedRect(ctx, bx, by, cellW, cellH, 3);
-    ctx.fillStyle = enabled ? 'rgba(20, 80, 60, 0.6)' : isBuildingThis ? 'rgba(30, 60, 50, 0.7)' : 'rgba(20, 35, 30, 0.5)';
-    ctx.fill();
-    roundedRect(ctx, bx, by, cellW, cellH, 3);
-    ctx.strokeStyle = enabled ? G_BRIGHT : isBuildingThis ? G_MED : G_FAINT;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Ship name + owned count
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.font = 'bold 8px monospace';
-    ctx.fillStyle = enabled || isBuildingThis ? G_BRIGHT : G_MED;
-    const nameLabel = ownedCount > 0 ? `${ship.name.toUpperCase()} (${ownedCount})` : ship.name.toUpperCase();
-    ctx.fillText(nameLabel, bx + cellW / 2, by + 4);
-
-    // Stats
-    ctx.font = '7px monospace';
-    ctx.fillStyle = G_MED;
-    ctx.fillText(`A:${ship.offense} D:${ship.defense} S:${ship.speed}`, bx + cellW / 2, by + 16);
-
-    if (isBuildingThis) {
-      // Progress bar
-      const totalMs = ship.buildSeconds * 1000;
-      const remainMs = Math.max(0, building!.completeAt - nowMs);
-      const progress = Math.max(0, Math.min(100, Math.floor(((totalMs - remainMs) / totalMs) * 100)));
-      ctx.fillStyle = G_MED;
-      ctx.fillText(`BUILDING ${progress}%`, bx + cellW / 2, by + 28);
-      const barX = bx + 6;
-      const barY = by + 40;
-      const barW = cellW - 12;
-      const fillW = Math.floor((barW * progress) / 100);
-      ctx.fillStyle = 'rgba(79, 255, 176, 0.2)';
-      ctx.fillRect(barX, barY, barW, 6);
-      ctx.fillStyle = G_BRIGHT;
-      ctx.fillRect(barX, barY, fillW, 6);
-      const secsLeft = Math.ceil(remainMs / 1000);
-      ctx.fillStyle = G_DIM;
-      ctx.fillText(`${secsLeft}s`, bx + cellW / 2, by + 50);
-    } else {
-      // Cost
-      ctx.fillStyle = canAfford ? G_BRIGHT : G_DIM;
-      ctx.fillText(`${ship.cost.ore}/${ship.cost.food}/${ship.cost.energy}`, bx + cellW / 2, by + 28);
-
-      // Action label
-      const statusLabel = isBuilding ? 'BUSY' : enabled ? 'BUILD' : 'LOCKED';
-      ctx.fillStyle = enabled ? G_BRIGHT : G_DIM;
-      ctx.fillText(statusLabel, bx + cellW / 2, by + 42);
-    }
-  }
-
-  ctx.restore();
+// Legacy stubs for game-loop compatibility
+export function drawShipPanel(_r: Renderer): void {
+  // Ship panel is now drawn inside the right-side SHIPS tab
 }
 
 export function isShipPanelOpen(): boolean {
-  return _shipPanelOpen;
+  return _openPanel === 2; // SHIPS tab
 }
 
 export function closeShipPanel(): void {
-  _shipPanelOpen = false;
+  if (_openPanel === 2) _openPanel = -1;
 }
+

@@ -1,19 +1,5 @@
 # Fleet Management UI — Mock Renderings
 
-## Visual Mockups (SVG)
-
-| Mockup | File |
-|--------|------|
-| Ship Status Icons | [mockups/ship-status-icons.svg](mockups/ship-status-icons.svg) |
-| Ship Type Silhouettes | [mockups/ship-type-silhouettes.svg](mockups/ship-type-silhouettes.svg) |
-| Fleet Command Panel | [mockups/fleet-command-panel.svg](mockups/fleet-command-panel.svg) |
-| Move Order Flow (3 steps) | [mockups/move-order-flow.svg](mockups/move-order-flow.svg) |
-| Galaxy Map with Badges | [mockups/galaxy-map-badges.svg](mockups/galaxy-map-badges.svg) |
-| Transit Detail View | [mockups/transit-detail.svg](mockups/transit-detail.svg) |
-| Ship Info Panel | [mockups/ship-info-panel.svg](mockups/ship-info-panel.svg) |
-
----
-
 ## Design Metaphor: Fleet Command (CIC)
 
 Naval command center aesthetic. Green-on-black terminal look matching existing dock panel.
@@ -21,47 +7,9 @@ Player is an admiral issuing orders from their station.
 
 ---
 
-## 1. Fleet Command Panel (Docked View)
+## Ship Status Icons
 
-Accessed via SHIPS button → tabs between BUILD and FLEET.
-
-```
-┌──────────────────────────────────────────────────────────┐
-│  ─── FLEET COMMAND ──────────────────────────────────── │
-│                                                          │
-│  [BUILD]  [FLEET]                    ← tab toggle       │
-│                                                          │
-│  ★ QUOEN I  ───────────────────────  ⚓3  ⏸1           │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  🔹 Scout           x1    ⚓ DOCKED              │   │
-│  │  🔹 Freighter       x1    ⚓ DOCKED              │   │
-│  │  🔹 Basic Probe     x1    ⏸ IDLE                 │   │
-│  │  🔸 Destroyer       x1    → VEGA III  (3:24)     │   │
-│  └──────────────────────────────────────────────────┘   │
-│                                                          │
-│  ★ VEGA III  ──────────────────────  ⚓1               │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  🔹 Scout           x2    ⚓ DOCKED              │   │
-│  └──────────────────────────────────────────────────┘   │
-│                                                          │
-│  ── IN TRANSIT ─────────────────────────────────────    │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  🔸 Destroyer x1   QUOEN I → VEGA III   (3:24)  │   │
-│  └──────────────────────────────────────────────────┘   │
-│                                                          │
-│  ── BUILDING ───────────────────────────────────────    │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  ⚙ Scout @ QUOEN I          ████░░░░░░  62%     │   │
-│  └──────────────────────────────────────────────────┘   │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
-```
-
----
-
-## 2. Ship Row States
-
-Each ship row has a status indicator icon + color:
+![Ship Status Icons](mockups/ship-status-icons.svg)
 
 | Status    | Icon | Color        | Description                    |
 |-----------|------|--------------|--------------------------------|
@@ -70,169 +18,47 @@ Each ship row has a status indicator icon + color:
 | IN-TRANSIT| →    | Yellow/amber | Moving between stars           |
 | BUILDING  | ⚙    | Dim green    | Under construction             |
 
-### Selected Ship Row (highlighted):
-```
-│  ▶ Scout           x1    ⚓ DOCKED     [MOVE] [INFO]  │
-```
+---
 
-### Unselected Ship Row:
-```
-│  🔹 Scout           x1    ⚓ DOCKED                    │
-```
+## Ship Type Silhouettes
+
+![Ship Type Silhouettes](mockups/ship-type-silhouettes.svg)
 
 ---
 
-## 3. Move Order Flow
+## Fleet Command Panel
 
-### Step 1: Select ship → tap MOVE
-```
-┌──────────────────────────────────────────────────────────┐
-│  ─── FLEET COMMAND ──────────────────────────────────── │
-│                                                          │
-│  ★ QUOEN I                                              │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  ▶ Scout           x1    ⚓ DOCKED               │   │
-│  │                          [MOVE]  [INFO]           │   │
-│  └──────────────────────────────────────────────────┘   │
-│                                                          │
-│  SELECT DESTINATION ON MAP                               │
-│  (tap a star to set course)                             │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
-```
+Accessed via SHIPS button → tabs between BUILD and FLEET.
 
-### Step 2: Galaxy map highlights valid destinations
-```
-         ·                    ·
-     ·       ·            ·
-        · ★QUOEN I·          · ·
-   ·        ↑              ·
-      ·    [YOU]    ·  ○VEGA III     ← pulsing ring = valid
-         ·       ·        ·
-    ·        ·       ○DENEB V        ← pulsing ring = valid
-       ·          ·
-```
-
-### Step 3: Confirm order
-```
-┌──────────────────────────────────────────────────────────┐
-│                                                          │
-│         MOVE SCOUT TO VEGA III?                          │
-│                                                          │
-│         Distance: 4.2 ly                                 │
-│         ETA: 5m 12s                                      │
-│         Speed: 7                                         │
-│                                                          │
-│              [CONFIRM]     [CANCEL]                      │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
-```
+![Fleet Command Panel](mockups/fleet-command-panel.svg)
 
 ---
 
-## 4. Galaxy Map — Fleet Badges
+## Move Order Flow (3 Steps)
 
-Stars with ships show a badge count. In-transit shows animated dotted line.
-
-```
-                    ·  ·
-        ·                    ·
-   ·        ★ QUOEN I [⬡4]
-      ·        \                    ·
-         ·      \· · · · · ·              ← dotted transit line
-    ·            \         \
-       ·          ★ VEGA III [⬡2]
-  ·         ·          ·
-       ·         ·
-```
-
-### Badge styling:
-- `[⬡4]` — ship count inside hexagon icon
-- Bright green if ships present
-- Pulsing if ships arriving/departing
-- No badge if zero ships
+![Move Order Flow](mockups/move-order-flow.svg)
 
 ---
 
-## 5. Ship Info Panel
+## Galaxy Map — Fleet Badges & Transit Lines
 
-Tapping [INFO] shows full ship stats:
-
-```
-┌──────────────────────────────────────────────────────────┐
-│  ─── SHIP INFO ─────────────────────────────────────── │
-│                                                          │
-│  SCOUT                                                   │
-│  ─────────────────────────────                          │
-│                                                          │
-│       ◇                                                  │
-│      ╱ ╲         ATK: 10                                │
-│     ╱   ╲        DEF: 20                                │
-│    ╱─────╲       SPD: 7                                 │
-│     │ │ │        TRN: 0                                 │
-│     ▼ ▼ ▼        PTS: 1                                │
-│                                                          │
-│  Location: QUOEN I                                       │
-│  Status:   DOCKED                                        │
-│  Tier:     1                                             │
-│                                                          │
-│                   [MOVE]  [BACK]                         │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
-```
+![Galaxy Map Badges](mockups/galaxy-map-badges.svg)
 
 ---
 
-## 6. In-Transit Detail (tapping transit row)
+## In-Transit Detail View
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  ─── IN TRANSIT ────────────────────────────────────── │
-│                                                          │
-│  DESTROYER                                               │
-│                                                          │
-│  QUOEN I ─────────●────────────── VEGA III              │
-│                   ↑                                      │
-│               current position                           │
-│                                                          │
-│  Departed:  2m 36s ago                                   │
-│  Arriving:  3m 24s                                       │
-│  Progress:  ████████░░░░░░░░░░  43%                     │
-│                                                          │
-│                        [BACK]                            │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
-```
+![Transit Detail](mockups/transit-detail.svg)
 
 ---
 
-## 7. Canvas Icon Designs (for renderer.ts)
+## Ship Info Panel
 
-### Ship type mini-icons (8x8px, drawn on canvas):
-
-```
-SCOUT:          FREIGHTER:      DESTROYER:      PROBE:
-   ◇               ▬▬              ◆◆             ·
-  ╱ ╲            ╔════╗           ╱══╲           ╱ ╲
- ╱   ╲           ║    ║          ╱════╲          ·─·
-  │ │             ╚════╝          ║  ║
-  ▼ ▼              ││             ▼▼▼▼
-```
-
-### Status badge icons (drawn in canvas):
-
-```
-DOCKED (⚓):     IDLE (⏸):      TRANSIT (→):    BUILDING (⚙):
-  ╭─╮             ║ ║            ──▶             ╭─╮
-  │●│             ║ ║                             │◊│
-  ╰┬╯             ║ ║                             ╰┬╯
-   │                                               │
-  ~~~                                             ···
-```
+![Ship Info Panel](mockups/ship-info-panel.svg)
 
 ---
 
-## 8. Color Palette (existing game colors)
+## Color Palette
 
 | Token    | Hex       | Usage                          |
 |----------|-----------|--------------------------------|
@@ -245,7 +71,7 @@ DOCKED (⚓):     IDLE (⏸):      TRANSIT (→):    BUILDING (⚙):
 
 ---
 
-## 9. Implementation Phases
+## Implementation Phases
 
 ### Phase 1 — Data Model
 - Add `ShipInstance` with unique ID, location, status, destination, departedAt, arrivalAt
@@ -275,7 +101,7 @@ DOCKED (⚓):     IDLE (⏸):      TRANSIT (→):    BUILDING (⚙):
 
 ---
 
-## 10. Panel Sizing
+## Panel Sizing
 
 | Panel            | Width        | Height      | Position           |
 |------------------|--------------|-------------|-------------------|

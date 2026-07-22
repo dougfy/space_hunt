@@ -9,10 +9,10 @@ import {
 } from '../api';
 
 describe('shared API contracts', () => {
-  it('normalizes unknown ship shapes to arrow', () => {
-    expect(normalizeSharedShipShape(undefined)).toBe('arrow');
-    expect(normalizeSharedShipShape('bogus')).toBe('arrow');
-    expect(normalizeSharedShipShape('blade')).toBe('blade');
+  it('normalizes unknown ship shapes to scout', () => {
+    expect(normalizeSharedShipShape(undefined)).toBe('scout');
+    expect(normalizeSharedShipShape('bogus')).toBe('scout');
+    expect(normalizeSharedShipShape('destroyer')).toBe('destroyer');
   });
 
   it('supports representative multiplayer payloads', () => {
@@ -22,14 +22,14 @@ describe('shared API contracts', () => {
       angle: 1.2,
       username: 'pilot',
       sessionId: 'pilot:abcd',
-      shape: 'needle',
+      shape: 'destroyer',
       tier: 1,
       starIndex: 3,
       bodyIndex: -1,
     };
 
     const room: RoomPosesResponse = {
-      items: [{ username: 'pilot', x: pose.x, y: pose.y, angle: pose.angle, shape: 'needle' }],
+      items: [{ username: 'pilot', x: pose.x, y: pose.y, angle: pose.angle, shape: 'destroyer' }],
     };
 
     const shots: ShotsResponse = {
@@ -37,7 +37,7 @@ describe('shared API contracts', () => {
     };
 
     const claim: ClaimPodResponse = { success: true, podId: 7, mine: true };
-    const profile: PlayerProfileResponse = { name: 'pilot', shape: 'delta' };
+    const profile: PlayerProfileResponse = { name: 'pilot' };
 
     expect(room.items).toHaveLength(1);
     expect(shots.shots).toHaveLength(1);
@@ -47,9 +47,9 @@ describe('shared API contracts', () => {
       throw new Error('Expected representative payload items');
     }
 
-    expect(roomItem.shape).toBe('needle');
+    expect(roomItem.shape).toBe('destroyer');
     expect(shotItem.shooterId).toBe('pilot:abcd');
     expect(claim.mine).toBe(true);
-    expect(profile.shape).toBe('delta');
+    expect(profile.name).toBe('pilot');
   });
 });

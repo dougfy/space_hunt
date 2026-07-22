@@ -10,6 +10,7 @@
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+      body { background: url('/loading.png') center/cover no-repeat #000; }
       #game-canvas { width: 100%; height: 100%; display: block; }
 
       /* Overlay UI (inline mode only) */
@@ -175,20 +176,6 @@
         letter-spacing: 1px;
         margin: 0 0 3px 0;
       }
-      .shape-btn {
-        background: transparent;
-        border: 1px solid #3a7a5a;
-        color: #8ff7cf;
-        font-family: monospace;
-        font-size: 11px;
-        padding: 6px 9px;
-        cursor: pointer;
-        text-align: left;
-        text-transform: uppercase;
-        line-height: 1.1;
-      }
-      .shape-btn:hover { background: rgba(79, 255, 176, 0.1); border-color: #4fffb0; }
-      .shape-btn.selected { background: rgba(79, 255, 176, 0.2); border-color: #4fffb0; color: #4fffb0; }
 
       /* Ghost list */
       #ghost-list {
@@ -277,6 +264,69 @@
       }
       #debug-copy:hover { border-color: #4fffb0; color: #8ff7cf; }
 
+      /* Admin panel */
+      #admin-panel {
+        position: absolute;
+        top: 56px;
+        right: 12px;
+        z-index: 102;
+        display: none;
+        flex-direction: column;
+        gap: 6px;
+        background: rgba(30, 10, 10, 0.95);
+        border: 2px solid #ff6644;
+        padding: 12px;
+        pointer-events: auto;
+        min-width: 260px;
+        max-height: 80vh;
+        overflow-y: auto;
+      }
+      #admin-panel.visible { display: flex; }
+      #admin-panel h3 {
+        color: #ff6644;
+        font-family: monospace;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin: 0 0 4px 0;
+      }
+      #admin-claims {
+        font-family: monospace;
+        font-size: 10px;
+        color: #cc9977;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .admin-claim-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 2px 0;
+        border-bottom: 1px solid rgba(255, 102, 68, 0.15);
+      }
+      .admin-claim-star { color: #ff6644; font-weight: bold; }
+      .admin-claim-user { color: #cc9977; }
+      .admin-btn {
+        background: rgba(80, 20, 10, 0.8);
+        border: 1px solid #ff6644;
+        color: #ffaa88;
+        font-family: monospace;
+        font-size: 10px;
+        padding: 6px 10px;
+        cursor: pointer;
+        text-transform: uppercase;
+      }
+      .admin-btn:hover { background: rgba(120, 30, 10, 0.9); color: #ffffff; }
+      .admin-btn.danger { border-color: #ff3322; color: #ff6655; }
+      .admin-btn.danger:hover { background: rgba(150, 20, 10, 0.9); color: #ffffff; }
+      #admin-status {
+        font-family: monospace;
+        font-size: 9px;
+        color: #cc7755;
+        min-height: 14px;
+      }
+      #admin-btn { display: none; }
+
     </style>
   </head>
   <body>
@@ -284,6 +334,17 @@
     <div id="icon-bar">
       <button id="settings-btn" class="icon-btn" title="Settings">&#x2699;</button>
       <button id="help-btn" class="icon-btn" title="Help">?</button>
+      <button id="admin-btn" class="icon-btn" title="Admin" style="background:rgba(80,20,10,0.8);border-color:#ff6644;color:#ff6644">&#x2691;</button>
+    </div>
+    <div id="admin-panel">
+      <h3>&#x2691; Admin Panel</h3>
+      <h3 style="font-size:9px;color:#cc7755;margin:0">Star Claims</h3>
+      <div id="admin-claims"><span style="color:#776655">loading...</span></div>
+      <button id="admin-refresh" class="admin-btn">Refresh Claims</button>
+      <button id="admin-reset-claims" class="admin-btn danger">Reset All Claims</button>
+      <button id="admin-reset-all" class="admin-btn danger">Full Reset (claims + economy)</button>
+      <button id="admin-complete-builds" class="admin-btn">Complete My Builds</button>
+      <div id="admin-status"></div>
     </div>
     <div id="help-panel">
       <h3>Controls</h3>
@@ -413,11 +474,6 @@
     <div id="settings-panel">
       <h3>Ship Name</h3>
       <input id="ship-name-input" type="text" maxlength="16" placeholder="pilot" autocomplete="off" />
-      <h3 style="margin-top:10px">Ship Shape</h3>
-      <button class="shape-btn selected" data-shape="arrow">▶ Arrow</button>
-      <button class="shape-btn" data-shape="delta">◆ Delta</button>
-      <button class="shape-btn" data-shape="needle">│ Needle</button>
-      <button class="shape-btn" data-shape="blade">◇ Blade</button>
       <h3 style="margin-top:10px">Steering</h3>
       <div id="steering-info" style="font-size:10px;color:#5a7a6a;margin:4px 0">Auto-detects: click=mouse, WASD/arrows=keyboard</div>
       <h3 style="margin-top:10px">Nearby Ships</h3>

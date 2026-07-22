@@ -29,7 +29,7 @@ export interface FuelPod {
   color: string;
 }
 
-export type ShipShape = 'arrow' | 'delta' | 'needle' | 'blade';
+export type ShipShape = 'scout' | 'destroyer' | 'frigate' | 'battleship' | 'cruiser' | 'dreadnought';
 
 export enum ZoomState {
   Normal,
