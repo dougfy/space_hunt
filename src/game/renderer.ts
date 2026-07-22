@@ -2221,11 +2221,13 @@ export function hitTestPlanetPanels(
     const panelY = openRect.y;
     const bodyH = _lastPanelBodyH > 0 ? _lastPanelBodyH : TAB_H;
     if (sx >= panelX && sx <= screenW - TAB_W && sy >= panelY && sy <= panelY + bodyH) {
-      // Handle interactive clicks inside BUILD / SHIPS tabs
+      // Handle interactive clicks inside BUILD / SHIPS / FLEET tabs
       if (_openPanel === 1) {
         hitTestBuildPanel(sx, sy);
       } else if (_openPanel === 2) {
         hitTestShipsPanel(sx, sy);
+      } else if (_openPanel === 3) {
+        hitTestFleetPanel(sx, sy);
       }
       return -2; // inside panel body — consume click
     }
@@ -2267,11 +2269,21 @@ let _lastPanelBodyH = 0;
 // Track docked state for greying out tabs
 let _panelsDocked = false;
 let _panelsStarIndex: number | null = null;
+let _panelsTier: 'galaxy' | 'system' | 'planet' = 'planet';
 
 /** Called before drawing to set panel context */
-export function setPanelContext(docked: boolean, starIndex: number | null): void {
+export function setPanelContext(docked: boolean, starIndex: number | null, tier: 'galaxy' | 'system' | 'planet' = 'planet'): void {
   _panelsDocked = docked;
   _panelsStarIndex = starIndex;
+  _panelsTier = tier;
+}
+
+// Pending galaxy jump from fleet panel MAP button
+let _pendingGalaxyJump = false;
+export function consumePendingGalaxyJump(): boolean {
+  const v = _pendingGalaxyJump;
+  _pendingGalaxyJump = false;
+  return v;
 }
 
 // Hit test helpers for interactive panels (called from hitTestPlanetPanels)
@@ -2305,6 +2317,24 @@ function hitTestShipsPanel(sx: number, sy: number): void {
           _pendingBuyShipRequest = { shipTypeId: btn.shipTypeId, quantity: 1 };
         }
       }
+      return;
+    }
+  }
+}
+
+function hitTestFleetPanel(sx: number, sy: number): void {
+  // MAP button
+  if (_fleetMapButton) {
+    const b = _fleetMapButton;
+    if (sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
+      _pendingGalaxyJump = true;
+      return;
+    }
+  }
+  // SEND buttons (no-op for now, just consume click)
+  for (const btn of _fleetSendButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      // TODO: enter target-selection mode
       return;
     }
   }
@@ -2855,7 +2885,109 @@ function drawShipsPanelBody(
 }
 
 /** FLEET panel: fleet summary */
+// Hit rects for fleet panel buttons
+let _fleetMapButton: { x: number; y: number; w: number; h: number } | null = null;
+let _fleetSendButtons: Array<{ x: number; y: number; w: number; h: number; starIndex: number; shipTypeId: number }> = [];
+
 function drawFleetPanelBody(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  _fleetMapButton = null;
+  _fleetSendButtons = [];
+
+  if (_panelsTier === 'galaxy') {
+    return drawFleetGalaxyView(ctx, x, y, w);
+  }
+  return drawFleetLocalView(ctx, x, y, w);
+}
+
+/** Fleet panel at Galaxy tier: shows all stars' fleets with SEND buttons */
+function drawFleetGalaxyView(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  // Gather all known star fleets
+  const entries: Array<{ starIndex: number; ships: Array<{ typeId: number; count: number }> }> = [];
+  for (const [si, state] of _serverShipsByStarIndex.entries()) {
+    if (state.ships.length > 0) {
+      entries.push({ starIndex: si, ships: state.ships });
+    }
+  }
+
+  // Calculate height
+  let lineCount = 0;
+  for (const e of entries) {
+    lineCount += 1; // star header
+    lineCount += e.ships.filter(s => s.count > 0).length; // ship rows
+  }
+  if (entries.length === 0) lineCount = 2; // "No fleet" + hint
+  lineCount += 1; // total row
+
+  const bodyH = Math.max(TAB_H, lineCount * ROW_H + PANEL_PAD * 2 + 28);
+  drawPanelFrame(ctx, x, y, w, bodyH, 'FLEET \u2014 ALL STARS', '\u2694');
+
+  ctx.font = '8px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+
+  let cy = y + 28;
+  let totalSP = 0;
+
+  if (entries.length === 0) {
+    ctx.fillStyle = G_DIM;
+    ctx.fillText('No fleet deployed', x + PANEL_PAD, cy);
+    cy += ROW_H;
+    ctx.fillText('Dock at a star to build ships', x + PANEL_PAD, cy);
+    cy += ROW_H;
+  } else {
+    for (const e of entries) {
+      // Star header
+      const isHome = e.starIndex === _panelsStarIndex;
+      ctx.fillStyle = G_BRIGHT;
+      ctx.fillText(`\u2605 Star ${e.starIndex}${isHome ? ' (HOME)' : ''}`, x + PANEL_PAD, cy);
+      cy += ROW_H;
+
+      // Ships at this star
+      for (const s of e.ships) {
+        if (s.count <= 0) continue;
+        const entry = SHIP_CATALOG[s.typeId as keyof typeof SHIP_CATALOG];
+        if (!entry) continue;
+        totalSP += entry.shipPoints * s.count;
+        ctx.fillStyle = G_MED;
+        ctx.fillText(`  ${entry.name} x${s.count}`, x + PANEL_PAD, cy);
+
+        // [SEND] button
+        const btnW = 28;
+        const btnH = 10;
+        const btnX = x + w - PANEL_PAD - btnW;
+        const btnY = cy;
+        ctx.strokeStyle = G_MED;
+        ctx.lineWidth = 0.5;
+        roundedRect(ctx, btnX, btnY, btnW, btnH, 2);
+        ctx.stroke();
+        ctx.fillStyle = G_BRIGHT;
+        ctx.font = '7px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('SEND', btnX + btnW / 2, btnY + 1.5);
+        ctx.textAlign = 'left';
+        ctx.font = '8px monospace';
+        _fleetSendButtons.push({ x: btnX, y: btnY, w: btnW, h: btnH, starIndex: e.starIndex, shipTypeId: s.typeId });
+
+        cy += ROW_H;
+      }
+    }
+  }
+
+  // Total
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText(`TOTAL: ${totalSP} SP`, x + PANEL_PAD, cy);
+
+  return bodyH;
+}
+
+/** Fleet panel at System/Planet tier: single star + MAP button */
+function drawFleetLocalView(
   ctx: CanvasRenderingContext2D,
   x: number, y: number, w: number,
 ): number {
@@ -2872,10 +3004,11 @@ function drawFleetPanelBody(
       totalSP += entry.shipPoints * s.count;
     }
   }
-  if (rows.length === 0) rows.push('No ships');
+  if (rows.length === 0) rows.push('No ships at this star');
   rows.push(`TOTAL: ${totalSP} SP`);
 
-  const bodyH = Math.max(TAB_H, rows.length * ROW_H + PANEL_PAD * 2 + 24);
+  // Extra row for MAP button
+  const bodyH = Math.max(TAB_H, (rows.length + 2) * ROW_H + PANEL_PAD * 2 + 28);
   drawPanelFrame(ctx, x, y, w, bodyH, 'FLEET', '\u2694');
 
   ctx.font = '8px monospace';
@@ -2887,6 +3020,26 @@ function drawFleetPanelBody(
     if (!row) continue;
     ctx.fillText(row, x + PANEL_PAD, y + 28 + r * ROW_H);
   }
+
+  // [GALAXY MAP] button
+  const btnW = w - PANEL_PAD * 2;
+  const btnH = 14;
+  const btnX = x + PANEL_PAD;
+  const btnY = y + 28 + rows.length * ROW_H + ROW_H;
+  ctx.fillStyle = 'rgba(79, 255, 176, 0.15)';
+  roundedRect(ctx, btnX, btnY, btnW, btnH, 3);
+  ctx.fill();
+  ctx.strokeStyle = G_BRIGHT;
+  ctx.lineWidth = 1;
+  roundedRect(ctx, btnX, btnY, btnW, btnH, 3);
+  ctx.stroke();
+  ctx.fillStyle = G_BRIGHT;
+  ctx.font = 'bold 8px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('\u2191 GALAXY MAP', btnX + btnW / 2, btnY + 3.5);
+  ctx.textAlign = 'left';
+  _fleetMapButton = { x: btnX, y: btnY, w: btnW, h: btnH };
+
   return bodyH;
 }
 

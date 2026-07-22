@@ -23,7 +23,7 @@ import {
   drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
   worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
-  setPanelContext, drawPlanetPanels,
+  setPanelContext, drawPlanetPanels, consumePendingGalaxyJump,
 } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
@@ -349,6 +349,13 @@ function update(dt: number): void {
     }
   }
 
+  // Consume pending galaxy jump from FLEET panel MAP button
+  if (consumePendingGalaxyJump()) {
+    gameState.galaxy.tier = NavigationTier.Galaxy;
+    gameState.ship.vel = { x: 0, y: 0 };
+    gameState.ship.thrust = false;
+  }
+
   // Process input (ship targeting, etc.)
   processInput(inputState, gameState, gameState.camera, screenW, screenH);
 
@@ -575,7 +582,7 @@ function render(): void {
     drawControlButtons(renderer, false, false, _debugBounds);
 
     // Draw side panels (not docked at galaxy level)
-    setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null);
+    setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'galaxy');
     drawPlanetPanels(renderer.ctx, screenW, screenH, ['TIER: GALAXY']);
     return;
   }
@@ -612,7 +619,7 @@ function render(): void {
     drawControlButtons(renderer, false, false, _debugBounds);
 
     // Draw side panels (not docked at system level)
-    setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null);
+    setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'system');
     drawPlanetPanels(renderer.ctx, screenW, screenH, ['TIER: SYSTEM']);
     return;
   }
@@ -621,7 +628,7 @@ function render(): void {
   if (tier === NavigationTier.Planet) {
     const shieldPercent = (gameState.shooting.hp / PLAYER_MAX_HP) * 100;
     const isDocked = gameState.dock?.docked === true;
-    setPanelContext(isDocked, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null);
+    setPanelContext(isDocked, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'planet');
     drawPlanetView(
       renderer,
       camera,
