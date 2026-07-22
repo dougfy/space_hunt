@@ -723,7 +723,7 @@ export function isFireButtonHit(
 import type { GalaxyStar, GalaxyState, FeatureType, PlanetFeature, SystemBody } from './galaxy';
 import { buildGalaxyViewModel, getGalaxyStarTone } from './galaxy-view-model';
 import { getEnabledResources, getFeatureResourceIds, getFeatureResourceNames } from './economy-catalog';
-import { BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, FEATURE_LABELS } from './constants';
+import { BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, FEATURE_LABELS, STAR_NAMES } from './constants';
 
 // ── Monochrome green palette (sci-fi terminal) ─────────────────────────────
 const G_BRIGHT = '#4fffb0';        // primary bright green
@@ -3091,8 +3091,9 @@ function drawFleetGalaxyView(
     for (const e of entries) {
       // Star header
       const isHome = e.starIndex === _panelsStarIndex;
+      const starName = STAR_NAMES[e.starIndex % STAR_NAMES.length] ?? `Star ${e.starIndex}`;
       ctx.fillStyle = G_BRIGHT;
-      ctx.fillText(`\u2605 Star ${e.starIndex}${isHome ? ' (HOME)' : ''}`, x + PANEL_PAD, cy);
+      ctx.fillText(`\u2605 ${starName}${isHome ? ' (HOME)' : ''}`, x + PANEL_PAD, cy);
       cy += ROW_H;
 
       // Ships at this star

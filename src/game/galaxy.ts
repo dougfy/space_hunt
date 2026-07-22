@@ -8,7 +8,7 @@ import {
   GALAXY_SIZE, STAR_COUNT, STAR_MIN_SPACING,
   STAR_ENTER_RADIUS, SYSTEM_SIZE, SYSTEM_BODY_MIN, SYSTEM_BODY_MAX,
   BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS,
-  STAR_NAME_PREFIXES, STAR_NAME_SUFFIXES,
+  STAR_NAMES,
   PLANET_NAME_PREFIXES, PLANET_NAME_SUFFIXES,
   FEATURE_TYPES, FEATURE_LABELS,
 } from './constants';
@@ -78,17 +78,18 @@ export function setExternalStarNames(names: string[]): void {
 
 function generatedStarName(starSeed: number): string {
   const nameRng = createRng(starSeed);
-  const prefix = STAR_NAME_PREFIXES[nameRng.rangeInt(0, STAR_NAME_PREFIXES.length)];
-  const suffix = STAR_NAME_SUFFIXES[nameRng.rangeInt(0, STAR_NAME_SUFFIXES.length)];
-  return `${prefix} ${suffix}`;
+  // Fallback: generate a name from the seed if we somehow exceed 100 stars
+  const idx = nameRng.rangeInt(0, STAR_NAMES.length);
+  return STAR_NAMES[idx];
 }
 
-function pickStarName(starSeed: number, index: number): string {
+function pickStarName(_starSeed: number, index: number): string {
   if (externalStarNames.length > 0) {
-    const idx = Math.abs(stableHash(`starname:${starSeed}:${index}`)) % externalStarNames.length;
-    return externalStarNames[idx] ?? generatedStarName(starSeed);
+    const idx = Math.abs(stableHash(`starname:${_starSeed}:${index}`)) % externalStarNames.length;
+    return externalStarNames[idx] ?? STAR_NAMES[index % STAR_NAMES.length];
   }
-  return generatedStarName(starSeed);
+  // Direct mapping: star index → real star name
+  return STAR_NAMES[index % STAR_NAMES.length];
 }
 
 export function applyStarNames(stars: GalaxyStar[]): void {
