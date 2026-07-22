@@ -742,6 +742,8 @@ function drawStarburst(
   palette: 'green' | 'blue' | 'white' | 'red' | 'orange' = 'green',
   cardinalBoost = 1,
 ) {
+  // Guard against non-finite values (can happen on first frame after tier change)
+  if (!isFinite(x) || !isFinite(y) || !isFinite(coreR) || !isFinite(rayLen)) return;
   const a = 0.4 + brightness * 0.6;
   const cBright = palette === 'blue'
     ? '110, 190, 255'
