@@ -22,7 +22,7 @@ import {
   drawGalaxyView, drawSystemView, drawPlanetView, drawTierHUD,
   drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
-  worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
+  worldToScreen, screenToWorld, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
   setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert,
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
   drawGalaxyZoomButtons, hitTestGalaxyZoomButtons,
@@ -131,6 +131,7 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
     // At galaxy view — place ship near the star
     gameState.galaxy.tier = NavigationTier.Galaxy;
     gameState.ship.pos = vec2(star.pos.x, star.pos.y);
+    gameState.galaxyCamPos = { x: star.pos.x, y: star.pos.y };
   } else if (tier === NavigationTier.System) {
     // At system view — generate system, place ship in system center
     gameState.galaxy.bodies = generateSystem(star);
@@ -212,6 +213,7 @@ export function startGame(
     shooting: createShootingState(),
     galaxy: createGalaxyState(seed),
     galaxyZoom: 20,
+    galaxyCamPos: { x: 50, y: 50 },
   };
 
   // Splash mode: drop into a self-contained asteroid field immediately
@@ -431,15 +433,28 @@ function update(dt: number): void {
     gameState.ship.vel = { x: 0, y: 0 };
     gameState.ship.thrust = false;
     gameState.camera.pos = { x: gameState.ship.pos.x, y: gameState.ship.pos.y };
-    // Reset galaxy zoom to default when recentering
+    // Reset galaxy zoom and camera position to ship
     gameState.galaxyZoom = GALAXY_ORTHO_DEFAULT;
+    gameState.galaxyCamPos = { x: gameState.ship.pos.x, y: gameState.ship.pos.y };
     _debugBounds = !_debugBounds;
   }
 
   // ── Galaxy zoom: consume scroll/pinch delta ──
   if (inputState.scrollDelta !== 0 && gameState.galaxy.tier === NavigationTier.Galaxy) {
+    const zoomingIn = inputState.scrollDelta < 0; // negative = zoom in
     gameState.galaxyZoom += inputState.scrollDelta * GALAXY_ZOOM_STEP;
     gameState.galaxyZoom = Math.max(GALAXY_ORTHO_MIN, Math.min(GALAXY_ORTHO_MAX, gameState.galaxyZoom));
+
+    // Zoom-toward-cursor: when zooming in, shift camera toward mouse world position
+    if (zoomingIn && inputState.cursorPos) {
+      const screenW = renderer.width / (window.devicePixelRatio || 1);
+      const screenH = renderer.height / (window.devicePixelRatio || 1);
+      const worldTarget = screenToWorld(inputState.cursorPos, gameState.camera, screenW, screenH);
+      // Move 15% toward cursor each scroll step
+      gameState.galaxyCamPos.x += (worldTarget.x - gameState.galaxyCamPos.x) * 0.15;
+      gameState.galaxyCamPos.y += (worldTarget.y - gameState.galaxyCamPos.y) * 0.15;
+    }
+
     inputState.scrollDelta = 0;
   } else {
     inputState.scrollDelta = 0;

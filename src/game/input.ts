@@ -7,6 +7,7 @@ import { NavigationTier } from './galaxy';
 export interface InputState {
   pointerDown: boolean;
   pointerPos: Vec2 | null;
+  cursorPos: Vec2 | null; // always tracks cursor, even without click
   rightClick: boolean;
   fireRequested: boolean;
   zoomToggleRequested: boolean;
@@ -19,6 +20,7 @@ export function createInputState(): InputState {
   return {
     pointerDown: false,
     pointerPos: null,
+    cursorPos: null,
     rightClick: false,
     fireRequested: false,
     zoomToggleRequested: false,
@@ -94,8 +96,9 @@ export function setupInput(
   };
 
   const onPointerMove = (e: PointerEvent) => {
+    input.cursorPos = getCanvasPos(e, canvas);
     if (input.pointerDown) {
-      input.pointerPos = getCanvasPos(e, canvas);
+      input.pointerPos = input.cursorPos;
     }
   };
 

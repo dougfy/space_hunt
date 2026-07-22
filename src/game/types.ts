@@ -111,6 +111,7 @@ export interface GameState {
   shooting: ShootingState;
   galaxy: import('./galaxy').GalaxyState;
   galaxyZoom: number; // current galaxy ortho size (10–55)
+  galaxyCamPos: Vec2; // camera target at galaxy tier (independent of ship)
 }
 
 export interface Camera {

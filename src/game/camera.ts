@@ -41,16 +41,20 @@ export function updateCamera(state: GameState, dt: number): void {
   // ── Galaxy / System tiers: fixed ortho, follow ship ──
   if (tier === NavigationTier.Galaxy) {
     camera.orthoSize = state.galaxyZoom;
-    // When zoomed out far, center on galaxy midpoint instead of ship
+    // When zoomed out far, lerp camera toward galaxy center
     if (state.galaxyZoom >= GALAXY_CENTER_THRESHOLD) {
       const midX = GALAXY_SIZE / 2;
       const midY = GALAXY_SIZE / 2;
-      // Lerp toward center for smooth transition
-      camera.pos.x += (midX - camera.pos.x) * 0.1;
-      camera.pos.y += (midY - camera.pos.y) * 0.1;
+      state.galaxyCamPos.x += (midX - state.galaxyCamPos.x) * 0.1;
+      state.galaxyCamPos.y += (midY - state.galaxyCamPos.y) * 0.1;
     } else {
-      camera.pos = { x: state.ship.pos.x, y: state.ship.pos.y };
+      // When at normal zoom, gently follow ship so flying updates the view
+      const followRate = 0.05;
+      state.galaxyCamPos.x += (state.ship.pos.x - state.galaxyCamPos.x) * followRate;
+      state.galaxyCamPos.y += (state.ship.pos.y - state.galaxyCamPos.y) * followRate;
     }
+    // Camera follows galaxyCamPos (set by zoom-toward-cursor logic)
+    camera.pos = { x: state.galaxyCamPos.x, y: state.galaxyCamPos.y };
     // Clamp within galaxy bounds
     const halfW = camera.orthoSize * camera.aspect;
     const halfH = camera.orthoSize;
