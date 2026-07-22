@@ -11,6 +11,7 @@ export interface InputState {
   fireRequested: boolean;
   zoomToggleRequested: boolean;
   recenterRequested: boolean;
+  scrollDelta: number; // accumulated scroll/pinch delta for galaxy zoom
   keysDown: Set<string>;
 }
 
@@ -22,6 +23,7 @@ export function createInputState(): InputState {
     fireRequested: false,
     zoomToggleRequested: false,
     recenterRequested: false,
+    scrollDelta: 0,
     keysDown: new Set(),
   };
 }
@@ -114,6 +116,52 @@ export function setupInput(
   canvas.style.touchAction = 'none';
   canvas.style.cursor = 'crosshair';
 
+  // ── Scroll wheel zoom (galaxy map) ──
+  const onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    // Normalize: deltaY > 0 = scroll down = zoom out (increase ortho)
+    input.scrollDelta += e.deltaY > 0 ? 1 : -1;
+  };
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+
+  // ── Pinch zoom (touch, galaxy map) ──
+  let pinchDist = 0;
+  const activeTouches = new Map<number, { x: number; y: number }>();
+
+  const onTouchStart = (e: TouchEvent) => {
+    for (const t of Array.from(e.touches)) {
+      activeTouches.set(t.identifier, { x: t.clientX, y: t.clientY });
+    }
+    if (activeTouches.size === 2) {
+      const pts = Array.from(activeTouches.values());
+      pinchDist = Math.hypot(pts[1]!.x - pts[0]!.x, pts[1]!.y - pts[0]!.y);
+    }
+  };
+  const onTouchMove = (e: TouchEvent) => {
+    for (const t of Array.from(e.touches)) {
+      activeTouches.set(t.identifier, { x: t.clientX, y: t.clientY });
+    }
+    if (activeTouches.size === 2) {
+      const pts = Array.from(activeTouches.values());
+      const newDist = Math.hypot(pts[1]!.x - pts[0]!.x, pts[1]!.y - pts[0]!.y);
+      const delta = newDist - pinchDist;
+      // Pinch in (fingers closer) = zoom out; pinch out = zoom in
+      if (Math.abs(delta) > 8) {
+        input.scrollDelta += delta > 0 ? -1 : 1;
+        pinchDist = newDist;
+      }
+    }
+  };
+  const onTouchEnd = (e: TouchEvent) => {
+    for (const t of Array.from(e.changedTouches)) {
+      activeTouches.delete(t.identifier);
+    }
+    if (activeTouches.size < 2) pinchDist = 0;
+  };
+  canvas.addEventListener('touchstart', onTouchStart, { passive: true });
+  canvas.addEventListener('touchmove', onTouchMove, { passive: true });
+  canvas.addEventListener('touchend', onTouchEnd, { passive: true });
+
   // Keyboard listeners (on window so they work even when canvas isn't focused)
   const MOVEMENT_KEYS = new Set([
     'w', 'a', 's', 'd',
@@ -146,6 +194,10 @@ export function setupInput(
     canvas.removeEventListener('pointermove', onPointerMove);
     canvas.removeEventListener('pointerup', onPointerUp);
     canvas.removeEventListener('contextmenu', onContextMenu);
+    canvas.removeEventListener('wheel', onWheel);
+    canvas.removeEventListener('touchstart', onTouchStart);
+    canvas.removeEventListener('touchmove', onTouchMove);
+    canvas.removeEventListener('touchend', onTouchEnd);
     window.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('keyup', onKeyUp);
     window.removeEventListener('blur', onBlur);

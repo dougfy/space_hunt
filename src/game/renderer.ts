@@ -702,6 +702,79 @@ export function hitTestControlButtons(
   return null;
 }
 
+// ── Galaxy Zoom +/- Buttons (bottom-left) ───────────────────────────────────
+
+const GZOOM_BTN_SIZE = 22;
+
+function getGalaxyZoomBtnPositions(r: Renderer) {
+  const dpr = window.devicePixelRatio || 1;
+  const screenH = r.height / dpr;
+  return {
+    plus:  { x: 28, y: screenH - 68 },
+    minus: { x: 28, y: screenH - 38 },
+  };
+}
+
+export function drawGalaxyZoomButtons(r: Renderer, currentZoom: number, minZoom: number, maxZoom: number): void {
+  const { ctx } = r;
+  const pos = getGalaxyZoomBtnPositions(r);
+  const canZoomIn = currentZoom > minZoom;
+  const canZoomOut = currentZoom < maxZoom;
+
+  ctx.save();
+
+  // + button (zoom in)
+  const pp = pos.plus;
+  ctx.beginPath();
+  roundedRect(ctx, pp.x - GZOOM_BTN_SIZE / 2, pp.y - GZOOM_BTN_SIZE / 2, GZOOM_BTN_SIZE, GZOOM_BTN_SIZE, 4);
+  ctx.fillStyle = canZoomIn ? 'rgba(20, 80, 60, 0.8)' : 'rgba(20, 40, 35, 0.5)';
+  ctx.fill();
+  roundedRect(ctx, pp.x - GZOOM_BTN_SIZE / 2, pp.y - GZOOM_BTN_SIZE / 2, GZOOM_BTN_SIZE, GZOOM_BTN_SIZE, 4);
+  ctx.strokeStyle = canZoomIn ? G_BRIGHT : G_DIM;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = canZoomIn ? G_BRIGHT : G_DIM;
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('+', pp.x, pp.y);
+
+  // - button (zoom out)
+  const mp = pos.minus;
+  ctx.beginPath();
+  roundedRect(ctx, mp.x - GZOOM_BTN_SIZE / 2, mp.y - GZOOM_BTN_SIZE / 2, GZOOM_BTN_SIZE, GZOOM_BTN_SIZE, 4);
+  ctx.fillStyle = canZoomOut ? 'rgba(20, 80, 60, 0.8)' : 'rgba(20, 40, 35, 0.5)';
+  ctx.fill();
+  roundedRect(ctx, mp.x - GZOOM_BTN_SIZE / 2, mp.y - GZOOM_BTN_SIZE / 2, GZOOM_BTN_SIZE, GZOOM_BTN_SIZE, 4);
+  ctx.strokeStyle = canZoomOut ? G_BRIGHT : G_DIM;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = canZoomOut ? G_BRIGHT : G_DIM;
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('\u2013', mp.x, mp.y); // en-dash for minus
+
+  ctx.restore();
+}
+
+export type GalaxyZoomHit = 'zoomIn' | 'zoomOut' | null;
+
+export function hitTestGalaxyZoomButtons(r: Renderer, screenX: number, screenY: number): GalaxyZoomHit {
+  const pos = getGalaxyZoomBtnPositions(r);
+  const hitR = GZOOM_BTN_SIZE / 2 + 6;
+
+  const pdx = screenX - pos.plus.x;
+  const pdy = screenY - pos.plus.y;
+  if (pdx * pdx + pdy * pdy <= hitR * hitR) return 'zoomIn';
+
+  const mdx = screenX - pos.minus.x;
+  const mdy = screenY - pos.minus.y;
+  if (mdx * mdx + mdy * mdy <= hitR * hitR) return 'zoomOut';
+
+  return null;
+}
+
 /** Check if a screen tap hit the fire button. */
 export function isFireButtonHit(
   r: Renderer,

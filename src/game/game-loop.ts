@@ -10,7 +10,7 @@ import {
 import { vec2, add } from './math';
 import { generateAsteroids, generateRingAsteroids } from './asteroids';
 import { generateFuelPods, updatePodDiscovery, checkPodCollection } from './pods';
-import { createCamera, updateCamera, updateZoomState, getSafeZone, findNearestAsteroidIndex, isOverrideClear } from './camera';
+import { createCamera, updateCamera, updateZoomState, getSafeZone, findNearestAsteroidIndex, isOverrideClear, GALAXY_ORTHO_MIN, GALAXY_ORTHO_MAX, GALAXY_ZOOM_STEP, GALAXY_ORTHO_DEFAULT } from './camera';
 import { updateShip } from './ship';
 import { updateGhosts } from './ghosts';
 import { createInputState, setupInput, processInput, InputState } from './input';
@@ -25,6 +25,7 @@ import {
   worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
   setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert,
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
+  drawGalaxyZoomButtons, hitTestGalaxyZoomButtons,
 } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
@@ -210,6 +211,7 @@ export function startGame(
     dock: null,
     shooting: createShootingState(),
     galaxy: createGalaxyState(seed),
+    galaxyZoom: 20,
   };
 
   // Splash mode: drop into a self-contained asteroid field immediately
@@ -365,6 +367,18 @@ function update(dt: number): void {
     gameState.ship.thrust = false;
   }
 
+  // Handle galaxy zoom +/- button taps
+  if (gameState.galaxy.tier === NavigationTier.Galaxy && inputState.pointerDown && inputState.pointerPos) {
+    const zHit = hitTestGalaxyZoomButtons(renderer, inputState.pointerPos.x, inputState.pointerPos.y);
+    if (zHit === 'zoomIn') {
+      gameState.galaxyZoom = Math.max(GALAXY_ORTHO_MIN, gameState.galaxyZoom - GALAXY_ZOOM_STEP);
+      inputState.pointerDown = false;
+    } else if (zHit === 'zoomOut') {
+      gameState.galaxyZoom = Math.min(GALAXY_ORTHO_MAX, gameState.galaxyZoom + GALAXY_ZOOM_STEP);
+      inputState.pointerDown = false;
+    }
+  }
+
   // Handle transfer mode star selection (galaxy tier only)
   if (isInTransferMode() && inputState.pointerDown && inputState.pointerPos) {
     const px = inputState.pointerPos.x;
@@ -417,7 +431,18 @@ function update(dt: number): void {
     gameState.ship.vel = { x: 0, y: 0 };
     gameState.ship.thrust = false;
     gameState.camera.pos = { x: gameState.ship.pos.x, y: gameState.ship.pos.y };
+    // Reset galaxy zoom to default when recentering
+    gameState.galaxyZoom = GALAXY_ORTHO_DEFAULT;
     _debugBounds = !_debugBounds;
+  }
+
+  // ── Galaxy zoom: consume scroll/pinch delta ──
+  if (inputState.scrollDelta !== 0 && gameState.galaxy.tier === NavigationTier.Galaxy) {
+    gameState.galaxyZoom += inputState.scrollDelta * GALAXY_ZOOM_STEP;
+    gameState.galaxyZoom = Math.max(GALAXY_ORTHO_MIN, Math.min(GALAXY_ORTHO_MAX, gameState.galaxyZoom));
+    inputState.scrollDelta = 0;
+  } else {
+    inputState.scrollDelta = 0;
   }
 
   // Auto-clear override once ship leaves the suppressed asteroid's zone
@@ -607,6 +632,7 @@ function render(): void {
 
     drawTierHUD(renderer, 'GALAXY', '', 'center');
     drawControlButtons(renderer, false, false, _debugBounds);
+    drawGalaxyZoomButtons(renderer, gameState.galaxyZoom, GALAXY_ORTHO_MIN, GALAXY_ORTHO_MAX);
 
     // Draw side panels (not docked at galaxy level)
     setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'galaxy');

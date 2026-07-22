@@ -110,6 +110,7 @@ export interface GameState {
   dock: DockState | null;
   shooting: ShootingState;
   galaxy: import('./galaxy').GalaxyState;
+  galaxyZoom: number; // current galaxy ortho size (10–55)
 }
 
 export interface Camera {

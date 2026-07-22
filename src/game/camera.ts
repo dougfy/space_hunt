@@ -17,8 +17,14 @@ import { NavigationTier } from './galaxy';
 const ZOOM_TRIGGER_PIXELS = 100;
 
 // Ortho sizes for non-local tiers (show a good portion of the map, follow ship)
-const GALAXY_ORTHO = 20; // shows ~40 units vertically of the 100-unit galaxy
+const GALAXY_ORTHO_DEFAULT = 20; // default: shows ~40 units vertically of the 100-unit galaxy
+const GALAXY_ORTHO_MIN = 10;     // most zoomed in
+const GALAXY_ORTHO_MAX = 55;     // shows entire galaxy
+const GALAXY_ZOOM_STEP = 3;      // ortho change per scroll tick
+const GALAXY_CENTER_THRESHOLD = 40; // above this ortho, center on galaxy midpoint
 const SYSTEM_ORTHO = 18; // shows ~36 units vertically — fits the full 40-unit system
+
+export { GALAXY_ORTHO_DEFAULT, GALAXY_ORTHO_MIN, GALAXY_ORTHO_MAX, GALAXY_ZOOM_STEP };
 
 export function createCamera(aspect: number): Camera {
   return {
@@ -34,8 +40,17 @@ export function updateCamera(state: GameState, dt: number): void {
 
   // ── Galaxy / System tiers: fixed ortho, follow ship ──
   if (tier === NavigationTier.Galaxy) {
-    camera.orthoSize = GALAXY_ORTHO;
-    camera.pos = { x: state.ship.pos.x, y: state.ship.pos.y };
+    camera.orthoSize = state.galaxyZoom;
+    // When zoomed out far, center on galaxy midpoint instead of ship
+    if (state.galaxyZoom >= GALAXY_CENTER_THRESHOLD) {
+      const midX = GALAXY_SIZE / 2;
+      const midY = GALAXY_SIZE / 2;
+      // Lerp toward center for smooth transition
+      camera.pos.x += (midX - camera.pos.x) * 0.1;
+      camera.pos.y += (midY - camera.pos.y) * 0.1;
+    } else {
+      camera.pos = { x: state.ship.pos.x, y: state.ship.pos.y };
+    }
     // Clamp within galaxy bounds
     const halfW = camera.orthoSize * camera.aspect;
     const halfH = camera.orthoSize;
