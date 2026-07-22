@@ -129,7 +129,7 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
   if (tier === NavigationTier.Galaxy) {
     // At galaxy view — place ship near the star
     gameState.galaxy.tier = NavigationTier.Galaxy;
-    gameState.ship.pos = vec2(star.x, star.y);
+    gameState.ship.pos = vec2(star.pos.x, star.pos.y);
   } else if (tier === NavigationTier.System) {
     // At system view — generate system, place ship in system center
     gameState.galaxy.bodies = generateSystem(star);
