@@ -541,6 +541,31 @@ function update(dt: number): void {
     : gameState.ship.pos;
   const transition = checkTierTransition(worldShipPos, gameState.galaxy);
   if (transition) {
+    // Belt pass-through: if ship has active target beyond the belt, don't enter Local tier
+    let skipTransition = false;
+    if (transition.newTier === NavigationTier.Local && gameState.tgtActive) {
+      const center = SYSTEM_SIZE / 2;
+      const body = gameState.galaxy.bodies[transition.bodyIndex];
+      if (body) {
+        const tgtDistFromCenter = Math.sqrt(
+          (gameState.tgtPos.x - center) ** 2 + (gameState.tgtPos.y - center) ** 2,
+        );
+        const shipDistFromCenter = Math.sqrt(
+          (worldShipPos.x - center) ** 2 + (worldShipPos.y - center) ** 2,
+        );
+        // Ship approaching from inside and target is outside belt, or vice versa
+        const shipInside = shipDistFromCenter < body.orbitDist;
+        const tgtInside = tgtDistFromCenter < body.orbitDist;
+        if (shipInside !== tgtInside) {
+          // Target is on the other side — pass through, don't enter
+          skipTransition = true;
+        }
+      }
+    }
+
+    if (skipTransition) {
+      // Do nothing — let ship fly through the belt
+    } else
     // Ship gate: scouts cannot enter Galaxy tier
     if (transition.newTier === NavigationTier.Galaxy && gameState.shipShape === 'scout') {
       // Block exit — bounce ship back toward system center

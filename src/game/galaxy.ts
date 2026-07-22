@@ -165,7 +165,9 @@ export function generateSystem(star: GalaxyStar): SystemBody[] {
     // Place bodies at increasing distances from center (spread across system)
     const minDist = 4 + i * 3.2;
     const maxDist = minDist + 2.5;
-    const dist = rng.range(minDist, maxDist);
+    // Cap orbit so all bodies stay inside the exit boundary
+    const maxAllowed = SYSTEM_EXIT_RADIUS - 2;
+    const dist = Math.min(rng.range(minDist, maxDist), maxAllowed);
     const angle = rng.range(0, Math.PI * 2);
 
     const x = center + Math.cos(angle) * dist;
