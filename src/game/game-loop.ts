@@ -23,6 +23,7 @@ import {
   drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
   worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
+  setPanelContext, drawPlanetPanels,
 } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
@@ -329,8 +330,8 @@ function update(dt: number): void {
     }
   }
 
-  // Handle planet panel slide-out clicks
-  if (gameState.galaxy.tier === NavigationTier.Planet && inputState.pointerDown && inputState.pointerPos) {
+  // Handle slide-out panel clicks (all tiers)
+  if (inputState.pointerDown && inputState.pointerPos) {
     const panelIdx = hitTestPlanetPanels(screenW, screenH, inputState.pointerPos.x, inputState.pointerPos.y);
     if (panelIdx >= 0) {
       togglePlanetPanel(panelIdx);
@@ -542,6 +543,8 @@ function render(): void {
 
   const { camera } = gameState;
   const tier = gameState.galaxy.tier;
+  const screenW = renderer.width / (window.devicePixelRatio || 1);
+  const screenH = renderer.height / (window.devicePixelRatio || 1);
   clearScreen(renderer);
 
   // ── Galaxy tier ──
@@ -570,6 +573,10 @@ function render(): void {
 
     drawTierHUD(renderer, 'GALAXY', '', 'center');
     drawControlButtons(renderer, false, false, _debugBounds);
+
+    // Draw side panels (not docked at galaxy level)
+    setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null);
+    drawPlanetPanels(renderer.ctx, screenW, screenH, ['TIER: GALAXY']);
     return;
   }
 
@@ -603,14 +610,18 @@ function render(): void {
     drawTierHUD(renderer, 'SYSTEM', '');
 
     drawControlButtons(renderer, false, false, _debugBounds);
+
+    // Draw side panels (not docked at system level)
+    setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null);
+    drawPlanetPanels(renderer.ctx, screenW, screenH, ['TIER: SYSTEM']);
     return;
   }
 
   // ── Planet tier ──
   if (tier === NavigationTier.Planet) {
-    const screenW = renderer.width / (window.devicePixelRatio || 1);
-    const screenH = renderer.height / (window.devicePixelRatio || 1);
     const shieldPercent = (gameState.shooting.hp / PLAYER_MAX_HP) * 100;
+    const isDocked = gameState.dock?.docked === true;
+    setPanelContext(isDocked, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null);
     drawPlanetView(
       renderer,
       camera,
@@ -618,7 +629,7 @@ function render(): void {
       gameState.ship.pos,
       gameState.fuelPercent,
       shieldPercent,
-      gameState.dock?.docked === true,
+      isDocked,
     );
     if (_debugBounds) {
       drawPlanetDebugBounds(renderer, camera, gameState.galaxy, gameState.ship.pos, gameState.worldOffset);

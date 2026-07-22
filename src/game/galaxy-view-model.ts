@@ -21,8 +21,7 @@ export function getGalaxyStarTone(
   homeStarIndex: number,
 ): StarVisualTone {
   if (star.index === homeStarIndex) return 'blue';
-  if (star.owner === 'foreign') return 'red';
-  if (star.discovered) return 'white';
+  if (star.owner === 'foreign' && star.discovered) return 'red';
   return 'green';
 }
 

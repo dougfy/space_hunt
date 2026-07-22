@@ -2318,7 +2318,7 @@ export function consumePendingExtensionAction(): string | null {
   return a;
 }
 
-function drawPlanetPanels(
+export function drawPlanetPanels(
   ctx: CanvasRenderingContext2D,
   screenW: number,
   screenH: number,
