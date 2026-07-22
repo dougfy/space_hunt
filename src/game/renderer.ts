@@ -1042,8 +1042,78 @@ export function drawGalaxyView(
         ctx.fillStyle = dist < 15 ? G_BRIGHT : G_MED;
       }
       ctx.fillText(star.name, sx, sy + rayLen + 4);
+
+      // ── Fleet badge ──
+      const fleetState = _serverShipsByStarIndex.get(star.index);
+      if (fleetState && fleetState.ships.length > 0) {
+        const totalShips = fleetState.ships.reduce((sum, s) => sum + s.count, 0);
+        if (totalShips > 0) {
+          const badgeText = `${totalShips}`;
+          ctx.font = 'bold 7px monospace';
+          const tw = ctx.measureText(badgeText).width;
+          const bw = tw + 6;
+          const bh = 10;
+          const bx = sx + rayLen + 2;
+          const by = sy - bh / 2;
+          ctx.fillStyle = 'rgba(0, 10, 5, 0.8)';
+          roundedRect(ctx, bx, by, bw, bh, 3);
+          ctx.fill();
+          ctx.strokeStyle = G_MED;
+          ctx.lineWidth = 0.5;
+          roundedRect(ctx, bx, by, bw, bh, 3);
+          ctx.stroke();
+          ctx.fillStyle = G_BRIGHT;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(badgeText, bx + bw / 2, by + bh / 2);
+        }
+      }
+
       ctx.restore();
     }
+  }
+
+  // ── Transit lines (animated dashes) ──
+  if (_serverTransits.length > 0) {
+    const now = Date.now();
+    const dashPhase = (performance.now() * 0.05) % 20; // animated offset
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.lineDashOffset = -dashPhase;
+    for (const t of _serverTransits) {
+      const fromStar = screenStars.find(s => s.star.index === t.fromStarIndex);
+      const toStar = screenStars.find(s => s.star.index === t.toStarIndex);
+      if (!fromStar || !toStar) continue;
+
+      // Draw dashed line
+      ctx.strokeStyle = 'rgba(255, 184, 77, 0.5)'; // AMBER
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(fromStar.sx, fromStar.sy);
+      ctx.lineTo(toStar.sx, toStar.sy);
+      ctx.stroke();
+
+      // Draw moving ship dot along the line
+      const elapsed = now - t.departedAt;
+      const total = t.arrivalAt - t.departedAt;
+      const progress = Math.min(1, Math.max(0, elapsed / total));
+      const dotX = fromStar.sx + (toStar.sx - fromStar.sx) * progress;
+      const dotY = fromStar.sy + (toStar.sy - fromStar.sy) * progress;
+
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ffb84d'; // AMBER
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 184, 77, 0.8)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([6, 4]);
+      ctx.lineDashOffset = -dashPhase;
+    }
+    ctx.restore();
   }
 
   // ── Sector title (top-left) ──

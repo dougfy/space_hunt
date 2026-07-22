@@ -463,3 +463,26 @@ api.post('/debug/complete-builds', async (c) => {
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
   }
 });
+
+/** Debug: reset fleet — remove all ships except at home star, clear transits. */
+api.post('/debug/reset-fleet', async (c) => {
+  const body = await c.req.json<{ username: string; homeStarIndex: number }>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!Number.isInteger(body.homeStarIndex) || body.homeStarIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'homeStarIndex must be >= 0' }, 400);
+  }
+  try {
+    const raw = await redis.hGet(`profile:${body.username}`, 'ships');
+    const profile = raw ? JSON.parse(raw) : { stars: {} };
+    const homeKey = `s:${body.homeStarIndex}`;
+    const homeData = profile.stars?.[homeKey];
+    // Keep only home star ships, clear everything else
+    profile.stars = homeData ? { [homeKey]: homeData } : {};
+    profile.transits = [];
+    await redis.hSet(`profile:${body.username}`, { ships: JSON.stringify(profile) });
+    return c.json({ ok: true, kept: homeKey, ships: homeData?.ships ?? [] });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to reset fleet';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
