@@ -7,8 +7,12 @@ import type {
   ClaimPodResponse,
   ClaimedPodsResponse,
   BuildType,
+  FleetAllResponse,
+  FleetTransferRequest,
+  FleetTransferResponse,
   ResourceStore,
   ShipBuildingState,
+  ShipTypeId,
   StarEconomyResponse,
   StarEconomyState,
   StarShipsState,
@@ -617,6 +621,94 @@ export async function upgradeShip(
   await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(shipsProfile) });
 
   return { ok: true, ships: starData.ships, building: starData.building, store: current.store };
+}
+
+// ── Fleet Management ──────────────────────────────────────────────────────────
+
+/** Load all ships across all stars for a player. */
+export async function loadAllFleet(
+  store: RedisGameStore,
+  username: string,
+  now = Date.now(),
+): Promise<FleetAllResponse> {
+  const raw = await store.hGet(`profile:${username}`, SHIPS_FIELD);
+  const profile = parseShipsProfile(raw);
+  let dirty = false;
+
+  const result: FleetAllResponse['stars'] = {};
+  for (const [key, entry] of Object.entries(profile.stars)) {
+    const starData = normalizeStarShipData(entry);
+    const hadBuilding = !!starData.building;
+    reconcileShipBuilding(starData, now);
+    if (hadBuilding && !starData.building) dirty = true;
+    if (starData.ships.length > 0 || starData.building) {
+      result[key] = { ships: starData.ships, building: starData.building };
+    }
+  }
+
+  if (dirty) {
+    // Persist reconciled builds
+    for (const [key, val] of Object.entries(result)) {
+      profile.stars[key] = val;
+    }
+    await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
+  }
+
+  return { stars: result };
+}
+
+/** Transfer ships from one star to another. */
+export async function transferShips(
+  store: RedisGameStore,
+  username: string,
+  fromStarIndex: number,
+  toStarIndex: number,
+  shipTypeId: ShipTypeId,
+  count: number,
+  now = Date.now(),
+): Promise<FleetTransferResponse> {
+  if (count < 1) throw new Error('count must be >= 1');
+  if (fromStarIndex === toStarIndex) throw new Error('Cannot transfer to same star');
+
+  const raw = await store.hGet(`profile:${username}`, SHIPS_FIELD);
+  const profile = parseShipsProfile(raw);
+
+  const fromKey = starKey(fromStarIndex);
+  const toKey = starKey(toStarIndex);
+
+  const fromData = normalizeStarShipData(profile.stars[fromKey]);
+  const toData = normalizeStarShipData(profile.stars[toKey]);
+  reconcileShipBuilding(fromData, now);
+  reconcileShipBuilding(toData, now);
+
+  // Check source has enough ships
+  const sourceSlot = fromData.ships.find((s) => s.typeId === shipTypeId);
+  if (!sourceSlot || sourceSlot.count < count) {
+    throw new Error('Not enough ships at source star');
+  }
+
+  // Remove from source
+  sourceSlot.count -= count;
+  fromData.ships = fromData.ships.filter((s) => s.count > 0);
+
+  // Add to destination
+  const destSlot = toData.ships.find((s) => s.typeId === shipTypeId);
+  if (destSlot) {
+    destSlot.count += count;
+  } else {
+    toData.ships.push({ typeId: shipTypeId, count });
+  }
+
+  // Save
+  profile.stars[fromKey] = fromData;
+  profile.stars[toKey] = toData;
+  await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
+
+  return {
+    ok: true,
+    from: { starIndex: fromStarIndex, ships: fromData.ships },
+    to: { starIndex: toStarIndex, ships: toData.ships },
+  };
 }
 
 /**

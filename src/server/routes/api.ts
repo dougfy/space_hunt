@@ -9,6 +9,9 @@ import type {
   ClaimPodResponse,
   ClaimedPodsResponse,
   DecrementResponse,
+  FleetAllResponse,
+  FleetTransferRequest,
+  FleetTransferResponse,
   IncrementResponse,
   InitResponse,
   OkResponse,
@@ -31,12 +34,14 @@ import {
   completeAllBuilds,
   getClaimedPods,
   getClaimedStars,
+  loadAllFleet,
   loadStarEconomy,
   loadStarShips,
   listActiveShots,
   listRoomPoses,
   loadProfile,
   saveProfile,
+  transferShips,
   upgradeBuilding,
   upgradeShip,
   storePose,
@@ -403,6 +408,42 @@ api.post('/ships/upgrade', async (c) => {
     return c.json<UpgradeShipResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to upgrade ship';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+// ── Fleet Management ─────────────────────────────────────────────────────────
+
+/** Get all ships across all stars for a player. */
+api.get('/fleet/all', async (c) => {
+  const username = c.req.query('username');
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+
+  const response = await loadAllFleet(redis, username);
+  return c.json<FleetAllResponse>(response);
+});
+
+/** Transfer ships between stars. */
+api.post('/fleet/transfer', async (c) => {
+  const body = await c.req.json<FleetTransferRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!Number.isInteger(body.fromStarIndex) || body.fromStarIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'fromStarIndex must be >= 0' }, 400);
+  }
+  if (!Number.isInteger(body.toStarIndex) || body.toStarIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'toStarIndex must be >= 0' }, 400);
+  }
+  if (!Number.isInteger(body.count) || body.count < 1) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'count must be >= 1' }, 400);
+  }
+
+  try {
+    const response = await transferShips(
+      redis, body.username, body.fromStarIndex, body.toStarIndex, body.shipTypeId, body.count,
+    );
+    return c.json<FleetTransferResponse>(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to transfer ships';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
   }
 });

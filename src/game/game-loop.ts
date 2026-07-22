@@ -23,7 +23,7 @@ import {
   drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
   worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
-  setPanelContext, drawPlanetPanels, consumePendingGalaxyJump,
+  setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert,
 } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
@@ -352,6 +352,14 @@ function update(dt: number): void {
   // Consume pending galaxy jump from FLEET panel MAP button
   if (consumePendingGalaxyJump()) {
     gameState.galaxy.tier = NavigationTier.Galaxy;
+    gameState.ship.vel = { x: 0, y: 0 };
+    gameState.ship.thrust = false;
+  }
+
+  // Consume pending tier revert when fleet panel closes after galaxy jump
+  const revertTier = consumePendingTierRevert();
+  if (revertTier) {
+    gameState.galaxy.tier = revertTier === 'system' ? NavigationTier.System : NavigationTier.Planet;
     gameState.ship.vel = { x: 0, y: 0 };
     gameState.ship.thrust = false;
   }

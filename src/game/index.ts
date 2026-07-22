@@ -7,4 +7,4 @@ export type { RemotePoseItem } from './ghosts';
 export type { GameState, ShipShape, Ghost } from './types';
 export { getGameState, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setStarClaims } from './game-loop';
 export { setExternalStarNames } from './galaxy';
-export { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, setServerStarEconomy, setServerShipState } from './renderer';
+export { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, setServerStarEconomy, setServerShipState, setServerFleetAll } from './renderer';

@@ -2176,7 +2176,13 @@ function getEffectivePanelW(tabIndex: number, screenW: number): number {
 
 export function togglePlanetPanel(index: number): void {
   if (index < 0 || index >= PANEL_TABS.length) return;
-  _openPanel = _openPanel === index ? -1 : index;
+  const wasOpen = _openPanel === index;
+  _openPanel = wasOpen ? -1 : index;
+  // If fleet panel (3) just closed and we have a return tier, schedule revert
+  if (wasOpen && index === 3 && _galaxyJumpReturnTier) {
+    _pendingTierRevert = _galaxyJumpReturnTier;
+    _galaxyJumpReturnTier = null;
+  }
 }
 
 /** Get the tab rects for hit testing */
@@ -2280,9 +2286,18 @@ export function setPanelContext(docked: boolean, starIndex: number | null, tier:
 
 // Pending galaxy jump from fleet panel MAP button
 let _pendingGalaxyJump = false;
+let _galaxyJumpReturnTier: 'system' | 'planet' | null = null;
+let _pendingTierRevert: 'system' | 'planet' | null = null;
+
 export function consumePendingGalaxyJump(): boolean {
   const v = _pendingGalaxyJump;
   _pendingGalaxyJump = false;
+  return v;
+}
+
+export function consumePendingTierRevert(): 'system' | 'planet' | null {
+  const v = _pendingTierRevert;
+  _pendingTierRevert = null;
   return v;
 }
 
@@ -2328,6 +2343,7 @@ function hitTestFleetPanel(sx: number, sy: number): void {
     const b = _fleetMapButton;
     if (sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
       _pendingGalaxyJump = true;
+      _galaxyJumpReturnTier = _panelsTier === 'galaxy' ? null : _panelsTier;
       return;
     }
   }
@@ -3178,6 +3194,20 @@ export function setServerShipState(
   building: { typeId: number; completeAt: number } | null,
 ): void {
   _serverShipsByStarIndex.set(starIndex, { ships, building });
+}
+
+/** Bulk-set fleet data from /fleet/all response (replaces all entries). */
+export function setServerFleetAll(
+  stars: Record<string, { ships: Array<{ typeId: number; count: number }>; building: { typeId: number; completeAt: number } | null }>,
+): void {
+  _serverShipsByStarIndex.clear();
+  for (const [key, val] of Object.entries(stars)) {
+    // keys are "s:N" format
+    const idx = parseInt(key.replace('s:', ''), 10);
+    if (!Number.isNaN(idx)) {
+      _serverShipsByStarIndex.set(idx, val);
+    }
+  }
 }
 
 export function consumePendingBuildRequest(): { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' } | null {

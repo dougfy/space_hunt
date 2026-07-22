@@ -3,7 +3,7 @@
 // Detects inline vs expanded mode and shows overlay buttons when inline.
 
 import { context, requestExpandedMode } from '@devvit/web/client';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, createDevvitBridge, getGameState, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setStarClaims, setServerStarEconomy, setServerShipState } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, createDevvitBridge, getGameState, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
@@ -11,6 +11,7 @@ import type {
   BuildBuildingRequest,
   ClaimPodResponse,
   ClaimedPodsResponse,
+  FleetAllResponse,
   PlayerProfileResponse,
   PoseUpdateRequest,
   PostShotsRequest,
@@ -252,6 +253,31 @@ async function pollEconomy() {
   try {
     const gs = getGameState();
     if (!gs) return;
+
+    // At galaxy tier, poll all fleets instead of single-star economy
+    if (gs.galaxy.tier === 0) { // NavigationTier.Galaxy = 0
+      try {
+        const fleetRes = await fetch(`/api/fleet/all?username=${encodeURIComponent(username)}`);
+        if (fleetRes.ok) {
+          const fleetData = await fleetRes.json() as FleetAllResponse;
+          setServerFleetAll(fleetData.stars);
+          // Update ship shape from home star fleet
+          if (playerHomeStarIndex != null) {
+            const homeKey = `s:${playerHomeStarIndex}`;
+            const homeFleet = fleetData.stars[homeKey];
+            if (homeFleet) {
+              const fleetShape = getFleetShape(homeFleet.ships);
+              if (fleetShape !== currentShape) {
+                currentShape = fleetShape;
+                bridge.setShipShape(fleetShape);
+              }
+            }
+          }
+        }
+      } catch { /* ignore */ }
+      return;
+    }
+
     const starIndex = gs.galaxy.currentStarIndex;
     if (starIndex < 0) return;
     const pendingBuild = consumePendingBuildRequest();

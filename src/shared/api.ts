@@ -218,3 +218,23 @@ export type UpgradeShipResponse = {
   building: ShipBuildingState | null;
   store: ResourceStore;
 };
+
+// ── Fleet Management ─────────────────────────────────────────────────────────
+
+export type FleetAllResponse = {
+  stars: Record<string, { ships: StarShipsState; building: ShipBuildingState | null }>;
+};
+
+export type FleetTransferRequest = {
+  username: string;
+  fromStarIndex: number;
+  toStarIndex: number;
+  shipTypeId: ShipTypeId;
+  count: number;
+};
+
+export type FleetTransferResponse = {
+  ok: true;
+  from: { starIndex: number; ships: StarShipsState };
+  to: { starIndex: number; ships: StarShipsState };
+};
