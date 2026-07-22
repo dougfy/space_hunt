@@ -3062,13 +3062,19 @@ function drawFleetGalaxyView(
     }
   }
 
+  const transits = _serverTransits;
+
   // Calculate height
   let lineCount = 0;
   for (const e of entries) {
     lineCount += 1; // star header
     lineCount += e.ships.filter(s => s.count > 0).length; // ship rows
   }
-  if (entries.length === 0) lineCount = 2; // "No fleet" + hint
+  if (transits.length > 0) {
+    lineCount += 1; // "IN TRANSIT" header
+    lineCount += transits.length; // one row per transit
+  }
+  if (entries.length === 0 && transits.length === 0) lineCount = 2; // "No fleet" + hint
   lineCount += 1; // total row
 
   const bodyH = Math.max(TAB_H, lineCount * ROW_H + PANEL_PAD * 2 + 28);
@@ -3081,7 +3087,7 @@ function drawFleetGalaxyView(
   let cy = y + 28;
   let totalSP = 0;
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && transits.length === 0) {
     ctx.fillStyle = G_DIM;
     ctx.fillText('No fleet deployed', x + PANEL_PAD, cy);
     cy += ROW_H;
@@ -3122,6 +3128,35 @@ function drawFleetGalaxyView(
         ctx.font = '8px monospace';
         _fleetSendButtons.push({ x: btnX, y: btnY, w: btnW, h: btnH, starIndex: e.starIndex, shipTypeId: s.typeId });
 
+        cy += ROW_H;
+      }
+    }
+
+    // ── In-Transit Section ──
+    if (transits.length > 0) {
+      ctx.fillStyle = '#ffb84d'; // AMBER
+      ctx.fillText('\u2192 IN TRANSIT', x + PANEL_PAD, cy);
+      cy += ROW_H;
+
+      const now = Date.now();
+      for (const t of transits) {
+        const entry = SHIP_CATALOG[t.shipTypeId as keyof typeof SHIP_CATALOG];
+        if (!entry) continue;
+        const fromName = STAR_NAMES[t.fromStarIndex % STAR_NAMES.length] ?? '?';
+        const toName = STAR_NAMES[t.toStarIndex % STAR_NAMES.length] ?? '?';
+        const remainMs = Math.max(0, t.arrivalAt - now);
+        const remainSec = Math.ceil(remainMs / 1000);
+        const mm = Math.floor(remainSec / 60);
+        const ss = remainSec % 60;
+        const timeStr = mm > 0 ? `${mm}m${ss.toString().padStart(2, '0')}s` : `${ss}s`;
+        ctx.fillStyle = '#ffb84d'; // AMBER
+        ctx.fillText(`  ${entry.name} x${t.count}`, x + PANEL_PAD, cy);
+        ctx.fillStyle = 'rgba(255, 184, 77, 0.6)';
+        ctx.font = '7px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(`${fromName}\u2192${toName} ${timeStr}`, x + w - PANEL_PAD, cy + 1);
+        ctx.textAlign = 'left';
+        ctx.font = '8px monospace';
         cy += ROW_H;
       }
     }
@@ -3320,6 +3355,16 @@ type ServerShipSnapshot = {
 };
 const _serverShipsByStarIndex = new Map<number, ServerShipSnapshot>();
 
+type TransitRecord = {
+  shipTypeId: number;
+  count: number;
+  fromStarIndex: number;
+  toStarIndex: number;
+  departedAt: number;
+  arrivalAt: number;
+};
+let _serverTransits: TransitRecord[] = [];
+
 export function setServerShipState(
   starIndex: number,
   ships: Array<{ typeId: number; count: number }>,
@@ -3331,6 +3376,7 @@ export function setServerShipState(
 /** Bulk-set fleet data from /fleet/all response (replaces all entries). */
 export function setServerFleetAll(
   stars: Record<string, { ships: Array<{ typeId: number; count: number }>; building: { typeId: number; completeAt: number } | null }>,
+  transits?: TransitRecord[],
 ): void {
   _serverShipsByStarIndex.clear();
   for (const [key, val] of Object.entries(stars)) {
@@ -3340,6 +3386,7 @@ export function setServerFleetAll(
       _serverShipsByStarIndex.set(idx, val);
     }
   }
+  _serverTransits = transits ?? [];
 }
 
 export function consumePendingBuildRequest(): { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' } | null {

@@ -284,7 +284,7 @@ async function pollEconomy() {
         const fleetRes = await fetch(`/api/fleet/all?username=${encodeURIComponent(username)}`);
         if (fleetRes.ok) {
           const fleetData = await fleetRes.json() as FleetAllResponse;
-          setServerFleetAll(fleetData.stars);
+          setServerFleetAll(fleetData.stars, fleetData.transits);
           // Update ship shape from home star fleet
           if (playerHomeStarIndex != null) {
             const homeKey = `s:${playerHomeStarIndex}`;

@@ -12,6 +12,7 @@ import type {
   FleetTransferResponse,
   ResourceStore,
   ShipBuildingState,
+  ShipTransit,
   ShipTypeId,
   StarEconomyResponse,
   StarEconomyState,
@@ -441,7 +442,11 @@ type StoredShipsProfile = {
     ships: StarShipsState;
     building: ShipBuildingState | null;
   }>;
+  transits?: ShipTransit[];
 };
+
+/** Base transit time in seconds; divided by ship speed. */
+const BASE_TRANSIT_SECONDS = 300; // speed-7 ≈ 43s, speed-3 ≈ 100s
 
 function parseShipsProfile(raw: string | undefined): StoredShipsProfile {
   if (!raw) return { stars: {} };
@@ -635,6 +640,31 @@ export async function loadAllFleet(
   const profile = parseShipsProfile(raw);
   let dirty = false;
 
+  // ── Reconcile completed transits ──
+  const pendingTransits: ShipTransit[] = [];
+  if (profile.transits && profile.transits.length > 0) {
+    for (const t of profile.transits) {
+      if (t.arrivalAt <= now) {
+        // Transit complete — deliver ships to destination
+        const toKey = starKey(t.toStarIndex);
+        const toData = normalizeStarShipData(profile.stars[toKey]);
+        const destSlot = toData.ships.find((s) => s.typeId === t.shipTypeId);
+        if (destSlot) {
+          destSlot.count += t.count;
+        } else {
+          toData.ships.push({ typeId: t.shipTypeId, count: t.count });
+        }
+        profile.stars[toKey] = toData;
+        dirty = true;
+      } else {
+        pendingTransits.push(t);
+      }
+    }
+    if (dirty) {
+      profile.transits = pendingTransits;
+    }
+  }
+
   const result: FleetAllResponse['stars'] = {};
   for (const [key, entry] of Object.entries(profile.stars)) {
     const starData = normalizeStarShipData(entry);
@@ -647,17 +677,17 @@ export async function loadAllFleet(
   }
 
   if (dirty) {
-    // Persist reconciled builds
+    // Persist reconciled builds + transits
     for (const [key, val] of Object.entries(result)) {
       profile.stars[key] = val;
     }
     await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
   }
 
-  return { stars: result };
+  return { stars: result, transits: pendingTransits };
 }
 
-/** Transfer ships from one star to another. */
+/** Transfer ships from one star to another (creates in-transit record). */
 export async function transferShips(
   store: RedisGameStore,
   username: string,
@@ -674,12 +704,9 @@ export async function transferShips(
   const profile = parseShipsProfile(raw);
 
   const fromKey = starKey(fromStarIndex);
-  const toKey = starKey(toStarIndex);
 
   const fromData = normalizeStarShipData(profile.stars[fromKey]);
-  const toData = normalizeStarShipData(profile.stars[toKey]);
   reconcileShipBuilding(fromData, now);
-  reconcileShipBuilding(toData, now);
 
   // Check source has enough ships
   const sourceSlot = fromData.ships.find((s) => s.typeId === shipTypeId);
@@ -691,23 +718,31 @@ export async function transferShips(
   sourceSlot.count -= count;
   fromData.ships = fromData.ships.filter((s) => s.count > 0);
 
-  // Add to destination
-  const destSlot = toData.ships.find((s) => s.typeId === shipTypeId);
-  if (destSlot) {
-    destSlot.count += count;
-  } else {
-    toData.ships.push({ typeId: shipTypeId, count });
-  }
+  // Calculate transit duration from ship speed
+  const catalogEntry = SHIP_CATALOG[shipTypeId as keyof typeof SHIP_CATALOG];
+  const speed = catalogEntry?.speed ?? 5;
+  const transitMs = Math.round((BASE_TRANSIT_SECONDS / speed) * 1000);
+
+  // Create transit record
+  const transit: ShipTransit = {
+    shipTypeId,
+    count,
+    fromStarIndex,
+    toStarIndex,
+    departedAt: now,
+    arrivalAt: now + transitMs,
+  };
 
   // Save
   profile.stars[fromKey] = fromData;
-  profile.stars[toKey] = toData;
+  if (!profile.transits) profile.transits = [];
+  profile.transits.push(transit);
   await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
 
   return {
     ok: true,
     from: { starIndex: fromStarIndex, ships: fromData.ships },
-    to: { starIndex: toStarIndex, ships: toData.ships },
+    transit,
   };
 }
 

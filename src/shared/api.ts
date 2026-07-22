@@ -221,8 +221,18 @@ export type UpgradeShipResponse = {
 
 // ── Fleet Management ─────────────────────────────────────────────────────────
 
+export type ShipTransit = {
+  shipTypeId: ShipTypeId;
+  count: number;
+  fromStarIndex: number;
+  toStarIndex: number;
+  departedAt: number;   // epoch ms
+  arrivalAt: number;    // epoch ms
+};
+
 export type FleetAllResponse = {
   stars: Record<string, { ships: StarShipsState; building: ShipBuildingState | null }>;
+  transits: ShipTransit[];
 };
 
 export type FleetTransferRequest = {
@@ -236,5 +246,5 @@ export type FleetTransferRequest = {
 export type FleetTransferResponse = {
   ok: true;
   from: { starIndex: number; ships: StarShipsState };
-  to: { starIndex: number; ships: StarShipsState };
+  transit: ShipTransit;
 };
