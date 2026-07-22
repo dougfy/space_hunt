@@ -3,7 +3,7 @@
 // Detects inline vs expanded mode and shows overlay buttons when inline.
 
 import { context, requestExpandedMode } from '@devvit/web/client';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, createDevvitBridge, getGameState, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingTransfer, createDevvitBridge, getGameState, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
@@ -256,6 +256,30 @@ async function pollEconomy() {
 
     // At galaxy tier, poll all fleets instead of single-star economy
     if (gs.galaxy.tier === 0) { // NavigationTier.Galaxy = 0
+      // Process pending fleet transfers
+      const transfer = consumePendingTransfer();
+      if (transfer) {
+        try {
+          const transferRes = await fetch('/api/fleet/transfer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              username,
+              fromStarIndex: transfer.fromStarIndex,
+              toStarIndex: transfer.toStarIndex,
+              shipTypeId: transfer.shipTypeId,
+              count: transfer.count,
+            }),
+          });
+          if (!transferRes.ok) {
+            const err = await transferRes.json().catch(() => ({ message: 'unknown' }));
+            console.warn('[FLEET] transfer failed:', err);
+          }
+        } catch (e) {
+          console.warn('[FLEET] transfer error:', e);
+        }
+      }
+
       try {
         const fleetRes = await fetch(`/api/fleet/all?username=${encodeURIComponent(username)}`);
         if (fleetRes.ok) {

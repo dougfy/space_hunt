@@ -24,6 +24,7 @@ import {
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
   worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
   setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert,
+  isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
 } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
@@ -362,6 +363,24 @@ function update(dt: number): void {
     gameState.galaxy.tier = revertTier === 'system' ? NavigationTier.System : NavigationTier.Planet;
     gameState.ship.vel = { x: 0, y: 0 };
     gameState.ship.thrust = false;
+  }
+
+  // Handle transfer mode star selection (galaxy tier only)
+  if (isInTransferMode() && inputState.pointerDown && inputState.pointerPos) {
+    const px = inputState.pointerPos.x;
+    const py = inputState.pointerPos.y;
+    // Check cancel button first
+    if (hitTestTransferCancel(px, py)) {
+      cancelTransferMode();
+      inputState.pointerDown = false;
+    } else {
+      // Check if a star was tapped
+      const targetStar = hitTestGalaxyStar(px, py);
+      if (targetStar >= 0) {
+        completeTransferSelection(targetStar);
+        inputState.pointerDown = false;
+      }
+    }
   }
 
   // Process input (ship targeting, etc.)

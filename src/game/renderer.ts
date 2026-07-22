@@ -886,6 +886,71 @@ function drawStarburst(
   ctx.restore();
 }
 
+// ── Fleet Transfer Mode ──────────────────────────────────────────────────────
+type TransferMode = {
+  fromStarIndex: number;
+  shipTypeId: number;
+} | null;
+
+let _transferMode: TransferMode = null;
+let _lastScreenStars: Array<{ starIndex: number; sx: number; sy: number }> = [];
+let _pendingTransfer: { fromStarIndex: number; toStarIndex: number; shipTypeId: number; count: number } | null = null;
+let _transferCancelButton: { x: number; y: number; w: number; h: number } | null = null;
+
+/** Enter transfer mode (called from fleet panel SEND button). */
+export function enterTransferMode(fromStarIndex: number, shipTypeId: number): void {
+  _transferMode = { fromStarIndex, shipTypeId };
+}
+
+/** Cancel transfer mode. */
+export function cancelTransferMode(): void {
+  _transferMode = null;
+}
+
+/** Check if in transfer mode. */
+export function isInTransferMode(): boolean {
+  return _transferMode !== null;
+}
+
+/** Hit-test galaxy stars for transfer target. Returns starIndex or -1. */
+export function hitTestGalaxyStar(sx: number, sy: number, radius = 18): number {
+  for (const s of _lastScreenStars) {
+    const dx = sx - s.sx;
+    const dy = sy - s.sy;
+    if (dx * dx + dy * dy < radius * radius) {
+      return s.starIndex;
+    }
+  }
+  return -1;
+}
+
+/** Complete a transfer selection — sets pending transfer and exits transfer mode. */
+export function completeTransferSelection(toStarIndex: number): void {
+  if (!_transferMode) return;
+  if (toStarIndex === _transferMode.fromStarIndex) return; // can't send to same star
+  _pendingTransfer = {
+    fromStarIndex: _transferMode.fromStarIndex,
+    toStarIndex,
+    shipTypeId: _transferMode.shipTypeId,
+    count: 1,
+  };
+  _transferMode = null;
+}
+
+/** Consume pending transfer request (called by client polling). */
+export function consumePendingTransfer(): { fromStarIndex: number; toStarIndex: number; shipTypeId: number; count: number } | null {
+  const t = _pendingTransfer;
+  _pendingTransfer = null;
+  return t;
+}
+
+/** Hit-test the transfer cancel button. Returns true if hit. */
+export function hitTestTransferCancel(sx: number, sy: number): boolean {
+  if (!_transferCancelButton) return false;
+  const b = _transferCancelButton;
+  return sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h;
+}
+
 export function drawGalaxyView(
   r: Renderer,
   camera: Camera,
@@ -909,6 +974,9 @@ export function drawGalaxyView(
     if (sc.x < -40 || sc.x > screenW + 40 || sc.y < -40 || sc.y > screenH + 40) continue;
     screenStars.push({ star, tone: starView.tone, sx: sc.x, sy: sc.y });
   }
+
+  // Cache for hit testing
+  _lastScreenStars = screenStars.map(s => ({ starIndex: s.star.index, sx: s.sx, sy: s.sy }));
 
   // ── Jump links (constellation lines between nearby stars) ──
   if (showLinks) {
@@ -987,6 +1055,67 @@ export function drawGalaxyView(
   ctx.fillStyle = G_MED;
   ctx.fillText('LOCAL STAR MAP', 14, 34);
   ctx.restore();
+
+  // ── Transfer mode indicator ──
+  if (_transferMode) {
+    const fromEntry = SHIP_CATALOG[_transferMode.shipTypeId as keyof typeof SHIP_CATALOG];
+    const shipName = fromEntry?.name ?? 'Ship';
+
+    // Draw pulsing rings around all valid target stars
+    const t = performance.now() * 0.003;
+    const pulse = 0.5 + 0.5 * Math.sin(t);
+    for (const s of screenStars) {
+      if (s.star.index === _transferMode.fromStarIndex) continue;
+      ctx.save();
+      ctx.strokeStyle = `rgba(79, 255, 176, ${0.2 + pulse * 0.3})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(s.sx, s.sy, 14 + pulse * 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Highlight source star
+    const srcStar = screenStars.find(s => s.star.index === _transferMode!.fromStarIndex);
+    if (srcStar) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 200, 80, 0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(srcStar.sx, srcStar.sy, 12, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Banner at top
+    ctx.save();
+    ctx.fillStyle = 'rgba(0, 10, 5, 0.85)';
+    const bannerH = 24;
+    ctx.fillRect(0, screenH - bannerH - 4, screenW, bannerH + 4);
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = G_BRIGHT;
+    ctx.fillText(`SENDING ${shipName.toUpperCase()} — TAP DESTINATION STAR`, screenW / 2, screenH - bannerH / 2 - 2);
+
+    // Cancel button
+    const cancelW = 60;
+    const cancelX = screenW - cancelW - 12;
+    const cancelY = screenH - bannerH - 2;
+    ctx.strokeStyle = 'rgba(255, 100, 80, 0.8)';
+    ctx.lineWidth = 1;
+    roundedRect(ctx, cancelX, cancelY, cancelW, 18, 3);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255, 100, 80, 0.9)';
+    ctx.font = 'bold 8px monospace';
+    ctx.fillText('CANCEL', cancelX + cancelW / 2, cancelY + 9);
+    ctx.restore();
+
+    // Store cancel button rect for hit testing
+    _transferCancelButton = { x: cancelX, y: cancelY, w: cancelW, h: 18 };
+  } else {
+    _transferCancelButton = null;
+  }
 }
 
 /** Draw a panel border (corner brackets) */
@@ -2347,10 +2476,10 @@ function hitTestFleetPanel(sx: number, sy: number): void {
       return;
     }
   }
-  // SEND buttons (no-op for now, just consume click)
+  // SEND buttons (enter transfer mode)
   for (const btn of _fleetSendButtons) {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
-      // TODO: enter target-selection mode
+      enterTransferMode(btn.starIndex, btn.shipTypeId);
       return;
     }
   }
