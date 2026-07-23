@@ -20,9 +20,11 @@ export function getGalaxyStarTone(
   star: Pick<GalaxyStar, 'index' | 'owner' | 'discovered'>,
   homeStarIndex: number,
 ): StarVisualTone {
-  if (star.index === homeStarIndex) return 'blue';
-  if (star.owner === 'foreign' && star.discovered) return 'red';
-  return 'green';
+  if (star.index === homeStarIndex) return 'blue';      // home star
+  if (star.owner === 'foreign' && star.discovered) return 'red';   // enemy occupied
+  if (star.owner === 'player' && star.discovered) return 'green';  // player explored
+  if (star.discovered) return 'white';                  // visited/probed but unowned
+  return 'yellow';                                      // unexplored
 }
 
 export function buildGalaxyViewModel(galaxy: GalaxyState): GalaxyViewModel {

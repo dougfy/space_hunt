@@ -110,6 +110,7 @@ export type PlayerProfileResponse = {
   homeStar?: number;
   lastPosition?: { starIndex: number; tier: number; bodyIndex: number };
   claimed?: Array<{ starIndex: number; username: string }>;
+  discoveredStars?: number[];
 };
 
 export type ResourceStore = {
@@ -168,6 +169,7 @@ export type SaveProfileRequest = {
   username: string;
   name?: string;
   lastPosition?: { starIndex: number; tier: number; bodyIndex: number };
+  discoveredStars?: number[];
 };
 
 // ── Ship Types ──────────────────────────────────────────────────────────────
@@ -247,4 +249,34 @@ export type FleetTransferResponse = {
   ok: true;
   from: { starIndex: number; ships: StarShipsState };
   transit: ShipTransit;
+};
+
+// ── Player stats (playtime + interactions) ──────────────────────────────────
+
+export type StatsHeartbeatRequest = {
+  username: string;
+  deltaSeconds: number;
+  deltaInteractions: number;
+};
+
+export type PlayerStatsData = {
+  playtimeSeconds: number;
+  interactions: number;
+  lastSeen: number;
+};
+
+export type AdminPlayerSummary = {
+  username: string;
+  starIndex: number;
+  starName: string;
+  playtimeSeconds: number;
+  interactions: number;
+  lastSeen: number;
+  totalBuildingLevels: number;
+  totalShips: number;
+  shipBreakdown: Array<{ name: string; count: number }>;
+};
+
+export type AdminPlayerStatsResponse = {
+  players: AdminPlayerSummary[];
 };

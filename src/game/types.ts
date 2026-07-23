@@ -112,6 +112,7 @@ export interface GameState {
   galaxy: import('./galaxy').GalaxyState;
   galaxyZoom: number; // current galaxy ortho size (10–55)
   galaxyCamPos: Vec2; // camera target at galaxy tier (independent of ship)
+  galaxyZoomCooldown: number; // seconds remaining after user zoom — suppresses auto-lerps
 }
 
 export interface Camera {

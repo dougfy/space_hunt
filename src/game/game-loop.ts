@@ -5,7 +5,7 @@ import { ZoomState } from './types';
 import {
   CANVAS_W, CANVAS_H, FUEL_MAX,
   FUEL_DRAIN_PER_SECOND, LOW_FUEL_THRESHOLD, LOW_FUEL_BLINK_PERIOD,
-  SHIP_IMPACT_BUFFER, SYSTEM_SIZE, SHIP_SIZE, PLAYER_MAX_HP,
+  SHIP_IMPACT_BUFFER, SYSTEM_SIZE, SHIP_SIZE, PLAYER_MAX_HP, GALAXY_SIZE,
 } from './constants';
 import { vec2, add } from './math';
 import { generateAsteroids, generateRingAsteroids } from './asteroids';
@@ -22,7 +22,7 @@ import {
   drawGalaxyView, drawSystemView, drawPlanetView, drawTierHUD,
   drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
-  worldToScreen, screenToWorld, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
+  worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
   setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert,
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
   drawGalaxyZoomButtons, hitTestGalaxyZoomButtons,
@@ -74,6 +74,26 @@ export function setStarClaims(claims: Array<{ starIndex: number; username: strin
   }
 }
 
+/** Restore discovered stars from server data. */
+export function setDiscoveredStars(starIndices: number[]): void {
+  if (!gameState) return;
+  for (const idx of starIndices) {
+    const star = gameState.galaxy.stars[idx];
+    if (!star) continue;
+    // Always mark as player-discovered (overrides foreign from setStarClaims)
+    star.owner = 'player';
+    star.discovered = true;
+  }
+}
+
+/** Get all star indices the player has discovered. */
+export function getDiscoveredStars(): number[] {
+  if (!gameState) return [];
+  return gameState.galaxy.stars
+    .filter(s => s.discovered && s.owner === 'player')
+    .map(s => s.index);
+}
+
 /**
  * Relocate the player to a different home star.
  * Called after profile load reveals the server-assigned star differs from the default.
@@ -121,9 +141,27 @@ export function relocateToHomeStar(starIndex: number): void {
 export function restorePosition(starIndex: number, tier: number, bodyIndex: number): void {
   if (!gameState) return;
 
-  const star = gameState.galaxy.stars[starIndex];
-  if (!star) { console.warn(`[RESTORE] invalid starIndex ${starIndex}`); return; }
+  // For galaxy tier with invalid starIndex, just switch to galaxy view centered on home
+  if (starIndex < 0 || starIndex >= gameState.galaxy.stars.length) {
+    if (tier === NavigationTier.Galaxy) {
+      const home = gameState.galaxy.stars[gameState.galaxy.homeStarIndex];
+      if (home) {
+        gameState.galaxy.tier = NavigationTier.Galaxy;
+        gameState.galaxy.currentStarIndex = -1;
+        gameState.ship.pos = vec2(home.pos.x, home.pos.y);
+        gameState.galaxyCamPos = { x: home.pos.x, y: home.pos.y };
+        console.log(`[RESTORE] galaxy view at home star (invalid starIndex ${starIndex})`);
+      }
+    } else {
+      console.warn(`[RESTORE] invalid starIndex ${starIndex}`);
+    }
+    return;
+  }
 
+  const star = gameState.galaxy.stars[starIndex];
+  if (!star) { console.warn(`[RESTORE] star not found at index ${starIndex}`); return; }
+
+  star.owner = 'player';
   star.discovered = true;
   gameState.galaxy.currentStarIndex = starIndex;
 
@@ -133,10 +171,11 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
     gameState.ship.pos = vec2(star.pos.x, star.pos.y);
     gameState.galaxyCamPos = { x: star.pos.x, y: star.pos.y };
   } else if (tier === NavigationTier.System) {
-    // At system view — generate system, place ship in system center
+    // At system view — generate system, place ship near system center
     gameState.galaxy.bodies = generateSystem(star);
     gameState.galaxy.tier = NavigationTier.System;
-    gameState.ship.pos = vec2(0, 5);
+    const center = SYSTEM_SIZE / 2;
+    gameState.ship.pos = vec2(center, center - 3);
   } else {
     // Planet tier — generate system, go to specific body
     gameState.galaxy.bodies = generateSystem(star);
@@ -214,6 +253,7 @@ export function startGame(
     galaxy: createGalaxyState(seed),
     galaxyZoom: 20,
     galaxyCamPos: { x: 50, y: 50 },
+    galaxyZoomCooldown: 0,
   };
 
   // Splash mode: drop into a self-contained asteroid field immediately
@@ -374,9 +414,11 @@ function update(dt: number): void {
     const zHit = hitTestGalaxyZoomButtons(renderer, inputState.pointerPos.x, inputState.pointerPos.y);
     if (zHit === 'zoomIn') {
       gameState.galaxyZoom = Math.max(GALAXY_ORTHO_MIN, gameState.galaxyZoom - GALAXY_ZOOM_STEP);
+      gameState.galaxyZoomCooldown = 1.0;
       inputState.pointerDown = false;
     } else if (zHit === 'zoomOut') {
       gameState.galaxyZoom = Math.min(GALAXY_ORTHO_MAX, gameState.galaxyZoom + GALAXY_ZOOM_STEP);
+      gameState.galaxyZoomCooldown = 1.0;
       inputState.pointerDown = false;
     }
   }
@@ -441,19 +483,38 @@ function update(dt: number): void {
 
   // ── Galaxy zoom: consume scroll/pinch delta ──
   if (inputState.scrollDelta !== 0 && gameState.galaxy.tier === NavigationTier.Galaxy) {
-    const zoomingIn = inputState.scrollDelta < 0; // negative = zoom in
+    const prevZoom = gameState.galaxyZoom;
     gameState.galaxyZoom += inputState.scrollDelta * GALAXY_ZOOM_STEP;
     gameState.galaxyZoom = Math.max(GALAXY_ORTHO_MIN, Math.min(GALAXY_ORTHO_MAX, gameState.galaxyZoom));
 
-    // Zoom-toward-cursor: when zooming in, shift camera toward mouse world position
-    if (zoomingIn && inputState.cursorPos) {
+    // Zoom-toward-cursor: keep world point under cursor stationary on screen
+    // galaxyCamPos is always clamped/in-sync with camera.pos now
+    if (inputState.cursorPos) {
       const screenW = renderer.width / (window.devicePixelRatio || 1);
       const screenH = renderer.height / (window.devicePixelRatio || 1);
-      const worldTarget = screenToWorld(inputState.cursorPos, gameState.camera, screenW, screenH);
-      // Move 15% toward cursor each scroll step
-      gameState.galaxyCamPos.x += (worldTarget.x - gameState.galaxyCamPos.x) * 0.15;
-      gameState.galaxyCamPos.y += (worldTarget.y - gameState.galaxyCamPos.y) * 0.15;
+      const camX = gameState.galaxyCamPos.x, camY = gameState.galaxyCamPos.y;
+      const aspect = gameState.camera.aspect;
+      const oldHalfH = prevZoom;
+      const oldHalfW = oldHalfH * aspect;
+      const nx = inputState.cursorPos.x / screenW;
+      const ny = inputState.cursorPos.y / screenH;
+      const newHalfH = gameState.galaxyZoom;
+      const newHalfW = newHalfH * aspect;
+      // Only shift axes where viewport is smaller than galaxy (otherwise camera is centered)
+      if (newHalfW * 2 < GALAXY_SIZE) {
+        const wbX = camX + (nx * 2 - 1) * oldHalfW;
+        const waX = camX + (nx * 2 - 1) * newHalfW;
+        gameState.galaxyCamPos.x = camX + (wbX - waX);
+      }
+      if (newHalfH * 2 < GALAXY_SIZE) {
+        const wbY = camY + (1 - ny * 2) * oldHalfH;
+        const waY = camY + (1 - ny * 2) * newHalfH;
+        gameState.galaxyCamPos.y = camY + (wbY - waY);
+      }
     }
+
+    // Suppress auto-lerps for 1 second after user zooms
+    gameState.galaxyZoomCooldown = 1.0;
 
     inputState.scrollDelta = 0;
   } else {
@@ -543,21 +604,18 @@ function update(dt: number): void {
   if (transition) {
     // Belt pass-through: if ship has active target beyond the belt, don't enter Local tier
     let skipTransition = false;
-    if (transition.newTier === NavigationTier.Local && gameState.tgtActive) {
+    if (transition.newTier === NavigationTier.Local) {
       const center = SYSTEM_SIZE / 2;
       const body = gameState.galaxy.bodies[transition.bodyIndex];
-      if (body) {
+      if (body && gameState.tgtActive) {
+        const beltTolerance = 0.5;
         const tgtDistFromCenter = Math.sqrt(
           (gameState.tgtPos.x - center) ** 2 + (gameState.tgtPos.y - center) ** 2,
         );
-        const shipDistFromCenter = Math.sqrt(
-          (worldShipPos.x - center) ** 2 + (worldShipPos.y - center) ** 2,
-        );
-        // Ship approaching from inside and target is outside belt, or vice versa
-        const shipInside = shipDistFromCenter < body.orbitDist;
-        const tgtInside = tgtDistFromCenter < body.orbitDist;
-        if (shipInside !== tgtInside) {
-          // Target is on the other side — pass through, don't enter
+        // If target is NOT on the belt (farther than beltTolerance from orbit),
+        // the player wants to fly through, not enter. Only enter if clicking ON the belt.
+        const tgtOnBelt = Math.abs(tgtDistFromCenter - body.orbitDist) <= beltTolerance;
+        if (!tgtOnBelt) {
           skipTransition = true;
         }
       }

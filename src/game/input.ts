@@ -173,6 +173,8 @@ export function setupInput(
   ]);
 
   const onKeyDown = (e: KeyboardEvent) => {
+    // Don't intercept keys when typing in an input field
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     const key = e.key.toLowerCase();
     if (MOVEMENT_KEYS.has(key) || key === ' ') {
       e.preventDefault();

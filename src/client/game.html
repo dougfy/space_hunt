@@ -217,30 +217,19 @@
       #ship-name-input:focus {
         border-color: #4fffb0;
       }
-      #settings-version {
+      #version-display {
         font-family: monospace;
         font-size: 9px;
         color: #5a7a6a;
         text-align: right;
-        margin-top: 2px;
+        margin-top: 8px;
         border-top: 1px solid rgba(79, 255, 176, 0.15);
         padding-top: 4px;
       }
       #debug-log {
         display: none;
-        max-height: 200px;
-        overflow-y: auto;
-        background: rgba(0, 0, 0, 0.8);
-        border: 1px solid #3a7a5a;
-        padding: 6px;
-        font-family: monospace;
-        font-size: 9px;
-        color: #6ab89a;
-        white-space: pre-wrap;
-        word-break: break-all;
       }
-      #debug-log.visible { display: block; }
-      #debug-toggle {
+      #debug-copy {
         background: transparent;
         border: 1px solid #3a7a5a;
         color: #5a7a6a;
@@ -248,19 +237,6 @@
         font-size: 10px;
         padding: 4px 8px;
         cursor: pointer;
-        margin-top: 4px;
-      }
-      #debug-toggle:hover { border-color: #4fffb0; color: #8ff7cf; }
-      #debug-copy {
-        background: transparent;
-        border: 1px solid #3a7a5a;
-        color: #5a7a6a;
-        font-family: monospace;
-        font-size: 10px;
-        padding: 4px 6px;
-        cursor: pointer;
-        margin-top: 4px;
-        margin-left: 4px;
       }
       #debug-copy:hover { border-color: #4fffb0; color: #8ff7cf; }
 
@@ -306,6 +282,24 @@
       }
       .admin-claim-star { color: #ff6644; font-weight: bold; }
       .admin-claim-user { color: #cc9977; }
+      #admin-player-stats {
+        font-family: monospace;
+        font-size: 9px;
+        color: #cc9977;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        max-height: 250px;
+        overflow-y: auto;
+      }
+      .admin-player-card {
+        background: rgba(60, 20, 10, 0.6);
+        border: 1px solid rgba(255, 102, 68, 0.2);
+        padding: 4px 6px;
+      }
+      .admin-player-card .player-name { color: #ff6644; font-weight: bold; }
+      .admin-player-card .player-star { color: #ffaa88; }
+      .admin-player-card .player-detail { color: #997755; font-size: 8px; }
       .admin-btn {
         background: rgba(80, 20, 10, 0.8);
         border: 1px solid #ff6644;
@@ -341,6 +335,9 @@
       <h3 style="font-size:9px;color:#cc7755;margin:0">Star Claims</h3>
       <div id="admin-claims"><span style="color:#776655">loading...</span></div>
       <button id="admin-refresh" class="admin-btn">Refresh Claims</button>
+      <h3 style="font-size:9px;color:#cc7755;margin:8px 0 2px 0">Player Stats</h3>
+      <div id="admin-player-stats"><span style="color:#776655">click refresh</span></div>
+      <button id="admin-copy-stats" class="admin-btn">&#x1F4CB; Copy Player Stats</button>
       <button id="admin-reset-claims" class="admin-btn danger">Reset All Claims</button>
       <button id="admin-reset-all" class="admin-btn danger">Full Reset (claims + economy)</button>
       <button id="admin-complete-builds" class="admin-btn">Complete My Builds</button>
@@ -474,13 +471,13 @@
     <div id="settings-panel">
       <h3>Ship Name</h3>
       <input id="ship-name-input" type="text" maxlength="16" placeholder="pilot" autocomplete="off" />
-      <h3 style="margin-top:10px">Steering</h3>
-      <div id="steering-info" style="font-size:10px;color:#5a7a6a;margin:4px 0">Auto-detects: click=mouse, WASD/arrows=keyboard</div>
       <h3 style="margin-top:10px">Nearby Ships</h3>
       <div id="ghost-list"><span class="ghost-empty">none</span></div>
-      <div id="settings-version">v0.0.0</div>
-      <button id="debug-toggle">DEBUG LOG</button><button id="debug-copy" title="Copy log">&#x2398;</button>
+      <div style="margin-top:8px;text-align:right">
+        <button id="debug-copy" title="Copy debug log to clipboard">&#x1F4CB; Copy Debug Log</button>
+      </div>
       <div id="debug-log"></div>
+      <div id="version-display"></div>
     </div>
     <div id="overlay" class="visible">
       <div id="btn-row">

@@ -3,7 +3,7 @@
 // Replaces the Unity SendMessage bridge with direct function calls.
 
 import type { Projectile, ShipShape } from './types';
-import { startGame, stopGame, getGameState, setGameCallbacks, relocateToHomeStar, restorePosition } from './game-loop';
+import { startGame, stopGame, getGameState, setGameCallbacks, relocateToHomeStar, restorePosition, getDiscoveredStars, setDiscoveredStars } from './game-loop';
 import { setRemotePoses, RemotePoseItem } from './ghosts';
 import { applyPodCollected } from './pods';
 import { normalizeShipShape } from './ship';
@@ -87,6 +87,7 @@ export function createDevvitBridge(
         const savedStarIndex = s.galaxy.currentStarIndex;
         const savedTier = s.galaxy.tier;
         const savedBodyIndex = s.galaxy.currentBodyIndex;
+        const savedDiscovered = getDiscoveredStars();
         // Transition from splash to real game — stop splash, start fresh
         stopGame();
         startGame(canvas, pendingSeed, pendingName, pendingShape, callbacks);
@@ -94,6 +95,10 @@ export function createDevvitBridge(
         const defaultHome = getGameState()?.galaxy.homeStarIndex;
         if (savedHomeStar !== defaultHome) {
           relocateToHomeStar(savedHomeStar);
+        }
+        // Re-apply discovered stars from the splash state
+        if (savedDiscovered.length > 0) {
+          setDiscoveredStars(savedDiscovered);
         }
         // Restore position if it differs from home star default
         const gs = getGameState();

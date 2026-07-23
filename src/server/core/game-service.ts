@@ -19,6 +19,9 @@ import type {
   StarShipsState,
   StarShipsResponse,
   PlayerProfileResponse,
+  PlayerStatsData,
+  AdminPlayerSummary,
+  AdminPlayerStatsResponse,
   PoseUpdateRequest,
   PostShotsRequest,
   RemoteShotItem,
@@ -43,6 +46,7 @@ import {
   reconcileStarBuildings,
 } from '../../shared/buildings';
 import { SHIP_CATALOG, canBuildShip, getUpgradeTarget, canUpgradeShip } from '../../shared/ships';
+import { getStarName } from '../../shared/star-names';
 
 const ECONOMY_FIELD = 'economy';
 const DEFAULT_STORE: ResourceStore = { ore: 640, food: 640, energy: 640 };
@@ -301,6 +305,11 @@ export async function loadProfile(
       result.lastPosition = JSON.parse(raw.lastPosition);
     } catch { /* ignore bad data */ }
   }
+  if (raw.discoveredStars) {
+    try {
+      result.discoveredStars = JSON.parse(raw.discoveredStars);
+    } catch { /* ignore bad data */ }
+  }
   return result;
 }
 
@@ -428,6 +437,7 @@ export async function saveProfile(
   const fields: Record<string, string> = {};
   if (body.name !== undefined) fields.name = body.name;
   if (body.lastPosition !== undefined) fields.lastPosition = JSON.stringify(body.lastPosition);
+  if (body.discoveredStars !== undefined) fields.discoveredStars = JSON.stringify(body.discoveredStars);
   if (Object.keys(fields).length > 0) {
     await store.hSet(`profile:${body.username}`, fields);
   }
@@ -893,4 +903,101 @@ export async function getClaimedStars(
     starIndex: parseInt(k.replace('s:', ''), 10),
     username: v,
   }));
+}
+
+// ── Player Stats (playtime + interactions) ──────────────────────────────────
+
+const STATS_FIELD = 'stats';
+
+function parseStats(raw: string | undefined): PlayerStatsData {
+  if (!raw) return { playtimeSeconds: 0, interactions: 0, lastSeen: 0 };
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      playtimeSeconds: Number(parsed.playtimeSeconds) || 0,
+      interactions: Number(parsed.interactions) || 0,
+      lastSeen: Number(parsed.lastSeen) || 0,
+    };
+  } catch {
+    return { playtimeSeconds: 0, interactions: 0, lastSeen: 0 };
+  }
+}
+
+export async function updatePlayerStats(
+  store: RedisGameStore,
+  username: string,
+  deltaSeconds: number,
+  deltaInteractions: number,
+  now = Date.now(),
+): Promise<void> {
+  const raw = await store.hGet(`profile:${username}`, STATS_FIELD);
+  const stats = parseStats(raw);
+  stats.playtimeSeconds += Math.max(0, Math.min(deltaSeconds, 120)); // cap at 2min per heartbeat
+  stats.interactions += Math.max(0, Math.min(deltaInteractions, 10000)); // sanity cap
+  stats.lastSeen = now;
+  await store.hSet(`profile:${username}`, { [STATS_FIELD]: JSON.stringify(stats) });
+}
+
+export async function getAdminPlayerStats(
+  store: RedisGameStore,
+  postId: string,
+): Promise<AdminPlayerStatsResponse> {
+  const claims = await getClaimedStars(store, postId);
+  const players: AdminPlayerSummary[] = [];
+
+  for (const claim of claims) {
+    const profileRaw = await store.hGetAll(`profile:${claim.username}`);
+    const stats = parseStats(profileRaw[STATS_FIELD]);
+
+    // Economy: sum building levels across all stars
+    const economy = parseEconomy(profileRaw[ECONOMY_FIELD]);
+    let totalBuildingLevels = 0;
+    for (const starData of Object.values(economy.stars)) {
+      if (starData?.buildings) {
+        for (const b of Object.values(starData.buildings)) {
+          totalBuildingLevels += (b as { level?: number }).level ?? 0;
+        }
+      }
+    }
+
+    // Ships: count across all stars
+    let totalShips = 0;
+    const shipCounts: Record<number, number> = {};
+    try {
+      const shipsRaw = profileRaw.ships;
+      if (shipsRaw) {
+        const shipsProfile = JSON.parse(shipsRaw) as StoredShipsProfile;
+        for (const starData of Object.values(shipsProfile.stars ?? {})) {
+          for (const s of starData.ships ?? []) {
+            totalShips += s.count;
+            shipCounts[s.typeId] = (shipCounts[s.typeId] ?? 0) + s.count;
+          }
+        }
+      }
+    } catch { /* ignore bad data */ }
+
+    const shipBreakdown = Object.entries(shipCounts)
+      .map(([tid, count]) => ({
+        name: SHIP_CATALOG[Number(tid) as ShipTypeId]?.name ?? `Type ${tid}`,
+        count,
+      }))
+      .filter(s => s.count > 0)
+      .sort((a, b) => b.count - a.count);
+
+    players.push({
+      username: claim.username,
+      starIndex: claim.starIndex,
+      starName: getStarName(claim.starIndex),
+      playtimeSeconds: stats.playtimeSeconds,
+      interactions: stats.interactions,
+      lastSeen: stats.lastSeen,
+      totalBuildingLevels,
+      totalShips,
+      shipBreakdown,
+    });
+  }
+
+  // Sort by playtime descending
+  players.sort((a, b) => b.playtimeSeconds - a.playtimeSeconds);
+  return { players };
 }

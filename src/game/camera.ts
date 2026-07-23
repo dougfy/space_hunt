@@ -41,25 +41,44 @@ export function updateCamera(state: GameState, dt: number): void {
   // ── Galaxy / System tiers: fixed ortho, follow ship ──
   if (tier === NavigationTier.Galaxy) {
     camera.orthoSize = state.galaxyZoom;
-    // When zoomed out far, lerp camera toward galaxy center
-    if (state.galaxyZoom >= GALAXY_CENTER_THRESHOLD) {
-      const midX = GALAXY_SIZE / 2;
-      const midY = GALAXY_SIZE / 2;
-      state.galaxyCamPos.x += (midX - state.galaxyCamPos.x) * 0.1;
-      state.galaxyCamPos.y += (midY - state.galaxyCamPos.y) * 0.1;
-    } else {
-      // When at normal zoom, gently follow ship so flying updates the view
-      const followRate = 0.05;
-      state.galaxyCamPos.x += (state.ship.pos.x - state.galaxyCamPos.x) * followRate;
-      state.galaxyCamPos.y += (state.ship.pos.y - state.galaxyCamPos.y) * followRate;
-    }
-    // Camera follows galaxyCamPos (set by zoom-toward-cursor logic)
-    camera.pos = { x: state.galaxyCamPos.x, y: state.galaxyCamPos.y };
-    // Clamp within galaxy bounds
+
+    // Compute clamp bounds for current zoom
     const halfW = camera.orthoSize * camera.aspect;
     const halfH = camera.orthoSize;
-    camera.pos.x = clamp(camera.pos.x, halfW, GALAXY_SIZE - halfW);
-    camera.pos.y = clamp(camera.pos.y, halfH, GALAXY_SIZE - halfH);
+    const mid = GALAXY_SIZE / 2;
+
+    // Determine valid camera ranges
+    const canPanX = halfW * 2 < GALAXY_SIZE;
+    const canPanY = halfH * 2 < GALAXY_SIZE;
+    const minX = canPanX ? halfW : mid;
+    const maxX = canPanX ? GALAXY_SIZE - halfW : mid;
+    const minY = canPanY ? halfH : mid;
+    const maxY = canPanY ? GALAXY_SIZE - halfH : mid;
+
+    // Tick zoom cooldown
+    if (state.galaxyZoomCooldown > 0) {
+      state.galaxyZoomCooldown = Math.max(0, state.galaxyZoomCooldown - dt);
+    }
+
+    // Auto-lerps only when user is NOT actively zooming
+    if (state.galaxyZoomCooldown <= 0) {
+      if (state.galaxyZoom >= GALAXY_CENTER_THRESHOLD) {
+        state.galaxyCamPos.x += (mid - state.galaxyCamPos.x) * 0.1;
+        state.galaxyCamPos.y += (mid - state.galaxyCamPos.y) * 0.1;
+      } else if (state.galaxyZoom >= GALAXY_ORTHO_DEFAULT) {
+        const targetX = clamp(state.ship.pos.x, minX, maxX);
+        const targetY = clamp(state.ship.pos.y, minY, maxY);
+        const followRate = 0.05;
+        state.galaxyCamPos.x += (targetX - state.galaxyCamPos.x) * followRate;
+        state.galaxyCamPos.y += (targetY - state.galaxyCamPos.y) * followRate;
+      }
+    }
+
+    // Clamp galaxyCamPos itself to valid bounds (keeps it in sync with what's renderable)
+    state.galaxyCamPos.x = clamp(state.galaxyCamPos.x, minX, maxX);
+    state.galaxyCamPos.y = clamp(state.galaxyCamPos.y, minY, maxY);
+
+    camera.pos = { x: state.galaxyCamPos.x, y: state.galaxyCamPos.y };
     return;
   }
 

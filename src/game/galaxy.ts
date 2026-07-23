@@ -377,6 +377,8 @@ export function applyTransition(
         type: 'visit-star',
         starIndex: transition.starIndex,
       });
+      const visitedStar = ownership.stars.find(s => s.index === transition.starIndex);
+      console.log(`[VISIT] star ${transition.starIndex} owner=${visitedStar?.owner} discovered=${visitedStar?.discovered}`);
       galaxy.stars = galaxy.stars.map((star) => {
         const ownedStar = ownership.stars.find((candidate) => candidate.index === star.index);
         return ownedStar

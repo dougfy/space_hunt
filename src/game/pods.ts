@@ -104,7 +104,7 @@ export function checkPodCollection(state: GameState): number[] {
 
 export function applyPodCollected(state: GameState, podId: number, mine: boolean): void {
   const pod = state.pods.find(p => p.id === podId);
-  if (!pod) { console.log('[PODS] applyPodCollected: pod not found id=', podId); return; }
+  if (!pod) return;
   if (pod.collected) return;
   pod.collected = true;
 

@@ -20,6 +20,8 @@ import type {
   PostShotsRequest,
   RoomPosesResponse,
   SaveProfileRequest,
+  StatsHeartbeatRequest,
+  AdminPlayerStatsResponse,
   StarEconomyResponse,
   StarShipsResponse,
   ShotsResponse,
@@ -34,6 +36,7 @@ import {
   completeAllBuilds,
   getClaimedPods,
   getClaimedStars,
+  getAdminPlayerStats,
   loadAllFleet,
   loadStarEconomy,
   loadStarShips,
@@ -42,6 +45,7 @@ import {
   loadProfile,
   saveProfile,
   transferShips,
+  updatePlayerStats,
   upgradeBuilding,
   upgradeShip,
   storePose,
@@ -217,6 +221,7 @@ api.get('/profile', async (c) => {
   if (!user) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
 
   const response = await loadProfile(redis, user);
+  console.log('[SERVER-LOAD] profile for', user, ':', JSON.stringify({ lastPosition: response.lastPosition, discoveredStars: response.discoveredStars }));
 
   // If postId provided, also resolve home star claim
   if (postId) {
@@ -225,6 +230,14 @@ api.get('/profile', async (c) => {
   }
 
   return c.json<PlayerProfileResponse>(response);
+});
+
+/** Debug: dump raw profile hash from Redis. */
+api.get('/debug/profile-raw', async (c) => {
+  const user = c.req.query('username');
+  if (!user) return c.json({ error: 'username required' }, 400);
+  const raw = await redis.hGetAll(`profile:${user}`);
+  return c.json({ raw });
 });
 
 /** Get all claimed stars for a post. */
@@ -284,9 +297,11 @@ api.post('/admin/reset-all', async (c) => {
 /** Save a user's profile (ship name + shape). */
 api.post('/profile', async (c) => {
   const body = await c.req.json<SaveProfileRequest>();
+  console.log('[SERVER-SAVE] profile request:', JSON.stringify(body));
   if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
 
   await saveProfile(redis, body);
+  console.log('[SERVER-SAVE] profile saved for', body.username);
   return c.json<OkResponse>({ ok: true });
 });
 
@@ -485,4 +500,20 @@ api.post('/debug/reset-fleet', async (c) => {
     const message = error instanceof Error ? error.message : 'Unable to reset fleet';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
   }
+});
+
+/** Stats heartbeat — client sends playtime + interactions delta periodically. */
+api.post('/stats', async (c) => {
+  const body = await c.req.json<StatsHeartbeatRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  await updatePlayerStats(redis, body.username, body.deltaSeconds ?? 0, body.deltaInteractions ?? 0);
+  return c.json<OkResponse>({ ok: true });
+});
+
+/** Admin: get all player stats + summaries for the post. */
+api.get('/admin/player-stats', async (c) => {
+  const postId = c.req.query('postId');
+  if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
+  const response = await getAdminPlayerStats(redis, postId);
+  return c.json<AdminPlayerStatsResponse>(response);
 });

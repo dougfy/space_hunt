@@ -33,7 +33,7 @@ export function reduceStarOwnership(
   const nextStars: StarOwnershipState[] = stars.map((star) => {
     if (star.index !== command.starIndex || star.discovered) return star;
     discoveredOwner = star.owner;
-    return { ...star, discovered: true };
+    return { ...star, owner: 'player', discovered: true };
   });
 
   return {

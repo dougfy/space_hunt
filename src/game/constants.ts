@@ -125,29 +125,8 @@ export const SYSTEM_EXIT_RADIUS = 18;    // distance from system center to exit 
 export const GALAXY_SHIP_SPEED = 4.5;    // ~5× normal so crossing ~22s matches current local feel
 export const SYSTEM_SHIP_SPEED = 1.8;    // slower than galaxy, faster than local
 
-// 100 well-known real star names (one per galaxy star)
-export const STAR_NAMES: string[] = [
-  'Sirius', 'Canopus', 'Arcturus', 'Vega', 'Capella',
-  'Rigel', 'Procyon', 'Betelgeuse', 'Altair', 'Aldebaran',
-  'Antares', 'Spica', 'Pollux', 'Fomalhaut', 'Deneb',
-  'Regulus', 'Achernar', 'Castor', 'Gacrux', 'Bellatrix',
-  'Elnath', 'Miaplacidus', 'Alnilam', 'Alioth', 'Dubhe',
-  'Mirfak', 'Wezen', 'Sargas', 'Kaus', 'Avior',
-  'Alkaid', 'Menkalinan', 'Atria', 'Alhena', 'Peacock',
-  'Mirzam', 'Alphard', 'Hamal', 'Polaris', 'Nunki',
-  'Mirach', 'Alpheratz', 'Rasalhague', 'Kochab', 'Saiph',
-  'Denebola', 'Algol', 'Tiaki', 'Muhlifain', 'Aspidiske',
-  'Suhail', 'Alphecca', 'Mintaka', 'Sadr', 'Eltanin',
-  'Diphda', 'Naos', 'Mizar', 'Schedar', 'Aludra',
-  'Alderamin', 'Markeb', 'Enif', 'Sabik', 'Phecda',
-  'Scheat', 'Algieba', 'Zuben', 'Ankaa', 'Girtab',
-  'Kraz', 'Rasalgethi', 'Cebalrai', 'Sheliak', 'Kornephoros',
-  'Lesath', 'Izar', 'Dschubba', 'Acrab', 'Unukalhai',
-  'Albireo', 'Tarazed', 'Sadalmelik', 'Algenib', 'Markab',
-  'Phact', 'Tureis', 'Caph', 'Ruchbah', 'Merak',
-  'Alcyone', 'Thuban', 'Hadar', 'Acrux', 'Mimosa',
-  'Shaula', 'Alnair', 'Rasalhague', 'Vindemiatrix', 'Zubeneschamali',
-];
+// Re-export from shared so existing game imports still work
+export { STAR_NAMES } from '../shared/star-names';
 
 // Planet / body name generation
 export const PLANET_NAME_PREFIXES = [

@@ -13,6 +13,7 @@ import {
 import { vec2, add, sub, normalize, magnitude, scale, createRng } from './math';
 import { getShipShapePoints, getShipDetailElements } from './ship';
 import { getAsteroidSurfaceInfo } from './asteroids';
+import type { StarVisualTone } from './ownership-contracts';
 
 export interface Renderer {
   canvas: HTMLCanvasElement;
@@ -812,7 +813,7 @@ function drawStarburst(
   coreR: number,
   rayLen: number,
   brightness: number, // 0-1
-  palette: 'green' | 'blue' | 'white' | 'red' | 'orange' = 'green',
+  palette: 'green' | 'blue' | 'white' | 'red' | 'orange' | 'yellow' = 'green',
   cardinalBoost = 1,
 ) {
   // Guard against non-finite values (can happen on first frame after tier change)
@@ -826,7 +827,9 @@ function drawStarburst(
         ? '255, 100, 80'
         : palette === 'orange'
           ? '255, 180, 60'
-          : '79, 255, 176';
+          : palette === 'yellow'
+            ? '255, 230, 60'
+            : '79, 255, 176';
   const cMid = palette === 'blue'
     ? '150, 215, 255'
     : palette === 'white'
@@ -835,7 +838,9 @@ function drawStarburst(
         ? '255, 150, 130'
         : palette === 'orange'
           ? '255, 200, 120'
-          : '150, 255, 210';
+          : palette === 'yellow'
+            ? '255, 240, 120'
+            : '150, 255, 210';
   const cSoft = palette === 'blue'
     ? '30, 70, 120'
     : palette === 'white'
@@ -844,7 +849,9 @@ function drawStarburst(
         ? '120, 30, 20'
         : palette === 'orange'
           ? '120, 70, 10'
-          : '30, 120, 80';
+          : palette === 'yellow'
+            ? '120, 110, 10'
+            : '30, 120, 80';
   const cBloom = palette === 'blue'
     ? '180, 220, 255'
     : palette === 'white'
@@ -853,7 +860,9 @@ function drawStarburst(
         ? '255, 180, 160'
         : palette === 'orange'
           ? '255, 220, 150'
-          : '180, 255, 220';
+          : palette === 'yellow'
+            ? '255, 245, 150'
+            : '180, 255, 220';
   const cCore = palette === 'blue'
     ? '170, 220, 255'
     : palette === 'white'
@@ -862,7 +871,9 @@ function drawStarburst(
         ? '255, 160, 140'
         : palette === 'orange'
           ? '255, 210, 120'
-          : '150, 255, 200';
+          : palette === 'yellow'
+            ? '255, 240, 120'
+            : '150, 255, 200';
 
   // ── 1. Wide soft green halo ──
   ctx.save();
@@ -1041,7 +1052,7 @@ export function drawGalaxyView(
   const galaxyView = buildGalaxyViewModel(galaxy);
 
   // Pre-compute screen positions for visible stars
-  const screenStars: { star: GalaxyStar; tone: 'blue' | 'green' | 'white' | 'red' | 'orange'; sx: number; sy: number }[] = [];
+  const screenStars: { star: GalaxyStar; tone: StarVisualTone; sx: number; sy: number }[] = [];
   for (const starView of galaxyView.stars) {
     const star = galaxy.stars[starView.index];
     if (!star) continue;
@@ -1111,6 +1122,8 @@ export function drawGalaxyView(
         ctx.fillStyle = dist < 15 ? 'rgb(255, 130, 110)' : 'rgba(255, 100, 80, 0.85)';
       } else if (tone === 'orange') {
         ctx.fillStyle = dist < 15 ? 'rgb(255, 200, 100)' : 'rgba(255, 180, 60, 0.85)';
+      } else if (tone === 'yellow') {
+        ctx.fillStyle = dist < 15 ? 'rgb(255, 240, 100)' : 'rgba(255, 230, 60, 0.85)';
       } else {
         ctx.fillStyle = dist < 15 ? G_BRIGHT : G_MED;
       }
@@ -1738,6 +1751,10 @@ export function drawSystemView(
     ctx.fillStyle = 'rgb(165, 220, 255)';
   } else if (starTone === 'white') {
     ctx.fillStyle = 'rgb(240, 248, 255)';
+  } else if (starTone === 'red') {
+    ctx.fillStyle = 'rgb(255, 130, 110)';
+  } else if (starTone === 'yellow') {
+    ctx.fillStyle = 'rgb(255, 240, 100)';
   } else {
     ctx.fillStyle = G_BRIGHT;
   }
@@ -2498,7 +2515,7 @@ export function hitTestPlanetPanels(
     if (!openRect) return -1;
     const panelW = getEffectivePanelW(_openPanel, screenW);
     const panelX = screenW - TAB_W - panelW;
-    const panelY = openRect.y;
+    const panelY = _lastPanelBodyY;
     const bodyH = _lastPanelBodyH > 0 ? _lastPanelBodyH : TAB_H;
     if (sx >= panelX && sx <= screenW - TAB_W && sy >= panelY && sy <= panelY + bodyH) {
       // Handle interactive clicks inside BUILD / SHIPS / FLEET tabs
@@ -2538,13 +2555,14 @@ export function isPointCoveredByOpenPlanetPanel(
   // Occlude open panel body.
   const panelW = getEffectivePanelW(_openPanel, screenW);
   const panelX = screenW - TAB_W - panelW;
-  const panelY = openRect.y;
+  const panelY = _lastPanelBodyY;
   const bodyH = _lastPanelBodyH > 0 ? _lastPanelBodyH : TAB_H;
   return sx >= panelX && sx <= screenW - TAB_W && sy >= panelY && sy <= panelY + bodyH;
 }
 
-// Track last drawn panel body height for hit testing
+// Track last drawn panel body height and Y for hit testing
 let _lastPanelBodyH = 0;
+let _lastPanelBodyY = 0;
 
 // Track docked state for greying out tabs
 let _panelsDocked = false;
@@ -2689,7 +2707,14 @@ export function drawPlanetPanels(
     if (isOpen && !isDisabled) {
       const panelW = getEffectivePanelW(i, screenW);
       const panelX = screenW - TAB_W - panelW;
-      const panelY = ty;
+      let panelY = ty;
+
+      // Fleet panel (index 3): anchor from bottom of tab so it grows upward
+      if (i === 3) {
+        const estimatedH = estimateFleetPanelHeight();
+        panelY = ty + TAB_H - estimatedH;
+        if (panelY < 4) panelY = 4;
+      }
 
       // Draw panel body based on tab index
       let bodyH: number;
@@ -2701,6 +2726,7 @@ export function drawPlanetPanels(
         default: bodyH = TAB_H;
       }
       _lastPanelBodyH = bodyH;
+      _lastPanelBodyY = panelY;
     } else if (isOpen && isDisabled) {
       // Show "DOCK TO ACCESS" message
       const panelW = getEffectivePanelW(i, screenW);
@@ -2720,6 +2746,7 @@ export function drawPlanetPanels(
       ctx.fillStyle = G_FAINT;
       ctx.fillText('DOCK TO ACCESS', panelX + panelW / 2, panelY + bodyH / 2);
       _lastPanelBodyH = bodyH;
+      _lastPanelBodyY = panelY;
     }
   }
 
@@ -2976,7 +3003,8 @@ function drawShipsPanelBody(
   // Calculate body height: upgrade section first, then build grid
   // Check if there's an active upgrade build to show even without upgradeEntries
   const isUpgradeBuildActive = buildingShip != null && UPGRADE_PATH.includes(buildingShip.typeId as any) && buildingShip.completeAt > nowMs;
-  const upgradeDisplayH = (upgradeEntries.length > 0 || isUpgradeBuildActive) ? 16 + (cellH + cellGap) : 0;
+  const upgradeRows = Math.max(upgradeEntries.length, isUpgradeBuildActive ? 1 : 0);
+  const upgradeDisplayH = upgradeRows > 0 ? 16 + upgradeRows * (cellH + cellGap) : 0;
   const buildRows = Math.ceil(availableShips.length / cols);
   const buildH = buildRows > 0 ? 16 + buildRows * (cellH + cellGap) : 0;
   const bodyH = 28 + upgradeDisplayH + buildH + 12;
@@ -3172,6 +3200,32 @@ function drawShipsPanelBody(
   }
 
   return bodyH;
+}
+
+/** Estimate fleet panel height without drawing (for bottom-anchoring) */
+function estimateFleetPanelHeight(): number {
+  if (_panelsTier !== 'galaxy') {
+    // Local view: star header + ships + MAP button — rough estimate
+    const si = _panelsStarIndex;
+    const state = si !== null ? _serverShipsByStarIndex.get(si) : undefined;
+    const shipLines = state ? state.ships.filter(s => s.count > 0).length : 0;
+    const lines = 1 + Math.max(1, shipLines) + 2; // header + ships + map + total
+    return Math.max(TAB_H, lines * ROW_H + PANEL_PAD * 2 + 28);
+  }
+  // Galaxy view: same logic as drawFleetGalaxyView
+  let lineCount = 0;
+  for (const [, state] of _serverShipsByStarIndex.entries()) {
+    if (state.ships.length > 0) {
+      lineCount += 1;
+      lineCount += state.ships.filter(s => s.count > 0).length;
+    }
+  }
+  if (_serverTransits.length > 0) {
+    lineCount += 1 + _serverTransits.length;
+  }
+  if (lineCount === 0) lineCount = 2;
+  lineCount += 1; // total row
+  return Math.max(TAB_H, lineCount * ROW_H + PANEL_PAD * 2 + 28);
 }
 
 /** FLEET panel: fleet summary */

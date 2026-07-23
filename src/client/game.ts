@@ -3,7 +3,7 @@
 // Detects inline vs expanded mode and shows overlay buttons when inline.
 
 import { context, requestExpandedMode } from '@devvit/web/client';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingTransfer, createDevvitBridge, getGameState, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingTransfer, createDevvitBridge, getGameState, getDiscoveredStars, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
@@ -64,18 +64,19 @@ console.log(`[PERF] context resolved in ${(performance.now() - _t0).toFixed(0)}m
 
 // Set version in settings panel (Vite replaces __APP_VERSION__ in JS modules)
 declare const __APP_VERSION__: string;
-const versionEl = document.getElementById('settings-version');
+const versionEl = document.getElementById('version-display');
 if (versionEl) versionEl.textContent = 'v' + __APP_VERSION__;
 
 // ── Debug log panel ─────────────────────────────────────────────────────────
 const debugLog = document.getElementById('debug-log')!;
-const debugToggle = document.getElementById('debug-toggle')!;
 const _origLog = console.log;
 const _origWarn = console.warn;
 const _origError = console.error;
 const MAX_DEBUG_LINES = 100;
 function appendDebug(prefix: string, args: unknown[]) {
   const line = prefix + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+  // Skip noisy lines from debug panel (still go to browser console)
+  if (line.startsWith('[PERF]') || line.startsWith('[CLICK]')) return;
   debugLog.textContent = (debugLog.textContent || '') + line + '\n';
   // Trim old lines
   const lines = debugLog.textContent!.split('\n');
@@ -87,7 +88,6 @@ function appendDebug(prefix: string, args: unknown[]) {
 console.log = (...args: unknown[]) => { _origLog.apply(console, args); appendDebug('', args); };
 console.warn = (...args: unknown[]) => { _origWarn.apply(console, args); appendDebug('[W] ', args); };
 console.error = (...args: unknown[]) => { _origError.apply(console, args); appendDebug('[E] ', args); };
-debugToggle.addEventListener('click', () => debugLog.classList.toggle('visible'));
 const debugCopy = document.getElementById('debug-copy')!;
 debugCopy.addEventListener('click', () => {
   const text = debugLog.textContent || '';
@@ -96,6 +96,31 @@ debugCopy.addEventListener('click', () => {
     setTimeout(() => { debugCopy.innerHTML = '&#x2398;'; }, 1500);
   });
 });
+
+// Force save button
+const debugForceSave = document.getElementById('debug-force-save');
+if (debugForceSave) {
+  debugForceSave.addEventListener('click', () => {
+    console.log('[DEBUG] force save triggered');
+    _lastSavedPosition = '';
+    _lastSavedDiscovered = '';
+    savePositionIfChanged();
+  });
+}
+
+// Check Redis button
+const debugCheckRedis = document.getElementById('debug-check-redis');
+if (debugCheckRedis) {
+  debugCheckRedis.addEventListener('click', () => {
+    console.log('[DEBUG] checking Redis for', username);
+    fetch(`/api/debug/profile-raw?username=${encodeURIComponent(username)}`)
+      .then(r => r.json())
+      .then(d => {
+        console.log('[REDIS-RAW]', JSON.stringify(d));
+      })
+      .catch(e => console.error('[REDIS-RAW] error:', e));
+  });
+}
 
 console.log(`[INIT] isInline=${isInline} username=${username} postId=${postId}`);
 
@@ -173,6 +198,7 @@ function loadPlayerProfile(): Promise<void> {
   profileReady = fetch(`/api/profile?username=${encodeURIComponent(username)}&postId=${encodeURIComponent(postId)}`)
     .then(r => { console.log(`[PERF] /api/profile fetch in ${(performance.now() - _tProfile).toFixed(0)}ms`); return r.json(); })
     .then((profile: PlayerProfileResponse) => {
+      console.log('[PROFILE] full response:', JSON.stringify({ homeStar: profile.homeStar, lastPosition: profile.lastPosition, discoveredStars: profile.discoveredStars, claimedCount: profile.claimed?.length }));
       if (profile.name) {
         currentName = profile.name;
         bridge.setPlayerName(profile.name);
@@ -188,12 +214,25 @@ function loadPlayerProfile(): Promise<void> {
       if (profile.claimed && profile.claimed.length > 0) {
         setStarClaims(profile.claimed, username);
       }
+      // Restore discovered stars
+      if (profile.discoveredStars && profile.discoveredStars.length > 0) {
+        console.log(`[PROFILE] restoring ${profile.discoveredStars.length} discovered stars:`, profile.discoveredStars);
+        setDiscoveredStars(profile.discoveredStars);
+      } else {
+        console.log('[PROFILE] no discoveredStars in profile response');
+      }
       // Restore last position if different from home star
       if (profile.lastPosition && profile.homeStar != null) {
         const lp = profile.lastPosition;
+        console.log(`[PROFILE] lastPosition: star=${lp.starIndex} tier=${lp.tier} body=${lp.bodyIndex}, homeStar=${profile.homeStar}`);
         if (lp.starIndex !== profile.homeStar || lp.tier !== 3 || lp.bodyIndex !== 0) {
+          console.log('[PROFILE] restoring position...');
           restorePosition(lp.starIndex, lp.tier, lp.bodyIndex);
+        } else {
+          console.log('[PROFILE] at default home position, skipping restore');
         }
+      } else {
+        console.log('[PROFILE] no lastPosition or homeStar');
       }
     })
     .catch(() => {});
@@ -419,20 +458,61 @@ async function pollEconomy() {
 
 // ── Save position periodically ──────────────────────────────────────────────
 let _lastSavedPosition = '';
+let _lastSavedDiscovered = '';
 function savePositionIfChanged() {
   const gs = getGameState();
   if (!gs) return;
+  // When in galaxy view, starIndex is -1; save homeStarIndex so restore has a valid reference
+  const effectiveStarIndex = gs.galaxy.currentStarIndex >= 0
+    ? gs.galaxy.currentStarIndex
+    : gs.galaxy.homeStarIndex;
   const pos = JSON.stringify({
-    starIndex: gs.galaxy.currentStarIndex,
+    starIndex: effectiveStarIndex,
     tier: gs.galaxy.tier,
     bodyIndex: gs.galaxy.currentBodyIndex,
   });
-  if (pos === _lastSavedPosition) return;
+  const discovered = getDiscoveredStars();
+  const discoveredKey = discovered.join(',');
+  const posChanged = pos !== _lastSavedPosition;
+  const discoveredChanged = discoveredKey !== _lastSavedDiscovered;
+  if (!posChanged && !discoveredChanged) return;
   _lastSavedPosition = pos;
+  _lastSavedDiscovered = discoveredKey;
+  // Always send BOTH fields — Devvit hSet may replace the entire hash
+  const payload: Record<string, unknown> = {
+    username,
+    lastPosition: JSON.parse(pos),
+    discoveredStars: discovered,
+  };
+  console.log('[SAVE] saving profile:', JSON.stringify(payload));
   fetch('/api/profile', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, lastPosition: JSON.parse(pos) }),
+    body: JSON.stringify(payload),
+  }).then(r => r.json()).then(d => console.log('[SAVE] response:', JSON.stringify(d))).catch(e => console.error('[SAVE] FAILED:', e));
+}
+
+// ── Player stats tracking ───────────────────────────────────────────────────
+let _statsInteractions = 0;
+let _statsLastHeartbeat = Date.now();
+const STATS_HEARTBEAT_MS = 30_000; // 30s
+
+function trackInteraction() { _statsInteractions++; }
+// Count pointer clicks and key presses as interactions
+window.addEventListener('pointerdown', trackInteraction, { passive: true });
+window.addEventListener('keydown', trackInteraction, { passive: true });
+
+function sendStatsHeartbeat() {
+  const now = Date.now();
+  const deltaSec = (now - _statsLastHeartbeat) / 1000;
+  const deltaInt = _statsInteractions;
+  _statsLastHeartbeat = now;
+  _statsInteractions = 0;
+  if (deltaSec < 1 && deltaInt === 0) return; // nothing to report
+  fetch('/api/stats', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, deltaSeconds: Math.round(deltaSec), deltaInteractions: deltaInt }),
   }).catch(() => {});
 }
 
@@ -443,6 +523,7 @@ function startMultiplayer() {
   shotPollInterval = setInterval(pollShots, 250);
   economyPollInterval = setInterval(pollEconomy, 1500);
   setInterval(savePositionIfChanged, 5000);
+  setInterval(sendStatsHeartbeat, STATS_HEARTBEAT_MS);
   void pollEconomy();
 
   // Fetch already-claimed pods so late-joiners see correct state
@@ -587,7 +668,10 @@ adminBtn.addEventListener('click', (e) => {
   helpPanel.classList.remove('visible');
   const opening = !adminPanel.classList.contains('visible');
   adminPanel.classList.toggle('visible');
-  if (opening) refreshAdminClaims();
+  if (opening) {
+    refreshAdminClaims();
+    refreshAdminPlayerStats();
+  }
 });
 adminPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
 adminPanel.addEventListener('click', (e) => e.stopPropagation());
@@ -611,7 +695,68 @@ async function refreshAdminClaims() {
   }
 }
 
-document.getElementById('admin-refresh')!.addEventListener('click', () => refreshAdminClaims());
+document.getElementById('admin-refresh')!.addEventListener('click', () => {
+  refreshAdminClaims();
+  refreshAdminPlayerStats();
+});
+
+const adminPlayerStats = document.getElementById('admin-player-stats')!;
+let lastPlayerStatsData: Array<{username:string;starName:string;starIndex:number;playtimeSeconds:number;interactions:number;lastSeen:number;totalBuildingLevels:number;totalShips:number;shipBreakdown:Array<{name:string;count:number}>}> = [];
+
+function formatPlaytime(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+function formatTimeSince(ts: number): string {
+  if (!ts) return 'never';
+  const ago = (Date.now() - ts) / 1000;
+  if (ago < 60) return 'just now';
+  if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
+  if (ago < 86400) return `${Math.floor(ago / 3600)}h ago`;
+  return `${Math.floor(ago / 86400)}d ago`;
+}
+
+async function refreshAdminPlayerStats() {
+  adminPlayerStats.innerHTML = '<span style="color:#776655">loading...</span>';
+  try {
+    const res = await fetch(`/api/admin/player-stats?postId=${encodeURIComponent(postId)}`);
+    const data = await res.json() as { players: typeof lastPlayerStatsData };
+    lastPlayerStatsData = data.players ?? [];
+    if (lastPlayerStatsData.length === 0) {
+      adminPlayerStats.innerHTML = '<span style="color:#776655">no players</span>';
+      return;
+    }
+    adminPlayerStats.innerHTML = lastPlayerStatsData.map(p => {
+      const ships = p.shipBreakdown.map(s => `${s.count}x ${escapeHtml(s.name)}`).join(', ') || 'none';
+      return `<div class="admin-player-card">
+        <div><span class="player-name">${escapeHtml(p.username)}</span> — <span class="player-star">${escapeHtml(p.starName)} (#${p.starIndex})</span></div>
+        <div class="player-detail">Playtime: ${formatPlaytime(p.playtimeSeconds)} | Actions: ${p.interactions} | Last: ${formatTimeSince(p.lastSeen)}</div>
+        <div class="player-detail">Buildings: ${p.totalBuildingLevels} lvls | Ships: ${p.totalShips} (${ships})</div>
+      </div>`;
+    }).join('');
+  } catch {
+    adminPlayerStats.innerHTML = '<span style="color:#776655">error</span>';
+  }
+}
+
+document.getElementById('admin-copy-stats')!.addEventListener('click', () => {
+  if (lastPlayerStatsData.length === 0) {
+    adminStatus!.textContent = 'no stats to copy';
+    return;
+  }
+  const lines = lastPlayerStatsData.map(p => {
+    const ships = p.shipBreakdown.map(s => `${s.count}x ${s.name}`).join(', ') || 'none';
+    return `${p.username} | ${p.starName} (#${p.starIndex}) | Play: ${formatPlaytime(p.playtimeSeconds)} | Actions: ${p.interactions} | Last: ${formatTimeSince(p.lastSeen)} | Bldg lvls: ${p.totalBuildingLevels} | Ships: ${p.totalShips} (${ships})`;
+  });
+  const text = `Player Stats (${new Date().toISOString()})\n${'─'.repeat(60)}\n${lines.join('\n')}`;
+  void navigator.clipboard.writeText(text).then(() => {
+    adminStatus!.textContent = 'stats copied to clipboard';
+  });
+});
 
 document.getElementById('admin-reset-claims')!.addEventListener('click', async () => {
   adminStatus.textContent = 'resetting claims...';
