@@ -324,6 +324,27 @@ async function pollEconomy() {
         if (fleetRes.ok) {
           const fleetData = await fleetRes.json() as FleetAllResponse;
           setServerFleetAll(fleetData.stars, fleetData.transits);
+          // Mark stars with probes as discovered (probed level)
+          const PROBE_TYPE_IDS = [11, 12];
+          const probeStars: number[] = [];
+          for (const [key, val] of Object.entries(fleetData.stars)) {
+            const idx = parseInt(key.replace('s:', ''), 10);
+            if (!Number.isNaN(idx) && val.ships.some(s => PROBE_TYPE_IDS.includes(s.typeId) && s.count > 0)) {
+              probeStars.push(idx);
+            }
+          }
+          if (probeStars.length > 0) {
+            const gs2 = getGameState();
+            if (gs2) {
+              for (const si of probeStars) {
+                const star = gs2.galaxy.stars[si];
+                if (star && star.discoveryLevel === 'none') {
+                  star.discoveryLevel = 'probed';
+                  star.discovered = true;
+                }
+              }
+            }
+          }
           // Update ship shape from home star fleet
           if (playerHomeStarIndex != null) {
             const homeKey = `s:${playerHomeStarIndex}`;
@@ -451,6 +472,29 @@ async function pollEconomy() {
         }
       } catch { /* ignore */ }
     }
+    // Also fetch full fleet state so fleet panel shows all stars
+    try {
+      const fleetRes = await fetch(`/api/fleet/all?username=${encodeURIComponent(username)}`);
+      if (fleetRes.ok) {
+        const fleetData = await fleetRes.json() as FleetAllResponse;
+        setServerFleetAll(fleetData.stars, fleetData.transits);
+        // Mark stars with probes as discovered (probed level)
+        const PROBE_TYPE_IDS = [11, 12];
+        const gs2 = getGameState();
+        if (gs2) {
+          for (const [key, val] of Object.entries(fleetData.stars)) {
+            const idx = parseInt(key.replace('s:', ''), 10);
+            if (!Number.isNaN(idx) && val.ships.some(s => PROBE_TYPE_IDS.includes(s.typeId) && s.count > 0)) {
+              const star = gs2.galaxy.stars[idx];
+              if (star && star.discoveryLevel === 'none') {
+                star.discoveryLevel = 'probed';
+                star.discovered = true;
+              }
+            }
+          }
+        }
+      }
+    } catch { /* ignore */ }
   } catch {
     // Ignore temporary network errors.
   }

@@ -795,6 +795,7 @@ export function isFireButtonHit(
 // ── Galaxy / System Rendering ─────────────────────────────────────────────
 
 import type { GalaxyStar, GalaxyState, FeatureType, PlanetFeature, SystemBody } from './galaxy';
+import { generateSystem } from './galaxy';
 import { buildGalaxyViewModel, getGalaxyStarTone } from './galaxy-view-model';
 import { getEnabledResources, getFeatureResourceIds, getFeatureResourceNames } from './economy-catalog';
 import { BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, FEATURE_LABELS, STAR_NAMES } from './constants';
@@ -813,7 +814,7 @@ function drawStarburst(
   coreR: number,
   rayLen: number,
   brightness: number, // 0-1
-  palette: 'green' | 'blue' | 'white' | 'red' | 'orange' | 'yellow' = 'green',
+  palette: 'green' | 'blue' | 'white' | 'red' | 'orange' | 'yellow' | 'cyan' = 'green',
   cardinalBoost = 1,
 ) {
   // Guard against non-finite values (can happen on first frame after tier change)
@@ -829,7 +830,9 @@ function drawStarburst(
           ? '255, 180, 60'
           : palette === 'yellow'
             ? '255, 230, 60'
-            : '79, 255, 176';
+            : palette === 'cyan'
+              ? '100, 220, 240'
+              : '79, 255, 176';
   const cMid = palette === 'blue'
     ? '150, 215, 255'
     : palette === 'white'
@@ -840,7 +843,9 @@ function drawStarburst(
           ? '255, 200, 120'
           : palette === 'yellow'
             ? '255, 240, 120'
-            : '150, 255, 210';
+            : palette === 'cyan'
+              ? '150, 230, 245'
+              : '150, 255, 210';
   const cSoft = palette === 'blue'
     ? '30, 70, 120'
     : palette === 'white'
@@ -851,7 +856,9 @@ function drawStarburst(
           ? '120, 70, 10'
           : palette === 'yellow'
             ? '120, 110, 10'
-            : '30, 120, 80';
+            : palette === 'cyan'
+              ? '20, 90, 110'
+              : '30, 120, 80';
   const cBloom = palette === 'blue'
     ? '180, 220, 255'
     : palette === 'white'
@@ -862,7 +869,9 @@ function drawStarburst(
           ? '255, 220, 150'
           : palette === 'yellow'
             ? '255, 245, 150'
-            : '180, 255, 220';
+            : palette === 'cyan'
+              ? '180, 240, 250'
+              : '180, 255, 220';
   const cCore = palette === 'blue'
     ? '170, 220, 255'
     : palette === 'white'
@@ -873,7 +882,9 @@ function drawStarburst(
           ? '255, 210, 120'
           : palette === 'yellow'
             ? '255, 240, 120'
-            : '150, 255, 200';
+            : palette === 'cyan'
+              ? '170, 235, 250'
+              : '150, 255, 200';
 
   // ── 1. Wide soft green halo ──
   ctx.save();
@@ -1037,6 +1048,123 @@ export function hitTestTransferCancel(sx: number, sy: number): boolean {
   return sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h;
 }
 
+// ── Star Selection / Info Card ──────────────────────────────────────────────
+let _selectedStarIndex: number = -1;
+let _starInfoDismissBtn: { x: number; y: number; w: number; h: number } | null = null;
+let _starInfoVisitBtn: { x: number; y: number; w: number; h: number } | null = null;
+
+// ── Galaxy Mode (NAV vs FLEET COMMAND) ──────────────────────────────────────
+export type GalaxyMode = 'nav' | 'fleet';
+let _galaxyMode: GalaxyMode = 'nav';
+let _galaxyModeBtn: { x: number; y: number; w: number; h: number } | null = null;
+
+export function getGalaxyMode(): GalaxyMode { return _galaxyMode; }
+export function setGalaxyMode(mode: GalaxyMode): void { _galaxyMode = mode; }
+export function toggleGalaxyMode(): void { _galaxyMode = _galaxyMode === 'nav' ? 'fleet' : 'nav'; }
+export function hitTestGalaxyModeBtn(sx: number, sy: number): boolean {
+  if (!_galaxyModeBtn) return false;
+  const b = _galaxyModeBtn;
+  return sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h;
+}
+
+/** Select a star to show its info card. */
+export function selectGalaxyStar(starIndex: number): void {
+  _selectedStarIndex = starIndex;
+}
+
+/** Deselect the current star info card. */
+export function deselectGalaxyStar(): void {
+  _selectedStarIndex = -1;
+  _starInfoDismissBtn = null;
+  _starInfoVisitBtn = null;
+}
+
+/** Get currently selected star index (-1 if none). */
+export function getSelectedStarIndex(): number {
+  return _selectedStarIndex;
+}
+
+/** Hit-test the star info card dismiss button. */
+export function hitTestStarInfoDismiss(sx: number, sy: number): boolean {
+  if (!_starInfoDismissBtn) return false;
+  const b = _starInfoDismissBtn;
+  return sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h;
+}
+
+/** Hit-test the star info card VISIT button. */
+export function hitTestStarInfoVisit(sx: number, sy: number): boolean {
+  if (!_starInfoVisitBtn) return false;
+  const b = _starInfoVisitBtn;
+  return sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h;
+}
+
+// ── Galaxy Mode Toggle Button ───────────────────────────────────────────────
+
+const MODE_BTN_W = 80;
+const MODE_BTN_H = 22;
+
+export function drawGalaxyModeToggle(r: Renderer): void {
+  const { ctx } = r;
+  const dpr = window.devicePixelRatio || 1;
+  const screenH = r.height / dpr;
+  // Position above the zoom buttons (bottom-left)
+  const btnX = 28 - MODE_BTN_W / 2;
+  const btnY = screenH - 115;
+
+  const isFleet = _galaxyMode === 'fleet';
+  const label = isFleet ? '⚓ FLEET' : '🧭 NAV';
+  const bgColor = isFleet ? 'rgba(80, 40, 10, 0.85)' : 'rgba(10, 50, 40, 0.85)';
+  const borderColor = isFleet ? 'rgba(255, 180, 80, 0.9)' : G_BRIGHT;
+  const textColor = isFleet ? 'rgba(255, 200, 100, 1.0)' : G_BRIGHT;
+
+  ctx.save();
+  roundedRect(ctx, btnX, btnY, MODE_BTN_W, MODE_BTN_H, 4);
+  ctx.fillStyle = bgColor;
+  ctx.fill();
+  roundedRect(ctx, btnX, btnY, MODE_BTN_W, MODE_BTN_H, 4);
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = textColor;
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, btnX + MODE_BTN_W / 2, btnY + MODE_BTN_H / 2);
+  ctx.restore();
+
+  _galaxyModeBtn = { x: btnX, y: btnY, w: MODE_BTN_W, h: MODE_BTN_H };
+}
+
+/** Draw a mode banner at the top of the galaxy view */
+export function drawGalaxyModeBanner(r: Renderer): void {
+  const { ctx } = r;
+  const dpr = window.devicePixelRatio || 1;
+  const screenW = r.width / dpr;
+  const isFleet = _galaxyMode === 'fleet';
+
+  const bannerText = isFleet ? 'FLEET COMMAND' : 'NAVIGATION';
+  const bannerColor = isFleet ? 'rgba(255, 180, 80, 0.9)' : G_BRIGHT;
+  const lineColor = isFleet ? 'rgba(255, 140, 40, 0.3)' : 'rgba(79, 255, 176, 0.2)';
+
+  ctx.save();
+  // Thin accent line across the top
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, 44);
+  ctx.lineTo(screenW, 44);
+  ctx.stroke();
+
+  // Mode label (below the GALAXY tier HUD)
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = bannerColor;
+  ctx.fillText(`[ ${bannerText} ]`, screenW / 2, 30);
+  ctx.restore();
+}
+
 export function drawGalaxyView(
   r: Renderer,
   camera: Camera,
@@ -1120,6 +1248,8 @@ export function drawGalaxyView(
         ctx.fillStyle = dist < 15 ? 'rgb(240, 248, 255)' : 'rgba(210, 225, 240, 0.85)';
       } else if (tone === 'red') {
         ctx.fillStyle = dist < 15 ? 'rgb(255, 130, 110)' : 'rgba(255, 100, 80, 0.85)';
+      } else if (tone === 'cyan') {
+        ctx.fillStyle = dist < 15 ? 'rgb(100, 220, 240)' : 'rgba(80, 200, 220, 0.85)';
       } else if (tone === 'orange') {
         ctx.fillStyle = dist < 15 ? 'rgb(255, 200, 100)' : 'rgba(255, 180, 60, 0.85)';
       } else if (tone === 'yellow') {
@@ -1167,24 +1297,27 @@ export function drawGalaxyView(
     ctx.setLineDash([6, 4]);
     ctx.lineDashOffset = -dashPhase;
     for (const t of _serverTransits) {
-      const fromStar = screenStars.find(s => s.star.index === t.fromStarIndex);
-      const toStar = screenStars.find(s => s.star.index === t.toStarIndex);
-      if (!fromStar || !toStar) continue;
+      // Look up star world positions directly (don't rely on screenStars which culls off-screen)
+      const fromStarData = galaxy.stars[t.fromStarIndex];
+      const toStarData = galaxy.stars[t.toStarIndex];
+      if (!fromStarData || !toStarData) continue;
+      const fromSc = worldToScreen(fromStarData.pos, camera, screenW, screenH);
+      const toSc = worldToScreen(toStarData.pos, camera, screenW, screenH);
 
       // Draw dashed line
       ctx.strokeStyle = 'rgba(255, 184, 77, 0.5)'; // AMBER
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(fromStar.sx, fromStar.sy);
-      ctx.lineTo(toStar.sx, toStar.sy);
+      ctx.moveTo(fromSc.x, fromSc.y);
+      ctx.lineTo(toSc.x, toSc.y);
       ctx.stroke();
 
       // Draw moving ship dot along the line
       const elapsed = now - t.departedAt;
       const total = t.arrivalAt - t.departedAt;
       const progress = Math.min(1, Math.max(0, elapsed / total));
-      const dotX = fromStar.sx + (toStar.sx - fromStar.sx) * progress;
-      const dotY = fromStar.sy + (toStar.sy - fromStar.sy) * progress;
+      const dotX = fromSc.x + (toSc.x - fromSc.x) * progress;
+      const dotY = fromSc.y + (toSc.y - fromSc.y) * progress;
 
       ctx.setLineDash([]);
       ctx.fillStyle = '#ffb84d'; // AMBER
@@ -1212,6 +1345,13 @@ export function drawGalaxyView(
   ctx.font = '11px monospace';
   ctx.fillStyle = G_MED;
   ctx.fillText('LOCAL STAR MAP', 14, 34);
+  // Home star indicator
+  const homeStar = galaxy.stars[galaxy.homeStarIndex];
+  if (homeStar) {
+    ctx.font = '10px monospace';
+    ctx.fillStyle = 'rgba(79, 255, 176, 0.85)';
+    ctx.fillText(`HOME: ${homeStar.name.toUpperCase()}`, 14, 50);
+  }
   ctx.restore();
 
   // ── Transfer mode indicator ──
@@ -1273,6 +1413,143 @@ export function drawGalaxyView(
     _transferCancelButton = { x: cancelX, y: cancelY, w: cancelW, h: 18 };
   } else {
     _transferCancelButton = null;
+  }
+
+  // ── Star Info Card ──
+  if (_selectedStarIndex >= 0 && !_transferMode) {
+    const selEntry = screenStars.find(s => s.star.index === _selectedStarIndex);
+    if (selEntry) {
+      const star = selEntry.star;
+      const { sx: starSx, sy: starSy } = selEntry;
+
+      // Selection ring
+      ctx.save();
+      const pulse = Math.sin(performance.now() * 0.004) * 0.3 + 0.7;
+      ctx.strokeStyle = `rgba(79, 255, 176, ${pulse})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(starSx, starSy, 16, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      // Info card dimensions
+      const cardW = 180;
+      const cardH = 110;
+      // Position card to the right of star, or left if too close to edge
+      let cardX = starSx + 24;
+      let cardY = starSy - cardH / 2;
+      if (cardX + cardW > screenW - 10) cardX = starSx - cardW - 24;
+      if (cardY < 10) cardY = 10;
+      if (cardY + cardH > screenH - 10) cardY = screenH - cardH - 10;
+
+      // Card background
+      ctx.save();
+      ctx.fillStyle = 'rgba(0, 12, 8, 0.92)';
+      roundedRect(ctx, cardX, cardY, cardW, cardH, 4);
+      ctx.fill();
+      ctx.strokeStyle = G_MED;
+      ctx.lineWidth = 1;
+      roundedRect(ctx, cardX, cardY, cardW, cardH, 4);
+      ctx.stroke();
+
+      // Dismiss X button (top-right corner of card)
+      const xBtnSize = 14;
+      const xBtnX = cardX + cardW - xBtnSize - 4;
+      const xBtnY = cardY + 4;
+      _starInfoDismissBtn = { x: xBtnX, y: xBtnY, w: xBtnSize, h: xBtnSize };
+      ctx.fillStyle = 'rgba(255, 100, 80, 0.7)';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('✕', xBtnX + xBtnSize / 2, xBtnY + xBtnSize / 2);
+
+      // Star name
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = G_BRIGHT;
+      ctx.fillText(star.name, cardX + 8, cardY + 8);
+
+      // Discovery status
+      let statusText = 'UNEXPLORED';
+      let statusColor = 'rgba(255, 240, 100, 0.9)'; // yellow
+      if (star.index === galaxy.homeStarIndex) {
+        statusText = 'HOME SYSTEM';
+        statusColor = 'rgba(120, 200, 255, 0.9)'; // blue
+      } else if (star.discoveryLevel === 'visited') {
+        statusText = 'VISITED';
+        statusColor = 'rgba(79, 255, 176, 0.9)'; // green
+      } else if (star.discoveryLevel === 'probed') {
+        statusText = 'PROBED';
+        statusColor = 'rgba(100, 220, 240, 0.9)'; // cyan
+      }
+      ctx.font = '9px monospace';
+      ctx.fillStyle = statusColor;
+      ctx.fillText(statusText, cardX + 8, cardY + 24);
+
+      // Distance from ship
+      const dx = star.pos.x - shipPos.x;
+      const dy = star.pos.y - shipPos.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      ctx.fillStyle = G_MED;
+      ctx.fillText(`DIST: ${dist.toFixed(1)} ly`, cardX + 8, cardY + 38);
+
+      // Planet / belt count — only show if probed or visited
+      const isExplored = star.index === galaxy.homeStarIndex || star.discoveryLevel === 'probed' || star.discoveryLevel === 'visited';
+      if (isExplored) {
+        const sysBodies = generateSystem(star);
+        const planetCount = sysBodies.filter(b => b.type === 'planet').length;
+        const beltCount = sysBodies.filter(b => b.type === 'belt').length;
+        const bodyParts: string[] = [];
+        if (planetCount > 0) bodyParts.push(`${planetCount} planet${planetCount > 1 ? 's' : ''}`);
+        if (beltCount > 0) bodyParts.push(`${beltCount} belt${beltCount > 1 ? 's' : ''}`);
+        ctx.fillText(bodyParts.join(', ') || 'EMPTY', cardX + 8, cardY + 52);
+      } else {
+        ctx.fillStyle = G_DIM;
+        ctx.fillText('SYSTEM DATA UNKNOWN', cardX + 8, cardY + 52);
+      }
+
+      // Fleet info if available
+      const fleetInfo = _serverShipsByStarIndex.get(star.index);
+      if (fleetInfo && fleetInfo.ships.length > 0) {
+        const totalShips = fleetInfo.ships.reduce((sum, s) => sum + s.count, 0);
+        ctx.fillStyle = G_BRIGHT;
+        ctx.fillText(`FLEET: ${totalShips} ship${totalShips > 1 ? 's' : ''}`, cardX + 8, cardY + 66);
+      } else {
+        ctx.fillStyle = G_DIM;
+        ctx.fillText('NO FLEET', cardX + 8, cardY + 66);
+      }
+
+      // VISIT button
+      const vBtnW = cardW - 16;
+      const vBtnH = 16;
+      const vBtnX = cardX + 8;
+      const vBtnY = cardY + cardH - vBtnH - 6;
+      ctx.fillStyle = 'rgba(79, 255, 176, 0.15)';
+      roundedRect(ctx, vBtnX, vBtnY, vBtnW, vBtnH, 3);
+      ctx.fill();
+      ctx.strokeStyle = G_BRIGHT;
+      ctx.lineWidth = 1;
+      roundedRect(ctx, vBtnX, vBtnY, vBtnW, vBtnH, 3);
+      ctx.stroke();
+      ctx.fillStyle = G_BRIGHT;
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('\u21D2 VISIT', vBtnX + vBtnW / 2, vBtnY + vBtnH / 2);
+      ctx.textAlign = 'left';
+      _starInfoVisitBtn = { x: vBtnX, y: vBtnY, w: vBtnW, h: vBtnH };
+
+      ctx.restore();
+    } else {
+      // Star not visible on screen — deselect
+      _selectedStarIndex = -1;
+      _starInfoDismissBtn = null;
+      _starInfoVisitBtn = null;
+    }
+  } else if (_selectedStarIndex < 0) {
+    _starInfoDismissBtn = null;
+    _starInfoVisitBtn = null;
   }
 }
 
@@ -1753,6 +2030,8 @@ export function drawSystemView(
     ctx.fillStyle = 'rgb(240, 248, 255)';
   } else if (starTone === 'red') {
     ctx.fillStyle = 'rgb(255, 130, 110)';
+  } else if (starTone === 'cyan') {
+    ctx.fillStyle = 'rgb(100, 220, 240)';
   } else if (starTone === 'yellow') {
     ctx.fillStyle = 'rgb(255, 240, 100)';
   } else {
@@ -2457,7 +2736,7 @@ const ROW_H = 14;
 const PANEL_PAD = 10;
 
 // Per-tab panel widths
-const PANEL_WIDTHS: number[] = [180, 280, 260, 180]; // STATUS, BUILD, SHIPS, FLEET
+const PANEL_WIDTHS: number[] = [180, 280, 260, 220]; // STATUS, BUILD, SHIPS, FLEET
 
 function getEffectivePanelW(tabIndex: number, screenW: number): number {
   const base = PANEL_WIDTHS[tabIndex] ?? 180;
@@ -2465,13 +2744,30 @@ function getEffectivePanelW(tabIndex: number, screenW: number): number {
   return Math.min(base, maxW);
 }
 
-export function togglePlanetPanel(index: number): void {
-  if (index < 0 || index >= PANEL_TABS.length) return;
+export function togglePlanetPanel(index: number): 'fleet-opened' | 'fleet-closed' | null {
+  if (index < 0 || index >= PANEL_TABS.length) return null;
   const wasOpen = _openPanel === index;
   _openPanel = wasOpen ? -1 : index;
   // If fleet panel (3) just closed and we have a return tier, schedule revert
   if (wasOpen && index === 3 && _galaxyJumpReturnTier) {
     _pendingTierRevert = _galaxyJumpReturnTier;
+    _galaxyJumpReturnTier = null;
+  }
+  if (index === 3) return wasOpen ? 'fleet-closed' : 'fleet-opened';
+  return null;
+}
+
+export function setGalaxyJumpReturnTier(tier: 'system' | 'planet'): void {
+  _galaxyJumpReturnTier = tier;
+}
+
+export function isFleetPanelOpen(): boolean {
+  return _openPanel === 3;
+}
+
+export function closeFleetPanel(): void {
+  if (_openPanel === 3) {
+    _openPanel = -1;
     _galaxyJumpReturnTier = null;
   }
 }
@@ -2568,12 +2864,18 @@ let _lastPanelBodyY = 0;
 let _panelsDocked = false;
 let _panelsStarIndex: number | null = null;
 let _panelsTier: 'galaxy' | 'system' | 'planet' = 'planet';
+let _panelsShipShape: string = 'scout';
 
 /** Called before drawing to set panel context */
-export function setPanelContext(docked: boolean, starIndex: number | null, tier: 'galaxy' | 'system' | 'planet' = 'planet'): void {
+export function setPanelContext(docked: boolean, starIndex: number | null, tier: 'galaxy' | 'system' | 'planet' = 'planet', shipShape?: string): void {
+  // Auto-close dock-required panels when undocking or leaving planet tier
+  if (!docked && _panelsDocked && _openPanel >= 0 && PANEL_TABS[_openPanel]?.requiresDock) {
+    _openPanel = -1;
+  }
   _panelsDocked = docked;
   _panelsStarIndex = starIndex;
   _panelsTier = tier;
+  if (shipShape !== undefined) _panelsShipShape = shipShape;
 }
 
 // Pending galaxy jump from fleet panel MAP button
@@ -2673,7 +2975,7 @@ export function drawPlanetPanels(
     if (!tab || !rect) continue;
     const ty = rect.y;
     const isOpen = _openPanel === i;
-    const isDisabled = tab.requiresDock && !_panelsDocked;
+    const isDisabled = (tab.requiresDock && !_panelsDocked) || (i === 3 && _panelsShipShape === 'scout');
 
     // ── Tab (vertical, right edge) ──
     ctx.fillStyle = isOpen ? 'rgba(0, 30, 15, 0.9)' : 'rgba(0, 10, 5, 0.7)';
@@ -2728,7 +3030,7 @@ export function drawPlanetPanels(
       _lastPanelBodyH = bodyH;
       _lastPanelBodyY = panelY;
     } else if (isOpen && isDisabled) {
-      // Show "DOCK TO ACCESS" message
+      // Show disabled message
       const panelW = getEffectivePanelW(i, screenW);
       const panelX = screenW - TAB_W - panelW;
       const panelY = ty;
@@ -2744,7 +3046,8 @@ export function drawPlanetPanels(
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = G_FAINT;
-      ctx.fillText('DOCK TO ACCESS', panelX + panelW / 2, panelY + bodyH / 2);
+      const msg = (i === 3 && _panelsShipShape === 'scout') ? 'UPGRADE SHIP TO ACCESS' : 'DOCK TO ACCESS';
+      ctx.fillText(msg, panelX + panelW / 2, panelY + bodyH / 2);
       _lastPanelBodyH = bodyH;
       _lastPanelBodyY = panelY;
     }
@@ -3204,20 +3507,22 @@ function drawShipsPanelBody(
 
 /** Estimate fleet panel height without drawing (for bottom-anchoring) */
 function estimateFleetPanelHeight(): number {
-  if (_panelsTier !== 'galaxy') {
-    // Local view: star header + ships + MAP button — rough estimate
-    const si = _panelsStarIndex;
-    const state = si !== null ? _serverShipsByStarIndex.get(si) : undefined;
-    const shipLines = state ? state.ships.filter(s => s.count > 0).length : 0;
-    const lines = 1 + Math.max(1, shipLines) + 2; // header + ships + map + total
-    return Math.max(TAB_H, lines * ROW_H + PANEL_PAD * 2 + 28);
-  }
-  // Galaxy view: same logic as drawFleetGalaxyView
+  // Galaxy view: same logic as drawFleetGalaxyView (exclude player's active ship)
+  const SHAPE_TO_TYPE: Record<string, number> = {
+    scout: 1, destroyer: 3, frigate: 4, battleship: 5, cruiser: 6, dreadnought: 7,
+  };
+  const activeShipTypeId = SHAPE_TO_TYPE[_panelsShipShape] ?? 1;
+
   let lineCount = 0;
-  for (const [, state] of _serverShipsByStarIndex.entries()) {
-    if (state.ships.length > 0) {
+  for (const [si, state] of _serverShipsByStarIndex.entries()) {
+    let ships = state.ships;
+    if (si === _panelsStarIndex) {
+      ships = ships.map(s => s.typeId === activeShipTypeId ? { ...s, count: s.count - 1 } : s);
+    }
+    const visible = ships.filter(s => s.count > 0);
+    if (visible.length > 0) {
       lineCount += 1;
-      lineCount += state.ships.filter(s => s.count > 0).length;
+      lineCount += visible.length;
     }
   }
   if (_serverTransits.length > 0) {
@@ -3240,10 +3545,7 @@ function drawFleetPanelBody(
   _fleetMapButton = null;
   _fleetSendButtons = [];
 
-  if (_panelsTier === 'galaxy') {
-    return drawFleetGalaxyView(ctx, x, y, w);
-  }
-  return drawFleetLocalView(ctx, x, y, w);
+  return drawFleetGalaxyView(ctx, x, y, w);
 }
 
 /** Fleet panel at Galaxy tier: shows all stars' fleets with SEND buttons */
@@ -3251,11 +3553,23 @@ function drawFleetGalaxyView(
   ctx: CanvasRenderingContext2D,
   x: number, y: number, w: number,
 ): number {
-  // Gather all known star fleets
+  // Determine player's active ship typeId to exclude from fleet display
+  const SHAPE_TO_TYPE: Record<string, number> = {
+    scout: 1, destroyer: 3, frigate: 4, battleship: 5, cruiser: 6, dreadnought: 7,
+  };
+  const activeShipTypeId = SHAPE_TO_TYPE[_panelsShipShape] ?? 1;
+
+  // Gather all known star fleets, excluding player's active ship at home star
   const entries: Array<{ starIndex: number; ships: Array<{ typeId: number; count: number }> }> = [];
   for (const [si, state] of _serverShipsByStarIndex.entries()) {
-    if (state.ships.length > 0) {
-      entries.push({ starIndex: si, ships: state.ships });
+    let ships = state.ships;
+    // At home star, subtract 1 from the player's active ship type
+    if (si === _panelsStarIndex) {
+      ships = ships.map(s => s.typeId === activeShipTypeId ? { ...s, count: s.count - 1 } : s);
+    }
+    const visible = ships.filter(s => s.count > 0);
+    if (visible.length > 0) {
+      entries.push({ starIndex: si, ships: visible });
     }
   }
 

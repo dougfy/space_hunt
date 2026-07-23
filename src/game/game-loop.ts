@@ -26,7 +26,11 @@ import {
   setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert,
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
   drawGalaxyZoomButtons, hitTestGalaxyZoomButtons,
+  selectGalaxyStar, deselectGalaxyStar, getSelectedStarIndex, hitTestStarInfoDismiss, hitTestStarInfoVisit,
+  drawGalaxyModeToggle, drawGalaxyModeBanner, hitTestGalaxyModeBtn, toggleGalaxyMode, setGalaxyMode, getGalaxyMode,
+  setGalaxyJumpReturnTier, isFleetPanelOpen, closeFleetPanel,
 } from './renderer';
+import type { GalaxyMode } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
 import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, applyStarNames, generateSystem } from './galaxy';
@@ -45,6 +49,10 @@ let poseTimer = 0;
 let devvitCb: DevvitCallbacks | null = null;
 
 const POSE_INTERVAL = 1 / 12; // ~12Hz pose reporting
+
+// ── Scout boundary warning ──
+let _scoutWarningTimer = 0;
+const SCOUT_WARNING_DURATION = 3.5; // seconds
 
 export function getGameState(): GameState | null {
   return gameState;
@@ -80,17 +88,19 @@ export function setDiscoveredStars(starIndices: number[]): void {
   for (const idx of starIndices) {
     const star = gameState.galaxy.stars[idx];
     if (!star) continue;
-    // Always mark as player-discovered (overrides foreign from setStarClaims)
-    star.owner = 'player';
+    // Mark as discovered — does NOT claim ownership (that requires colonization)
     star.discovered = true;
+    if (star.discoveryLevel === 'none') {
+      star.discoveryLevel = 'visited';
+    }
   }
 }
 
-/** Get all star indices the player has discovered. */
+/** Get all star indices the player has discovered (any level). */
 export function getDiscoveredStars(): number[] {
   if (!gameState) return [];
   return gameState.galaxy.stars
-    .filter(s => s.discovered && s.owner === 'player')
+    .filter(s => s.discovered)
     .map(s => s.index);
 }
 
@@ -115,7 +125,7 @@ export function relocateToHomeStar(starIndex: number): void {
   // Generate system for the new home star
   gameState.galaxy.bodies = generateSystem(star);
 
-  // Place ship at first body (station planet) in Planet tier
+  // Place ship at first body (station planet) in Planet tier, docked
   const stationBody = gameState.galaxy.bodies[0];
   if (stationBody) {
     gameState.galaxy.tier = NavigationTier.Planet;
@@ -124,10 +134,20 @@ export function relocateToHomeStar(starIndex: number): void {
     if (stationFeature) {
       const sx = Math.cos(stationFeature.angle) * stationFeature.dist;
       const sy = Math.sin(stationFeature.angle) * stationFeature.dist;
-      const awayX = Math.cos(stationFeature.angle);
-      const awayY = Math.sin(stationFeature.angle);
-      gameState.ship.pos = vec2(sx + awayX * 0.6, sy + awayY * 0.6);
-      gameState.ship.ang = stationFeature.angle + Math.PI;
+      const toFeatX = Math.cos(stationFeature.angle);
+      const toFeatY = Math.sin(stationFeature.angle);
+      gameState.ship.pos = vec2(sx - toFeatX * 0.3, sy - toFeatY * 0.3);
+      gameState.ship.ang = stationFeature.angle;
+      const fi = stationBody.features.indexOf(stationFeature);
+      gameState.dock = {
+        docked: true,
+        targetType: 'feature',
+        bodyIndex: 0,
+        featureIndex: fi,
+        targetName: stationFeature.name,
+        targetLabel: 'Station',
+        approachTimer: 1,
+      };
     }
   }
 
@@ -170,12 +190,14 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
     gameState.galaxy.tier = NavigationTier.Galaxy;
     gameState.ship.pos = vec2(star.pos.x, star.pos.y);
     gameState.galaxyCamPos = { x: star.pos.x, y: star.pos.y };
+    gameState.dock = null; // Clear dock state from startGame
   } else if (tier === NavigationTier.System) {
     // At system view — generate system, place ship near system center
     gameState.galaxy.bodies = generateSystem(star);
     gameState.galaxy.tier = NavigationTier.System;
     const center = SYSTEM_SIZE / 2;
     gameState.ship.pos = vec2(center, center - 3);
+    gameState.dock = null; // Clear dock state from startGame
   } else {
     // Planet tier — generate system, go to specific body
     gameState.galaxy.bodies = generateSystem(star);
@@ -275,14 +297,25 @@ export function startGame(
     gameState.galaxy.currentBodyIndex = 0;
     const stationFeature = stationBody.features.find(f => f.type === 'station');
     if (stationFeature) {
-      // Position ship near the station but outside dock range
+      // Position ship docked at the station
       const sx = Math.cos(stationFeature.angle) * stationFeature.dist;
       const sy = Math.sin(stationFeature.angle) * stationFeature.dist;
-      // Offset away from feature by more than DOCK_FEATURE_RADIUS (0.4)
-      const awayX = Math.cos(stationFeature.angle);
-      const awayY = Math.sin(stationFeature.angle);
-      gameState.ship.pos = vec2(sx + awayX * 0.6, sy + awayY * 0.6);
-      gameState.ship.ang = stationFeature.angle + Math.PI; // face toward station
+      const toFeatX = Math.cos(stationFeature.angle);
+      const toFeatY = Math.sin(stationFeature.angle);
+      // Place at docked position (0.3 units away from feature toward planet center)
+      gameState.ship.pos = vec2(sx - toFeatX * 0.3, sy - toFeatY * 0.3);
+      gameState.ship.ang = stationFeature.angle; // face toward station
+      // Set dock state immediately so player starts with full station access
+      const fi = stationBody.features.indexOf(stationFeature);
+      gameState.dock = {
+        docked: true,
+        targetType: 'feature',
+        bodyIndex: 0,
+        featureIndex: fi,
+        targetName: stationFeature.name,
+        targetLabel: 'Station',
+        approachTimer: 1,
+      };
     }
   }
 
@@ -355,7 +388,19 @@ function update(dt: number): void {
 
   gameState.elapsedTime += dt;
 
+  // Tick down scout warning timer
+  if (_scoutWarningTimer > 0) _scoutWarningTimer = Math.max(0, _scoutWarningTimer - dt);
+
   // Intercept UI clicks BEFORE processInput sets ship target
+
+  // Recover fast touch taps: if pointerUp already fired but pendingTap exists,
+  // re-assert pointerDown so all existing click handling works unchanged.
+  if (!inputState.pointerDown && inputState.pendingTap) {
+    inputState.pointerDown = true;
+    inputState.pointerPos = inputState.pendingTap;
+  }
+  // Clear pendingTap now that it's been promoted (or if pointerDown was already true)
+  inputState.pendingTap = null;
 
   // Handle dock panel clicks
   if (gameState.dock && inputState.pointerDown && inputState.pointerPos) {
@@ -375,11 +420,36 @@ function update(dt: number): void {
     }
   }
 
+  // Per-frame: if fleet panel is open but we're not at galaxy tier, force jump
+  // Scouts cannot use fleet — close it if somehow open
+  if (isFleetPanelOpen() && gameState.shipShape === 'scout') {
+    closeFleetPanel();
+  } else if (isFleetPanelOpen() && gameState.galaxy.tier !== NavigationTier.Galaxy) {
+    const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : 'planet';
+    setGalaxyJumpReturnTier(returnTier);
+    gameState.galaxy.tier = NavigationTier.Galaxy;
+    gameState.ship.vel = { x: 0, y: 0 };
+    gameState.ship.thrust = false;
+    setGalaxyMode('fleet');
+  }
+
   // Handle slide-out panel clicks (all tiers)
   if (inputState.pointerDown && inputState.pointerPos) {
     const panelIdx = hitTestPlanetPanels(screenW, screenH, inputState.pointerPos.x, inputState.pointerPos.y);
     if (panelIdx >= 0) {
-      togglePlanetPanel(panelIdx);
+      const fleetAction = togglePlanetPanel(panelIdx);
+      // Fleet tab opened from non-galaxy tier → jump to galaxy map (scouts cannot use fleet)
+      if (fleetAction === 'fleet-opened' && gameState.shipShape === 'scout') {
+        // Block — close it back immediately
+        togglePlanetPanel(3);
+      } else if (fleetAction === 'fleet-opened' && gameState.galaxy.tier !== NavigationTier.Galaxy) {
+        const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : 'planet';
+        setGalaxyJumpReturnTier(returnTier);
+        gameState.galaxy.tier = NavigationTier.Galaxy;
+        gameState.ship.vel = { x: 0, y: 0 };
+        gameState.ship.thrust = false;
+        setGalaxyMode('fleet');
+      }
       inputState.pointerDown = false;
     } else if (panelIdx === -2) {
       inputState.pointerDown = false;
@@ -399,6 +469,7 @@ function update(dt: number): void {
     gameState.galaxy.tier = NavigationTier.Galaxy;
     gameState.ship.vel = { x: 0, y: 0 };
     gameState.ship.thrust = false;
+    setGalaxyMode('fleet'); // Fleet panel → fleet command mode
   }
 
   // Consume pending tier revert when fleet panel closes after galaxy jump
@@ -423,6 +494,14 @@ function update(dt: number): void {
     }
   }
 
+  // Handle galaxy mode toggle button tap
+  if (gameState.galaxy.tier === NavigationTier.Galaxy && inputState.pointerDown && inputState.pointerPos) {
+    if (hitTestGalaxyModeBtn(inputState.pointerPos.x, inputState.pointerPos.y)) {
+      toggleGalaxyMode();
+      inputState.pointerDown = false;
+    }
+  }
+
   // Handle transfer mode star selection (galaxy tier only)
   if (isInTransferMode() && inputState.pointerDown && inputState.pointerPos) {
     const px = inputState.pointerPos.x;
@@ -441,8 +520,56 @@ function update(dt: number): void {
     }
   }
 
-  // Process input (ship targeting, etc.)
-  processInput(inputState, gameState, gameState.camera, screenW, screenH);
+  // Handle star info card selection (galaxy tier, not in transfer mode, not dragging)
+  if (!isInTransferMode() && gameState.galaxy.tier === NavigationTier.Galaxy
+      && inputState.pointerDown && inputState.pointerPos && !inputState.isDragging) {
+    const px = inputState.pointerPos.x;
+    const py = inputState.pointerPos.y;
+
+    // Check dismiss button first
+    if (getSelectedStarIndex() >= 0 && hitTestStarInfoDismiss(px, py)) {
+      deselectGalaxyStar();
+      inputState.pointerDown = false;
+    } else if (getSelectedStarIndex() >= 0 && hitTestStarInfoVisit(px, py)) {
+      // VISIT button: set ship target to the selected star's position
+      const starIdx = getSelectedStarIndex();
+      const targetStar = gameState.galaxy.stars[starIdx];
+      if (targetStar) {
+        gameState.tgtPos = { x: targetStar.pos.x, y: targetStar.pos.y };
+        gameState.tgtActive = true;
+        deselectGalaxyStar();
+      }
+      inputState.pointerDown = false;
+    } else {
+      // Check if tapping a star (toggle if same star)
+      const tappedStar = hitTestGalaxyStar(px, py);
+      if (tappedStar >= 0 && tappedStar === getSelectedStarIndex()) {
+        deselectGalaxyStar();
+        inputState.pointerDown = false;
+      } else if (tappedStar >= 0) {
+        selectGalaxyStar(tappedStar);
+        inputState.pointerDown = false; // consume click — don't move ship
+      } else if (getSelectedStarIndex() >= 0) {
+        // Tapped empty space — deselect
+        deselectGalaxyStar();
+        // In fleet mode consume click; in nav mode let processInput handle ship movement
+        if (getGalaxyMode() === 'fleet') inputState.pointerDown = false;
+      } else if (getGalaxyMode() === 'fleet') {
+        // Fleet mode: consume all taps (no ship movement)
+        inputState.pointerDown = false;
+      }
+    }
+  }
+
+  // Deselect star when leaving galaxy tier
+  if (gameState.galaxy.tier !== NavigationTier.Galaxy && getSelectedStarIndex() >= 0) {
+    deselectGalaxyStar();
+  }
+
+  // Process input (ship targeting, etc.) — skip in fleet mode at galaxy tier
+  if (!(gameState.galaxy.tier === NavigationTier.Galaxy && getGalaxyMode() === 'fleet')) {
+    processInput(inputState, gameState, gameState.camera, screenW, screenH);
+  }
 
   // Handle fire request
   if (inputState.fireRequested) {
@@ -521,6 +648,19 @@ function update(dt: number): void {
     inputState.scrollDelta = 0;
   }
 
+  // ── Galaxy drag-to-pan (fleet mode) ──
+  if (inputState.dragDelta && gameState.galaxy.tier === NavigationTier.Galaxy && getGalaxyMode() === 'fleet') {
+    const screenH = renderer.height / (window.devicePixelRatio || 1);
+    // Convert screen pixels to world units based on current ortho size
+    const worldPerPx = (gameState.galaxyZoom * 2) / screenH;
+    gameState.galaxyCamPos.x -= inputState.dragDelta.x * worldPerPx;
+    gameState.galaxyCamPos.y += inputState.dragDelta.y * worldPerPx; // Y is inverted (screen down = world up)
+    gameState.galaxyZoomCooldown = 1.0; // suppress auto-lerp
+    inputState.dragDelta = null;
+  } else {
+    inputState.dragDelta = null;
+  }
+
   // Auto-clear override once ship leaves the suppressed asteroid's zone
   if (gameState.zoomOverride >= 0) {
     const cleared = isOverrideClear(gameState, renderer.height);
@@ -593,6 +733,11 @@ function update(dt: number): void {
     }
   }
 
+  // Safety: dock state should only exist at Planet tier. Clear if stale.
+  if (gameState.dock && gameState.galaxy.tier !== NavigationTier.Planet) {
+    gameState.dock = null;
+  }
+
   // Galaxy tier transitions — skip in splash mode and when docked
   if (!gameState.splashMode && !gameState.dock) {
   const tier = gameState.galaxy.tier;
@@ -639,6 +784,8 @@ function update(dt: number): void {
       }
       gameState.ship.vel = vec2(0, 0);
       gameState.tgtActive = false;
+      // Show warning message
+      _scoutWarningTimer = SCOUT_WARNING_DURATION;
       // Don't apply transition
     } else {
     console.log('[TRANSITION] from tier=', gameState.galaxy.tier, 'to=', transition.newTier, 'shipPos=', gameState.ship.pos, 'worldShipPos=', worldShipPos, 'starIdx=', transition.starIndex, 'bodyIdx=', transition.bodyIndex);
@@ -646,6 +793,16 @@ function update(dt: number): void {
     gameState.ship.pos = newPos;
     gameState.worldOffset = vec2(0, 0);
     gameState.tgtActive = false;
+
+    // Entering a system from galaxy → close fleet panel so it doesn't force us back
+    if (transition.newTier === NavigationTier.System && tier === NavigationTier.Galaxy) {
+      closeFleetPanel();
+    }
+
+    // Exiting a system → galaxy = NAV mode
+    if (transition.newTier === NavigationTier.Galaxy) {
+      setGalaxyMode('nav');
+    }
 
     // Belt transitions (Local↔System): don't reset velocity — ship keeps moving
     const isBeltTransition = (
@@ -719,21 +876,25 @@ function render(): void {
       drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
     }
 
-    // Draw ship
-    drawShip(
-      renderer, camera, gameState.ship.pos,
-      gameState.ship.ang, gameState.shipShape,
-      gameState.ship.thrust ? '#17b97d' : '#8ff7cf',
-      shipRenderSize,
-    );
-    drawPlayerLabel(renderer, camera, gameState.ship.pos, gameState.playerName);
+    // Draw ship (hidden in fleet mode)
+    if (getGalaxyMode() === 'nav') {
+      drawShip(
+        renderer, camera, gameState.ship.pos,
+        gameState.ship.ang, gameState.shipShape,
+        gameState.ship.thrust ? '#17b97d' : '#8ff7cf',
+        shipRenderSize,
+      );
+      drawPlayerLabel(renderer, camera, gameState.ship.pos, gameState.playerName);
+    }
 
     drawTierHUD(renderer, 'GALAXY', '', 'center');
+    drawGalaxyModeBanner(renderer);
     drawControlButtons(renderer, false, false, _debugBounds);
     drawGalaxyZoomButtons(renderer, gameState.galaxyZoom, GALAXY_ORTHO_MIN, GALAXY_ORTHO_MAX);
+    drawGalaxyModeToggle(renderer);
 
     // Draw side panels (not docked at galaxy level)
-    setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'galaxy');
+    setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'galaxy', gameState.shipShape);
     drawPlanetPanels(renderer.ctx, screenW, screenH, ['TIER: GALAXY']);
     return;
   }
@@ -770,8 +931,24 @@ function render(): void {
     drawControlButtons(renderer, false, false, _debugBounds);
 
     // Draw side panels (not docked at system level)
-    setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'system');
+    setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'system', gameState.shipShape);
     drawPlanetPanels(renderer.ctx, screenW, screenH, ['TIER: SYSTEM']);
+
+    // Scout boundary warning overlay
+    if (_scoutWarningTimer > 0) {
+      const ctx = renderer.ctx;
+      const alpha = Math.min(1, _scoutWarningTimer / 0.5); // fade out in last 0.5s
+      ctx.save();
+      ctx.font = 'bold 13px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = `rgba(255, 80, 60, ${alpha})`;
+      ctx.fillText('SCOUT RANGE EXCEEDED', screenW / 2, screenH * 0.18);
+      ctx.font = '11px monospace';
+      ctx.fillStyle = `rgba(200, 220, 210, ${alpha * 0.85})`;
+      ctx.fillText('Upgrade ship at station to leave system', screenW / 2, screenH * 0.18 + 20);
+      ctx.restore();
+    }
     return;
   }
 
@@ -779,7 +956,7 @@ function render(): void {
   if (tier === NavigationTier.Planet) {
     const shieldPercent = (gameState.shooting.hp / PLAYER_MAX_HP) * 100;
     const isDocked = gameState.dock?.docked === true;
-    setPanelContext(isDocked, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'planet');
+    setPanelContext(isDocked, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'planet', gameState.shipShape);
     drawPlanetView(
       renderer,
       camera,

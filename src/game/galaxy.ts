@@ -30,6 +30,7 @@ export interface GalaxyStar {
   bodyCount: number;
   owner: StarOwner;
   discovered: boolean;
+  discoveryLevel: 'none' | 'probed' | 'visited';
 }
 
 export type FeatureType = 'mine' | 'relay' | 'refinery' | 'station' | 'outpost' | 'colony' | 'solar_array' | 'mine_l2' | 'solar_array_l2' | 'warehouse' | 'dock';
@@ -136,6 +137,7 @@ export function generateGalaxy(worldSeed: string): GalaxyStar[] {
       bodyCount: rng.rangeInt(SYSTEM_BODY_MIN, SYSTEM_BODY_MAX + 1),
       owner: 'foreign',
       discovered: false,
+      discoveryLevel: 'none',
     });
   }
 
@@ -232,7 +234,7 @@ export function createGalaxyState(worldSeed: string): GalaxyState {
   const ownedStars = stars.map((star) => {
     const ownedStar = ownership.stars.find((candidate) => candidate.index === star.index);
     return ownedStar
-      ? { ...star, owner: ownedStar.owner, discovered: ownedStar.discovered }
+      ? { ...star, owner: ownedStar.owner, discovered: ownedStar.discovered, discoveryLevel: ownedStar.discoveryLevel }
       : star;
   });
   const homeStar = ownedStars[homeIdx];
@@ -378,11 +380,11 @@ export function applyTransition(
         starIndex: transition.starIndex,
       });
       const visitedStar = ownership.stars.find(s => s.index === transition.starIndex);
-      console.log(`[VISIT] star ${transition.starIndex} owner=${visitedStar?.owner} discovered=${visitedStar?.discovered}`);
+      console.log(`[VISIT] star ${transition.starIndex} owner=${visitedStar?.owner} discovered=${visitedStar?.discovered} level=${visitedStar?.discoveryLevel}`);
       galaxy.stars = galaxy.stars.map((star) => {
         const ownedStar = ownership.stars.find((candidate) => candidate.index === star.index);
         return ownedStar
-          ? { ...star, owner: ownedStar.owner, discovered: ownedStar.discovered }
+          ? { ...star, owner: ownedStar.owner, discovered: ownedStar.discovered, discoveryLevel: ownedStar.discoveryLevel }
           : star;
       });
       const star = galaxy.stars[transition.starIndex];

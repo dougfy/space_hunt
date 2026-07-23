@@ -1,9 +1,11 @@
 export type StarOwner = 'player' | 'foreign';
+export type DiscoveryLevel = 'none' | 'probed' | 'visited';
 
 export type StarOwnershipState = {
   index: number;
   owner: StarOwner;
   discovered: boolean;
+  discoveryLevel: DiscoveryLevel;
 };
 
 export type StarOwnershipCommand =
@@ -13,6 +15,10 @@ export type StarOwnershipCommand =
   }
   | {
     type: 'visit-star';
+    starIndex: number;
+  }
+  | {
+    type: 'probe-star';
     starIndex: number;
   };
 
@@ -27,4 +33,4 @@ export type StarOwnershipEvent =
     owner: StarOwner;
   };
 
-export type StarVisualTone = 'blue' | 'green' | 'white' | 'red' | 'yellow';
+export type StarVisualTone = 'blue' | 'green' | 'white' | 'red' | 'yellow' | 'cyan';

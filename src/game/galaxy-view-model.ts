@@ -17,14 +17,13 @@ export type GalaxyViewModel = {
 };
 
 export function getGalaxyStarTone(
-  star: Pick<GalaxyStar, 'index' | 'owner' | 'discovered'>,
+  star: Pick<GalaxyStar, 'index' | 'owner' | 'discovered' | 'discoveryLevel'>,
   homeStarIndex: number,
 ): StarVisualTone {
-  if (star.index === homeStarIndex) return 'blue';      // home star
-  if (star.owner === 'foreign' && star.discovered) return 'red';   // enemy occupied
-  if (star.owner === 'player' && star.discovered) return 'green';  // player explored
-  if (star.discovered) return 'white';                  // visited/probed but unowned
-  return 'yellow';                                      // unexplored
+  if (star.index === homeStarIndex) return 'blue';      // home star (colonized at start)
+  if (star.discoveryLevel === 'visited') return 'green';  // visited — colony ship eligible
+  if (star.discoveryLevel === 'probed') return 'cyan';    // probed — partial info
+  return 'yellow';                                        // unexplored
 }
 
 export function buildGalaxyViewModel(galaxy: GalaxyState): GalaxyViewModel {

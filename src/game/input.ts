@@ -7,12 +7,15 @@ import { NavigationTier } from './galaxy';
 export interface InputState {
   pointerDown: boolean;
   pointerPos: Vec2 | null;
+  pendingTap: Vec2 | null; // survives pointerUp for fast touch taps
   cursorPos: Vec2 | null; // always tracks cursor, even without click
   rightClick: boolean;
   fireRequested: boolean;
   zoomToggleRequested: boolean;
   recenterRequested: boolean;
   scrollDelta: number; // accumulated scroll/pinch delta for galaxy zoom
+  dragDelta: Vec2 | null; // accumulated drag movement in screen pixels (for pan)
+  isDragging: boolean; // true once drag exceeds threshold (suppresses tap actions)
   keysDown: Set<string>;
 }
 
@@ -20,12 +23,15 @@ export function createInputState(): InputState {
   return {
     pointerDown: false,
     pointerPos: null,
+    pendingTap: null,
     cursorPos: null,
     rightClick: false,
     fireRequested: false,
     zoomToggleRequested: false,
     recenterRequested: false,
     scrollDelta: 0,
+    dragDelta: null,
+    isDragging: false,
     keysDown: new Set(),
   };
 }
@@ -36,8 +42,13 @@ export function setupInput(
   getState: () => GameState | null,
   _getCamera: () => Camera,
 ): () => void {
+  const DRAG_THRESHOLD = 6; // pixels before treating as a drag (not a tap)
+  let dragTotal = 0;
+
   const onPointerDown = (e: PointerEvent) => {
     e.preventDefault();
+    dragTotal = 0;
+    input.isDragging = false;
     if (e.button === 2) {
       // Right click: clear target
       input.rightClick = true;
@@ -93,18 +104,38 @@ export function setupInput(
 
     input.pointerDown = true;
     input.pointerPos = pos;
+    input.pendingTap = pos; // survives pointerUp for fast taps
   };
 
   const onPointerMove = (e: PointerEvent) => {
-    input.cursorPos = getCanvasPos(e, canvas);
+    const newPos = getCanvasPos(e, canvas);
+    if (input.pointerDown && input.cursorPos) {
+      // Accumulate drag delta (screen pixels)
+      const dx = newPos.x - input.cursorPos.x;
+      const dy = newPos.y - input.cursorPos.y;
+      dragTotal += Math.abs(dx) + Math.abs(dy);
+      if (dragTotal > DRAG_THRESHOLD) {
+        input.isDragging = true;
+      }
+      if (input.dragDelta) {
+        input.dragDelta.x += dx;
+        input.dragDelta.y += dy;
+      } else {
+        input.dragDelta = { x: dx, y: dy };
+      }
+    }
+    input.cursorPos = newPos;
     if (input.pointerDown) {
-      input.pointerPos = input.cursorPos;
+      input.pointerPos = newPos;
     }
   };
 
   const onPointerUp = (e: PointerEvent) => {
     if (e.button === 0) {
+      // If pointerDown is still true (game loop hasn't consumed it yet),
+      // pendingTap remains for the game loop to pick up
       input.pointerDown = false;
+      input.isDragging = false;
     }
   };
 
@@ -228,7 +259,10 @@ export function processInput(
   if (anyMovementKey) {
     state.inputMode = 'keyboard';
   }
-  if (input.pointerDown && input.pointerPos) {
+  // Resolve effective click: pointerDown OR pendingTap (for fast touch taps)
+  const hasClick = (input.pointerDown && input.pointerPos) || input.pendingTap;
+  const clickPos = input.pointerDown && input.pointerPos ? input.pointerPos : input.pendingTap;
+  if (hasClick) {
     state.inputMode = 'mouse';
   }
 
@@ -249,13 +283,15 @@ export function processInput(
     // Mouse mode: click sets target
     state.keyThrust = false;
     state.keyTurnRate = 0;
-    if (input.pointerDown && input.pointerPos) {
-      const worldPos = screenToWorld(input.pointerPos, camera, screenW, screenH);
+    if (hasClick && clickPos) {
+      const worldPos = screenToWorld(clickPos, camera, screenW, screenH);
       state.tgtPos = worldPos;
       state.tgtActive = true;
-      console.log('[CLICK] screenPos=', input.pointerPos, 'worldPos=', worldPos, 'tier=', state.galaxy.tier, 'shipPos=', state.ship.pos, 'worldOffset=', state.worldOffset);
+      console.log('[CLICK] screenPos=', clickPos, 'worldPos=', worldPos, 'tier=', state.galaxy.tier, 'shipPos=', state.ship.pos, 'worldOffset=', state.worldOffset);
     }
   }
+  // Always consume pendingTap after processing
+  input.pendingTap = null;
 }
 
 /** Check if any movement key is currently held */

@@ -650,6 +650,10 @@ export async function loadAllFleet(
   const profile = parseShipsProfile(raw);
   let dirty = false;
 
+  // Track stars newly discovered by probe arrival
+  const PROBE_TYPE_IDS = [11, 12]; // Basic Probe, Enhanced Probe
+  const newlyDiscovered: number[] = [];
+
   // ── Reconcile completed transits ──
   const pendingTransits: ShipTransit[] = [];
   if (profile.transits && profile.transits.length > 0) {
@@ -665,6 +669,10 @@ export async function loadAllFleet(
           toData.ships.push({ typeId: t.shipTypeId, count: t.count });
         }
         profile.stars[toKey] = toData;
+        // If a probe arrived, mark the star as discovered
+        if (PROBE_TYPE_IDS.includes(t.shipTypeId)) {
+          newlyDiscovered.push(t.toStarIndex);
+        }
         dirty = true;
       } else {
         pendingTransits.push(t);
@@ -692,6 +700,18 @@ export async function loadAllFleet(
       profile.stars[key] = val;
     }
     await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
+
+    // If probes arrived, update discoveredStars on the profile
+    if (newlyDiscovered.length > 0) {
+      const profileKey = `profile:${username}`;
+      let existing: number[] = [];
+      try {
+        const dsRaw = await store.hGet(profileKey, 'discoveredStars');
+        if (dsRaw) existing = JSON.parse(dsRaw);
+      } catch { /* ignore */ }
+      const merged = [...new Set([...existing, ...newlyDiscovered])];
+      await store.hSet(profileKey, { discoveredStars: JSON.stringify(merged) });
+    }
   }
 
   return { stars: result, transits: pendingTransits };

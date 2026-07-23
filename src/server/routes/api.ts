@@ -253,6 +253,15 @@ api.post('/stars/reset', async (c) => {
   const body = await c.req.json<{ postId: string }>();
   if (!body.postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
   const allClaims = await redis.hGetAll(`stars:${body.postId}`);
+
+  // Also clear ships/economy/stats/position for all claimed users
+  const users = new Set(Object.values(allClaims));
+  for (const user of users) {
+    try {
+      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition']);
+    } catch { /* ignore */ }
+  }
+
   const keys = Object.keys(allClaims);
   if (keys.length > 0) {
     await redis.hDel(`stars:${body.postId}`, keys);
@@ -268,13 +277,15 @@ api.post('/admin/reset-all', async (c) => {
   // Get all claims to find users
   const registryKey = `stars:${body.postId}`;
   const allClaims = await redis.hGetAll(registryKey);
-  const users = Object.values(allClaims);
+  const users = new Set(Object.values(allClaims));
+  // Also include the admin user themselves (in case they aren't in claims)
+  users.add(body.adminUser);
 
-  // Clear each user's economy and ships data
+  // Clear each user's game data (economy, ships, stats, discoveredStars, lastPosition)
   let cleared = 0;
   for (const user of users) {
     try {
-      await redis.hDel(`profile:${user}`, ['economy', 'ships']);
+      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition']);
       cleared++;
     } catch { /* ignore */ }
   }
