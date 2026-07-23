@@ -4,83 +4,101 @@
 
 **Platform:** Devvit WebView (TypeScript/Canvas2D), current `spacehunt` codebase.
 
+**Last Updated:** 2026-07-22 (v0.0.266)
+
+---
+
+## Active Issues / TODO
+
+| # | Issue | Status | Notes |
+|---|---|---|---|
+| 1 | Boundary issue in solar tier — no need to scroll | ❌ Open | System view should fit without scrolling. |
+| 2 | Leaving solar→galaxy with bounds on loses bounds state | ❌ Open | Bounds-on flag not preserved across tier transitions. |
+| 3 | Galaxy view: separate ship nav from fleet movement picker | ❌ Open | Ship movement shows where ship is + lets user explore. Fleet picker selects ship/location → directs to destination. Probes can explore any star. Colony ships only to fully-explored stars (not probe-explored). Probe info = summary; ship visit = full info. Touch: need a way to select star and show info without hover. |
+| 4 | Star coloring not working — see red stars after visiting | ❌ Open | Expected: visited = green, foreign-claimed = red, undiscovered = yellow. May be visit-star not overriding foreign ownership. |
+| 5 | Ship name editing blocked by steering keys | ✅ Fixed (v0.0.257) | Mode flag added — keyboard input passes through when editing ship name. |
+
 ---
 
 ## Context
 
 The game already has:
 - Galaxy / System / Planet / Local tier navigation.
-- Star ownership and discovery with visual color coding (home=blue, undiscovered=green, discovered foreign=white).
+- Star ownership and discovery with visual color coding (home=blue, player-discovered=green, foreign=red, undiscovered=yellow).
+- Star discovery persistence across sessions (Redis-backed).
+- Position save/restore across sessions.
 - Planet-tier docking at stations with a dock panel.
 - Ship movement, fuel, shooting, ghosts (other players).
+- Economy: resources, buildings, ship building, ship upgrades, ship transfers.
+- Admin tools: player stats, debug panel, force save, Redis inspection.
 - Non-UI test harness: domain reducers, shared contracts, service layer.
 
 The economy sits on top of this as the **reason to explore, colonize, and fight.**
 
 ---
 
-## Feature 1 — Resources
+## Feature 1 — Resources ✅ COMPLETE
 
 **What:** Three core resources — **Ore, Food, Energy** — stored per star. Atomics reserved/gated.
 
 **Why first:** everything else (buildings, ships, trade) depends on resources being real and trackable.
 
 ### Sub-features
-| # | Item | Detail |
-|---|---|---|
-| 1.1 | Resource schema | Each owned star carries `{ ore, food, energy }` store values in player profile (Redis/KV). |
-| 1.2 | Production rates | Each star produces resources over time at a rate defined by its buildings. Base rate at colonization: small constant per minute. |
-| 1.3 | Storage cap | Each resource store has a max (starts small; scales with warehouse buildings). Overflow clamps. |
-| 1.4 | Server-side tick | On profile load and on action, server computes elapsed time × rate and applies accumulated production (mirrors legacy `CurrentStoreCalc`). |
-| 1.5 | Display | Planet-tier dock panel shows current store values. Star info panel shows production rates. |
-| 1.6 | Tests | Pure reducer tests for production accumulation, cap enforcement, overflow clamping. |
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 1.1 | Resource schema | ✅ | `ResourceStore { ore, food, energy }` in shared/api.ts. `StarEconomyState` holds store, rates, cap per star. |
+| 1.2 | Production rates | ✅ | `computeResourceRatesFromBuildings()` — base rate + bonus from mine/hab/solar levels. |
+| 1.3 | Storage cap | ✅ | `computeResourceCapFromBuildings()` — base 1600 + 400/warehouse level. `clampStore()` enforces ceiling. |
+| 1.4 | Server-side tick | ✅ | `tickStarEconomy()` applies `elapsedMin × rate` on load/action, persists `lastTickMs`. |
+| 1.5 | Display | ✅ | STATUS panel shows `ORE: X/cap (+rate/m)` per resource. Star info legend in dock panel. |
+| 1.6 | Tests | ✅ | `game-service.test.ts`: tick production, clamping, no backward tick. `economy-catalog.test.ts`: resource catalog. |
 
 ---
 
-## Feature 2 — Buildings
+## Feature 2 — Buildings ✅ COMPLETE
 
 **What:** Per-star building slots with levels. Four production families: Ore, Food, Energy production + warehouses. Later: command centers, docks, defense, research.
 
 **Why second:** buildings define production rates and unlock everything else. Nothing else works without them.
 
 ### Sub-features
-| # | Item | Detail |
-|---|---|---|
-| 2.1 | Building schema | Each star carries a `buildings` map: `{ [buildType]: { level, status, completeAt } }`. |
-| 2.2 | Build catalog | Static catalog from `game_catalog_v1` — building IDs, names, max levels, prereqs, costs per level. Loaded at startup as a shared constant. |
-| 2.3 | Prerequisite evaluator | Pure function: given current buildings, returns which build types are unlocked. Mirrors legacy `PreRequisiteTable`. |
-| 2.4 | Build cost calculator | Pure function: `(buildType, targetLevel) → { ore, food, energy, durationSeconds }`. |
-| 2.5 | BuyBuilding command | Server validates prereqs, deducts resources, writes building with `status: UPGRADING`, `completeAt`. |
-| 2.6 | UpgradeBuilding command | Same flow, increments level. |
-| 2.7 | Build completion | On profile load: check `completeAt` — if past, mark `ACTIVE`, recalculate production rate. |
-| 2.8 | Build tree UI | Planet dock panel shows build tree: locked/building/active states, cost tooltips, upgrade button. |
-| 2.9 | Tests | Prereq evaluator unit tests. Cost calculator tests. Build command integration tests (mock store). |
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 2.1 | Building schema | ✅ | `StarBuildingsState = Record<BuildType, StarBuildingState>` with level, status, completeAt. |
+| 2.2 | Build catalog | ✅ | `BUILDING_CATALOG` — 6 types (station, mine, solar, hab, warehouse, dock) with maxLevel, duration, prereqs. |
+| 2.3 | Prerequisite evaluator | ✅ | `isBuildUnlocked()` and `getUnlockedBuildTypes()` — checks prereq levels. Auto-sets LOCKED/READY. |
+| 2.4 | Build cost calculator | ✅ | `getBuildingCost(type, level)` — station tiered cost, others scale linearly. |
+| 2.5 | BuyBuilding command | ✅ | `POST /buildings/buy` → `startBuildingUpgrade()` — validates prereqs, resources, deducts cost, sets UPGRADING+completeAt. |
+| 2.6 | UpgradeBuilding command | ✅ | `POST /buildings/upgrade` — same function, level increment automatic via `getBuildingTargetLevel`. |
+| 2.7 | Build completion | ✅ | `reconcileStarBuildings(buildings, now)` — promotes UPGRADING→ACTIVE if `completeAt ≤ now`. |
+| 2.8 | Build tree UI | ✅ | `drawBuildPanelBody()` — 3×2 grid with level, cost, progress %, LOCKED/BUILD/UPGRADE states, COMPLETE debug button. |
+| 2.9 | Tests | ✅ | `buildings.test.ts`: initial state, tiered costs, reconciliation. `game-service.test.ts`: upgrade flow, rejection cases. |
 
 **Initial buildings unlocked at colonization:** Ore Prod (lv1), Food Prod (lv1), Energy Prod (lv1), Space Dock T1 (lv1).
 
 ---
 
-## Feature 3 — Ship Building
+## Feature 3 — Ship Building ✅ COMPLETE (tests partial)
 
 **What:** Ships are built at a star via the Space Dock building. Each ship type has a cost, build time, and prerequisite building.
 
 **Why third:** ships are the primary economic/military tool. Without buildable ships, the economy has no output.
 
 ### Sub-features
-| # | Item | Detail |
-|---|---|---|
-| 3.1 | Ship type catalog | Static reference from `game_catalog_v1`: ID, name, speed, offense, defense, transport, ship-points cost, dock prereq. |
-| 3.2 | BuyShip command | Server validates dock level/prereqs, deducts resources or ship-points, queues ship build with `completeAt`. |
-| 3.3 | Ship completion | On profile load: if `completeAt` past, mark ship as `IDLE` at home star. |
-| 3.4 | Fleet assignment | Ships can be grouped into a fleet for joint movement orders. |
-| 3.5 | Ship list UI | Dock panel shows owned ships at current star, their status, and build queue. |
-| 3.6 | Tests | BuyShip prereq validation tests. Ship completion state machine tests. |
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 3.1 | Ship type catalog | ✅ | `SHIP_CATALOG` — 12 ship types with id, name, speed, offense, defense, transport, cost, buildSeconds, dockTier/Level. `UPGRADE_PATH` for linear progression. |
+| 3.2 | BuyShip command | ✅ | `POST /ships/buy` → `buyShip()` — validates dock level, resources, single-build-at-a-time, deducts cost. Also `POST /ships/upgrade` → `upgradeShip()` for path upgrades. |
+| 3.3 | Ship completion | ✅ | `reconcileShipBuilding()` — on load, completes builds when `completeAt ≤ now`, adds to fleet. |
+| 3.4 | Fleet assignment | ✅ | `POST /fleet/transfer` → `transferShips()` — creates `ShipTransit` with speed-based travel time. `loadAllFleet()` reconciles arrived transits. Fleet stored per-star. |
+| 3.5 | Ship list UI | ✅ | `drawShipsPanelBody()` — available builds, upgrade section, build progress. `drawFleetPanelBody()` — galaxy/local views with SEND buttons, transit display, fleet badges on stars. |
+| 3.6 | Tests | ⚠️ | No dedicated ship test file. `game-service.test.ts` covers buildings/economy but not `buyShip`, `upgradeShip`, `loadStarShips`, or `transferShips`. |
 
 **Initial ship types available:** Scout (1), Freighter (2), Colony Ship (8), Basic Probe (11).
 
 ---
 
-## Feature 4 — Star Colonization
+## Feature 4 — Star Colonization ❌ NOT STARTED
 
 **What:** Send a Colony Ship (type 8) to an undiscovered or unclaimed star to claim it, install a Command Center, and start producing resources.
 
@@ -97,7 +115,7 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 
 ---
 
-## Feature 5 — Cargo and Trade
+## Feature 5 — Cargo and Trade ❌ NOT STARTED
 
 **What:** Freighters carry resources between stars. Resources at a star can be loaded into a ship's cargo hold and unloaded at the destination.
 
@@ -114,7 +132,7 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 
 ---
 
-## Feature 6 — Ship Movement
+## Feature 6 — Ship Movement ⚠️ PARTIAL (transfer/transit exists, no real-time interpolation)
 
 **What:** Ships and fleets move across the galaxy map between stars. Movement is time-based; the server stores start/target/ETA and the client interpolates.
 
@@ -132,7 +150,7 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 
 ---
 
-## Feature 7 — Currency and Commerce
+## Feature 7 — Currency and Commerce ❌ NOT STARTED
 
 **What:** Two currencies: `gc_soft` (earned in-game) and `gp_premium` / `ship_points` (premium, purchased). Soft currency earned from production, trade, quests. Premium used for special ships/buffs.
 
@@ -149,7 +167,7 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 
 ---
 
-## Feature 8 — Combat
+## Feature 8 — Combat ❌ NOT STARTED
 
 **What:** Ships attack enemy-owned stars and fleets. Combat uses the weapon effectiveness matrix. Outcome is deterministic on the server.
 
@@ -166,7 +184,7 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 
 ---
 
-## Feature 9 — Quests
+## Feature 9 — Quests ❌ NOT STARTED
 
 **What:** Linear tutorial/progression quest chain guiding players through core loops: build → mine → launch → discover → colonize.
 
@@ -193,7 +211,7 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 
 ---
 
-## Feature 10 — Social: Mail and Alliances
+## Feature 10 — Social: Mail and Alliances ❌ NOT STARTED
 
 **What:** Player-to-player mail for coordination. Alliances for shared map visibility and combined attacks.
 
@@ -212,13 +230,13 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 
 ## Implementation Phases
 
-| Phase | Features | Goal |
-|---|---|---|
-| **P1** | 1 Resources, 2 Buildings | Stars produce resources. Players can build and upgrade. |
-| **P2** | 3 Ship Building, 4 Colonization | Players build ships and expand. |
-| **P3** | 5 Cargo, 6 Movement | Trade routes and inter-star economy emerge. |
-| **P4** | 7 Currency, 8 Combat | Economy rewards and conflict. |
-| **P5** | 9 Quests, 10 Social | Onboarding, retention, alliances. |
+| Phase | Features | Status | Goal |
+|---|---|---|---|
+| **P1** | 1 Resources, 2 Buildings | ✅ Complete | Stars produce resources. Players can build and upgrade. |
+| **P2** | 3 Ship Building, 4 Colonization | ⚠️ Ships done, Colonization not started | Players build ships and expand. |
+| **P3** | 5 Cargo, 6 Movement | ⚠️ Transfer/transit exists, no cargo or interpolation | Trade routes and inter-star economy emerge. |
+| **P4** | 7 Currency, 8 Combat | ❌ Not started | Economy rewards and conflict. |
+| **P5** | 9 Quests, 10 Social | ❌ Not started | Onboarding, retention, alliances. |
 
 ---
 
