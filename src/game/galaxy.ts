@@ -7,7 +7,7 @@ import { reduceStarOwnership } from './ownership';
 import {
   GALAXY_SIZE, STAR_COUNT, STAR_MIN_SPACING,
   STAR_ENTER_RADIUS, SYSTEM_SIZE, SYSTEM_BODY_MIN, SYSTEM_BODY_MAX,
-  BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS,
+  BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_BODY_MAX_ORBIT,
   STAR_NAMES,
   PLANET_NAME_PREFIXES, PLANET_NAME_SUFFIXES,
   FEATURE_TYPES, FEATURE_LABELS,
@@ -135,7 +135,7 @@ export function generateGalaxy(worldSeed: string): GalaxyStar[] {
       seed: starSeed,
       name: pickStarName(starSeed, index),
       bodyCount: rng.rangeInt(SYSTEM_BODY_MIN, SYSTEM_BODY_MAX + 1),
-      owner: 'foreign',
+      owner: 'none',
       discovered: false,
       discoveryLevel: 'none',
     });
@@ -168,7 +168,7 @@ export function generateSystem(star: GalaxyStar): SystemBody[] {
     const minDist = 4 + i * 3.2;
     const maxDist = minDist + 2.5;
     // Cap orbit so all bodies stay inside the exit boundary
-    const maxAllowed = SYSTEM_EXIT_RADIUS - 2;
+    const maxAllowed = SYSTEM_BODY_MAX_ORBIT;
     const dist = Math.min(rng.range(minDist, maxDist), maxAllowed);
     const angle = rng.range(0, Math.PI * 2);
 
@@ -179,12 +179,14 @@ export function generateSystem(star: GalaxyStar): SystemBody[] {
     const radius = type === 'belt' ? rng.range(0.6, 1.0) : rng.range(0.4, 0.8);
 
     // Generate sub-features for planets.
-    // Start state is intentionally minimal: only the home station exists.
+    // Station only appears on player-owned stars (colonized).
     const features: PlanetFeature[] = [];
-    if (type === 'planet' && i === 0) {
+    if (type === 'planet' && i === 0 && star.owner === 'player') {
       const featRng = createRng(bodySeed + 777);
-      const fAngle = featRng.range(0, Math.PI * 2);
-      const fDist = featRng.range(1.8, 3.0);
+      // Constrain angle to upper half of screen (avoid bottom where UI panels sit)
+      // World +Y = screen top, so angles in upper semicircle: -π/4 to 5π/4
+      const fAngle = featRng.range(-Math.PI * 0.25, Math.PI * 1.25);
+      const fDist = featRng.range(1.2, 1.8);
       const ft: FeatureType = 'station';
       const fName = `${prefix}${suffix} ${romanNumeral(1)} ${FEATURE_LABELS[ft] ?? ft}`;
       features.push({ name: fName, type: ft, angle: fAngle, dist: fDist });
@@ -344,10 +346,11 @@ export function checkTierTransition(
     }
   } else if (tier === NavigationTier.Planet) {
     // Check exit: ship reaches edge of planet view (camera is fixed at origin with orthoSize=3.2)
-    // Visible area is about ±3.2 vertically, ±5.1 horizontally (aspect ~1.6)
-    // Transition when ship is near visible edge
-    const exitX = 4.5;
-    const exitY = 2.8;
+    // Boundary is 1/10 inset from visible edge on all sides
+    const halfH = 3.2; // orthoSize
+    const aspect = 1.5; // approximate screen aspect
+    const exitX = halfH * aspect * 0.9;
+    const exitY = halfH * 0.9;
     if (Math.abs(shipPos.x) > exitX || Math.abs(shipPos.y) > exitY) {
       // Normalise ship pos as exit direction so placement matches the side they left from
       const m = magnitude(shipPos);

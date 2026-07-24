@@ -6,6 +6,7 @@ import { vec2, sub, magnitude, normalize, scale } from './math';
 import { NavigationTier } from './galaxy';
 import { FEATURE_LABELS } from './constants';
 import type { PlanetFeature } from './galaxy';
+import { playSound } from './audio';
 
 /** Distance from planet center at which docking begins (matches orbit ring) */
 export const DOCK_TRIGGER_RADIUS = 0.4;
@@ -128,6 +129,7 @@ export function updateDocking(state: GameState, dt: number): void {
     dock.docked = true;
     state.ship.pos = targetPos;
     state.ship.ang = targetAngle;
+    playSound('docked');
   }
 }
 

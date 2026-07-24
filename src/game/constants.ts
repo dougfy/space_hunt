@@ -115,12 +115,13 @@ export const ASTEROID_NAME_SUFFIXES = [
 export const GALAXY_SIZE = 100;          // 100×100 unit space
 export const STAR_COUNT = 100;
 export const STAR_MIN_SPACING = 7;       // minimum distance between stars
-export const STAR_ENTER_RADIUS = 3;      // how close ship must get to enter a star system
+export const STAR_ENTER_RADIUS = 1.2;    // how close ship must get to enter a star system (tight — use VISIT button)
 export const SYSTEM_SIZE = 40;           // 40×40 unit system space
 export const SYSTEM_BODY_MIN = 3;
 export const SYSTEM_BODY_MAX = 8;
 export const BODY_ENTER_RADIUS = 2;      // how close to enter local tier
-export const SYSTEM_EXIT_RADIUS = 18;    // distance from system center to exit back to galaxy (must be > max orbit)
+export const SYSTEM_EXIT_RADIUS = 22;    // distance from system center to exit back to galaxy (must be > max orbit)
+export const SYSTEM_BODY_MAX_ORBIT = 15; // max orbit distance for bodies (leaves buffer before exit)
 
 export const GALAXY_SHIP_SPEED = 4.5;    // ~5× normal so crossing ~22s matches current local feel
 export const SYSTEM_SHIP_SPEED = 1.8;    // slower than galaxy, faster than local

@@ -14,6 +14,8 @@ import { vec2, add, sub, normalize, magnitude, scale, createRng } from './math';
 import { getShipShapePoints, getShipDetailElements } from './ship';
 import { getAsteroidSurfaceInfo } from './asteroids';
 import type { StarVisualTone } from './ownership-contracts';
+import { playSound } from './audio';
+import { getJourneyPulseAlpha } from './journey';
 
 export interface Renderer {
   canvas: HTMLCanvasElement;
@@ -293,6 +295,115 @@ export function drawGhostShip(
 ) {
   const color = GHOST_PALETTE[Math.abs(slot - 1) % GHOST_PALETTE.length] ?? G_BRIGHT;
   drawShip(r, camera, pos, angle, shape, color);
+}
+
+const TYPEID_TO_SHAPE: Record<number, ShipShape> = {
+  1: 'scout', 2: 'frigate', 3: 'destroyer', 4: 'frigate', 5: 'battleship', 6: 'cruiser', 7: 'dreadnought',
+  8: 'frigate', 10: 'destroyer', 11: 'scout', 12: 'scout', 14: 'scout',
+};
+
+/** Draw parked player fleet ships at the current star in planet/system view. */
+export function drawPlayerFleetAtStar(
+  r: Renderer,
+  camera: Camera,
+  starIndex: number,
+  stationWorldPos: Vec2,
+) {
+  const fleet = _serverShipsByStarIndex.get(starIndex);
+  if (!fleet || fleet.ships.length === 0) return;
+
+  ensureShipIconsLoaded();
+  const FLEET_COLOR = '#4fffb0'; // green
+  const { ctx } = r;
+  const screenW = r.width / (window.devicePixelRatio || 1);
+  const screenH = r.height / (window.devicePixelRatio || 1);
+
+  let slotIdx = 0;
+  for (const entry of fleet.ships) {
+    if (entry.count <= 0) continue;
+    const catalogEntry = SHIP_CATALOG[entry.typeId as keyof typeof SHIP_CATALOG];
+    const countToDraw = Math.min(entry.count, 3); // cap visual at 3 per type
+    for (let i = 0; i < countToDraw; i++) {
+      // Offset ships upward (+Y world = up on screen) from station, tightly packed
+      const offsetAngle = Math.PI * 0.5 + (slotIdx - 1) * 0.5;
+      const offsetDist = 0.25 + slotIdx * 0.08;
+      const pos = {
+        x: stationWorldPos.x + Math.cos(offsetAngle) * offsetDist,
+        y: stationWorldPos.y + Math.sin(offsetAngle) * offsetDist,
+      };
+
+      const sc = worldToScreen(pos, camera, screenW, screenH);
+      const icon = catalogEntry ? getShipIcon(catalogEntry.icon) : null;
+      if (icon) {
+        const iconSize = 28;
+        ctx.drawImage(icon, sc.x - iconSize / 2, sc.y - iconSize / 2, iconSize, iconSize);
+      } else {
+        // Fallback wireframe
+        const shape = TYPEID_TO_SHAPE[entry.typeId] ?? 'scout';
+        const shipAngle = offsetAngle + Math.PI;
+        drawShip(r, camera, pos, shipAngle, shape, FLEET_COLOR);
+      }
+
+      // Label on first ship of this type
+      if (i === 0) {
+        const label = catalogEntry ? `${catalogEntry.name}${entry.count > 1 ? ' x' + entry.count : ''}` : '';
+        if (label) {
+          ctx.save();
+          ctx.font = 'bold 9px monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'bottom';
+          ctx.fillStyle = FLEET_COLOR;
+          ctx.fillText(label, sc.x, sc.y - 16);
+          ctx.restore();
+        }
+      }
+      slotIdx++;
+    }
+  }
+}
+
+/** Draw parked foreign (enemy) ships at the current star in planet/system view. */
+export function drawForeignShipsAtStar(
+  r: Renderer,
+  camera: Camera,
+  starIndex: number,
+  stationWorldPos: Vec2,
+) {
+  const foreign = _foreignShipsByStarIndex.get(starIndex);
+  if (!foreign || foreign.ships.length === 0) return;
+
+  const ENEMY_COLOR = 'rgb(255, 80, 60)';
+  let slotIdx = 0;
+  for (const entry of foreign.ships) {
+    const shape = TYPEID_TO_SHAPE[entry.typeId] ?? 'destroyer';
+    for (let i = 0; i < entry.count; i++) {
+      // Offset each ship slightly from the station
+      const offsetAngle = (Math.PI * 0.4) + slotIdx * 0.6;
+      const offsetDist = 0.35 + slotIdx * 0.15;
+      const pos = {
+        x: stationWorldPos.x + Math.cos(offsetAngle) * offsetDist,
+        y: stationWorldPos.y + Math.sin(offsetAngle) * offsetDist,
+      };
+      const shipAngle = offsetAngle + Math.PI; // face toward station
+      drawShip(r, camera, pos, shipAngle, shape, ENEMY_COLOR);
+
+      // Label on first ship only
+      if (slotIdx === 0) {
+        const { ctx } = r;
+        const screenW = r.width / (window.devicePixelRatio || 1);
+        const screenH = r.height / (window.devicePixelRatio || 1);
+        const labelSc = worldToScreen(pos, camera, screenW, screenH);
+        ctx.save();
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillStyle = ENEMY_COLOR;
+        ctx.fillText(foreign.owner, labelSc.x, labelSc.y - 10);
+        ctx.restore();
+      }
+      slotIdx++;
+    }
+  }
 }
 
 export function drawHUD(
@@ -991,6 +1102,7 @@ type TransferMode = {
 
 let _transferMode: TransferMode = null;
 let _lastScreenStars: Array<{ starIndex: number; sx: number; sy: number }> = [];
+let _validTransferTargets: Set<number> = new Set();
 let _pendingTransfer: { fromStarIndex: number; toStarIndex: number; shipTypeId: number; count: number } | null = null;
 let _transferCancelButton: { x: number; y: number; w: number; h: number } | null = null;
 
@@ -1025,6 +1137,7 @@ export function hitTestGalaxyStar(sx: number, sy: number, radius = 18): number {
 export function completeTransferSelection(toStarIndex: number): void {
   if (!_transferMode) return;
   if (toStarIndex === _transferMode.fromStarIndex) return; // can't send to same star
+  if (_validTransferTargets.size > 0 && !_validTransferTargets.has(toStarIndex)) return; // not a valid target
   _pendingTransfer = {
     fromStarIndex: _transferMode.fromStarIndex,
     toStarIndex,
@@ -1285,6 +1398,33 @@ export function drawGalaxyView(
         }
       }
 
+      // ── Foreign fleet badge (red) ──
+      const foreignFleet = _foreignShipsByStarIndex.get(star.index);
+      if (foreignFleet && foreignFleet.ships.length > 0) {
+        const totalForeign = foreignFleet.ships.reduce((sum, s) => sum + s.count, 0);
+        if (totalForeign > 0) {
+          const fbText = `${totalForeign}`;
+          ctx.font = 'bold 7px monospace';
+          const ftw = ctx.measureText(fbText).width;
+          const fbw = ftw + 6;
+          const fbh = 10;
+          // Position below the player's badge (or to the right if no player badge)
+          const fbx = sx + rayLen + 2;
+          const fby = sy + (fleetState && fleetState.ships.length > 0 ? 8 : -fbh / 2);
+          ctx.fillStyle = 'rgba(30, 5, 5, 0.8)';
+          roundedRect(ctx, fbx, fby, fbw, fbh, 3);
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(255, 80, 60, 0.8)';
+          ctx.lineWidth = 0.5;
+          roundedRect(ctx, fbx, fby, fbw, fbh, 3);
+          ctx.stroke();
+          ctx.fillStyle = 'rgb(255, 100, 80)';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(fbText, fbx + fbw / 2, fby + fbh / 2);
+        }
+      }
+
       ctx.restore();
     }
   }
@@ -1312,7 +1452,7 @@ export function drawGalaxyView(
       ctx.lineTo(toSc.x, toSc.y);
       ctx.stroke();
 
-      // Draw moving ship dot along the line
+      // Draw moving ship icon along the line
       const elapsed = now - t.departedAt;
       const total = t.arrivalAt - t.departedAt;
       const progress = Math.min(1, Math.max(0, elapsed / total));
@@ -1320,15 +1460,18 @@ export function drawGalaxyView(
       const dotY = fromSc.y + (toSc.y - fromSc.y) * progress;
 
       ctx.setLineDash([]);
-      ctx.fillStyle = '#ffb84d'; // AMBER
-      ctx.beginPath();
-      ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255, 184, 77, 0.8)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(dotX, dotY, 5, 0, Math.PI * 2);
-      ctx.stroke();
+      const catalogEntry = SHIP_CATALOG[t.shipTypeId as keyof typeof SHIP_CATALOG];
+      const shipIcon = catalogEntry ? getShipIcon(catalogEntry.icon) : null;
+      if (shipIcon) {
+        const iconSize = 16;
+        ctx.drawImage(shipIcon, dotX - iconSize / 2, dotY - iconSize / 2, iconSize, iconSize);
+      } else {
+        // Fallback dot if icon not loaded
+        ctx.fillStyle = '#ffb84d';
+        ctx.beginPath();
+        ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.setLineDash([6, 4]);
       ctx.lineDashOffset = -dashPhase;
     }
@@ -1359,11 +1502,21 @@ export function drawGalaxyView(
     const fromEntry = SHIP_CATALOG[_transferMode.shipTypeId as keyof typeof SHIP_CATALOG];
     const shipName = fromEntry?.name ?? 'Ship';
 
-    // Draw pulsing rings around all valid target stars
+    // Draw pulsing rings around valid target stars (filtered by ship type)
     const t = performance.now() * 0.003;
     const pulse = 0.5 + 0.5 * Math.sin(t);
+    _validTransferTargets.clear();
     for (const s of screenStars) {
       if (s.star.index === _transferMode.fromStarIndex) continue;
+      // Colony Ship (8): only probed/visited + not player-owned
+      if (_transferMode.shipTypeId === 8) {
+        if (s.star.discoveryLevel === 'none' || s.star.owner === 'player') continue;
+      }
+      // Probes (11, 12): only unvisited or foreign-owned
+      if (_transferMode.shipTypeId === 11 || _transferMode.shipTypeId === 12) {
+        if (s.star.discoveryLevel !== 'none' && s.star.owner !== 'foreign') continue;
+      }
+      _validTransferTargets.add(s.star.index);
       ctx.save();
       ctx.strokeStyle = `rgba(79, 255, 176, ${0.2 + pulse * 0.3})`;
       ctx.lineWidth = 1.5;
@@ -1476,6 +1629,12 @@ export function drawGalaxyView(
       if (star.index === galaxy.homeStarIndex) {
         statusText = 'HOME SYSTEM';
         statusColor = 'rgba(120, 200, 255, 0.9)'; // blue
+      } else if (star.owner === 'player') {
+        statusText = 'OWNED';
+        statusColor = 'rgba(120, 200, 255, 0.9)'; // blue
+      } else if (star.owner === 'foreign') {
+        statusText = 'HOSTILE';
+        statusColor = 'rgba(255, 100, 100, 0.9)'; // red
       } else if (star.discoveryLevel === 'visited') {
         statusText = 'VISITED';
         statusColor = 'rgba(79, 255, 176, 0.9)'; // green
@@ -2144,6 +2303,36 @@ export function drawSystemView(
         const fy = sc.y + Math.sin(feat.angle) * fDist * 0.55; // match ellipse perspective
         drawFeatureIcon(ctx, fx, fy, 'station', 5);
       }
+
+      // Draw player fleet ship icons near first planet in system view
+      if (star && body.index === 0) {
+        const fleet = _serverShipsByStarIndex.get(star.index);
+        if (fleet && fleet.ships.length > 0) {
+          ensureShipIconsLoaded();
+          let iconSlot = 0;
+          for (const entry of fleet.ships) {
+            if (entry.count <= 0) continue;
+            const catalogEntry = SHIP_CATALOG[entry.typeId as keyof typeof SHIP_CATALOG];
+            const icon = catalogEntry ? getShipIcon(catalogEntry.icon) : null;
+            if (icon) {
+              const iconSize = 20;
+              const offsetX = sc.x + radPx + 20 + iconSlot * (iconSize + 4);
+              const offsetY = sc.y - iconSize / 2;
+              ctx.drawImage(icon, offsetX, offsetY, iconSize, iconSize);
+              if (entry.count > 1) {
+                ctx.save();
+                ctx.font = 'bold 7px monospace';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+                ctx.fillStyle = '#4fffb0';
+                ctx.fillText(`x${entry.count}`, offsetX + iconSize + 1, offsetY + iconSize - 8);
+                ctx.restore();
+              }
+            }
+            iconSlot++;
+          }
+        }
+      }
     }
   }
 
@@ -2383,8 +2572,11 @@ export function drawPlanetDebugBounds(
 
   // Exit boundaries in local coordinates, matching:
   // |shipPos.x + worldOffset.x| > exitX  ||  |shipPos.y + worldOffset.y| > exitY
-  const exitX = 4.5;
-  const exitY = 2.8;
+  // Boundary is 1/10 inset from visible screen edge
+  const halfH = camera.orthoSize;
+  const aspect = screenW / screenH;
+  const exitX = halfH * aspect * 0.9;
+  const exitY = halfH * 0.9;
   const minX = -exitX - worldOffset.x;
   const maxX = exitX - worldOffset.x;
   const minY = -exitY - worldOffset.y;
@@ -2865,17 +3057,23 @@ let _panelsDocked = false;
 let _panelsStarIndex: number | null = null;
 let _panelsTier: 'galaxy' | 'system' | 'planet' = 'planet';
 let _panelsShipShape: string = 'scout';
+let _panelsOwned = false; // whether player owns the current star
 
 /** Called before drawing to set panel context */
-export function setPanelContext(docked: boolean, starIndex: number | null, tier: 'galaxy' | 'system' | 'planet' = 'planet', shipShape?: string): void {
+export function setPanelContext(docked: boolean, starIndex: number | null, tier: 'galaxy' | 'system' | 'planet' = 'planet', shipShape?: string, owned?: boolean): void {
   // Auto-close dock-required panels when undocking or leaving planet tier
   if (!docked && _panelsDocked && _openPanel >= 0 && PANEL_TABS[_openPanel]?.requiresDock) {
+    _openPanel = -1;
+  }
+  // Auto-close BUILD/SHIPS if we dock at an unowned star
+  if (owned === false && _openPanel >= 0 && PANEL_TABS[_openPanel]?.requiresDock) {
     _openPanel = -1;
   }
   _panelsDocked = docked;
   _panelsStarIndex = starIndex;
   _panelsTier = tier;
   if (shipShape !== undefined) _panelsShipShape = shipShape;
+  if (owned !== undefined) _panelsOwned = owned;
 }
 
 // Pending galaxy jump from fleet panel MAP button
@@ -2902,6 +3100,7 @@ function hitTestBuildPanel(sx: number, sy: number): void {
     const cb = _completeButton;
     if (sx >= cb.x && sx <= cb.x + cb.w && sy >= cb.y && sy <= cb.y + cb.h) {
       _pendingCompleteBuilds = true;
+      playSound('click');
       return;
     }
   }
@@ -2910,6 +3109,7 @@ function hitTestBuildPanel(sx: number, sy: number): void {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
       if (btn.enabled) {
         _pendingExtensionAction = btn.action;
+        playSound('click');
       }
       return;
     }
@@ -2925,6 +3125,7 @@ function hitTestShipsPanel(sx: number, sy: number): void {
         } else {
           _pendingBuyShipRequest = { shipTypeId: btn.shipTypeId, quantity: 1 };
         }
+        playSound('begin_building');
       }
       return;
     }
@@ -2938,6 +3139,7 @@ function hitTestFleetPanel(sx: number, sy: number): void {
     if (sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
       _pendingGalaxyJump = true;
       _galaxyJumpReturnTier = _panelsTier === 'galaxy' ? null : _panelsTier;
+      playSound('click');
       return;
     }
   }
@@ -2945,6 +3147,7 @@ function hitTestFleetPanel(sx: number, sy: number): void {
   for (const btn of _fleetSendButtons) {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
       enterTransferMode(btn.starIndex, btn.shipTypeId);
+      playSound('click');
       return;
     }
   }
@@ -2975,15 +3178,19 @@ export function drawPlanetPanels(
     if (!tab || !rect) continue;
     const ty = rect.y;
     const isOpen = _openPanel === i;
-    const isDisabled = (tab.requiresDock && !_panelsDocked) || (i === 3 && _panelsShipShape === 'scout');
+    const isDisabled = (tab.requiresDock && (!_panelsDocked || !_panelsOwned)) || (i === 3 && _panelsShipShape === 'scout');
+
+    // Journey pulse: brighten non-disabled tabs
+    const pulseAlpha = getJourneyPulseAlpha();
+    const hasPulse = pulseAlpha > 0 && !isDisabled && !isOpen;
 
     // ── Tab (vertical, right edge) ──
-    ctx.fillStyle = isOpen ? 'rgba(0, 30, 15, 0.9)' : 'rgba(0, 10, 5, 0.7)';
+    ctx.fillStyle = isOpen ? 'rgba(0, 30, 15, 0.9)' : hasPulse ? `rgba(0, 60, 30, ${0.7 + pulseAlpha * 0.3})` : 'rgba(0, 10, 5, 0.7)';
     roundedRect(ctx, tabX - 4, ty, TAB_W + 4, TAB_H, 4);
     ctx.fill();
 
-    ctx.strokeStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : G_DIM;
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : hasPulse ? `rgba(79, 255, 176, ${0.4 + pulseAlpha * 0.6})` : G_DIM;
+    ctx.lineWidth = hasPulse ? 2.5 : 1.5;
     roundedRect(ctx, tabX - 4, ty, TAB_W + 4, TAB_H, 4);
     ctx.stroke();
 
@@ -2991,7 +3198,7 @@ export function drawPlanetPanels(
     ctx.font = '12px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : G_MED;
+    ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : hasPulse ? `rgba(79, 255, 176, ${0.5 + pulseAlpha * 0.5})` : G_MED;
     ctx.fillText(tab.icon, tabX + TAB_W / 2, ty + 16);
 
     // Vertical title text
@@ -3281,7 +3488,7 @@ function drawShipsPanelBody(
   // Show Basic Probe (11) and Colony Ship (8); also show Scout (1) if player has no upgrade-path ship
   const SHOWN_BUILD_IDS = hasUpgradePathShip ? [11, 8] : [1, 11, 8];
   const availableShips = Object.values(SHIP_CATALOG).filter(
-    (entry) => SHOWN_BUILD_IDS.includes(entry.id) && entry.dockTier <= dockLevel && entry.dockLevel <= dockLevel,
+    (entry) => SHOWN_BUILD_IDS.includes(entry.id),
   );
   const cols = 2;
   const cellW = Math.floor((w - PANEL_PAD * 2 - 6) / cols);
@@ -3447,16 +3654,26 @@ function drawShipsPanelBody(
     ctx.fillText('BUILD', x + PANEL_PAD, cursorY);
     cursorY += 12;
 
-    // Building indicator
+    // Building indicator with progress bar
     if (buildingShip && !UPGRADE_PATH.includes(buildingShip.typeId as any)) {
       const bEntry = SHIP_CATALOG[buildingShip.typeId as keyof typeof SHIP_CATALOG];
       if (bEntry) {
         const remaining = Math.max(0, Math.ceil((buildingShip.completeAt - nowMs) / 1000));
         const totalBuild = bEntry.buildSeconds;
         const progress = Math.max(0, Math.min(100, Math.floor(((totalBuild - remaining) / totalBuild) * 100)));
-        ctx.fillStyle = G_MED;
+        ctx.fillStyle = G_BRIGHT;
         ctx.font = '7px monospace';
-        ctx.fillText(`BUILDING: ${bEntry.name.toUpperCase()} ${progress}% (${remaining}s)`, x + PANEL_PAD + 40, cursorY - 12);
+        ctx.fillText(`BUILDING: ${bEntry.name.toUpperCase()} ${progress}%  (${remaining}s)`, x + PANEL_PAD + 40, cursorY - 12);
+        // Progress bar
+        const barX = x + PANEL_PAD;
+        const barW = w - PANEL_PAD * 2;
+        const barY2 = cursorY - 2;
+        const barH = 4;
+        ctx.fillStyle = 'rgba(79, 255, 176, 0.15)';
+        ctx.fillRect(barX, barY2, barW, barH);
+        ctx.fillStyle = G_BRIGHT;
+        ctx.fillRect(barX, barY2, Math.floor((barW * progress) / 100), barH);
+        cursorY += 6;
       }
     }
 
@@ -3467,10 +3684,11 @@ function drawShipsPanelBody(
       const by = cursorY + row * (cellH + cellGap);
 
       const isBuilding = buildingShip != null && buildingShip.completeAt > nowMs;
+      const dockLocked = entry.dockLevel > dockLevel;
       const canAfford = serverEcon
         ? serverEcon.store.ore >= entry.cost.ore && serverEcon.store.food >= entry.cost.food && serverEcon.store.energy >= entry.cost.energy
         : false;
-      const enabled = !isBuilding && canAfford;
+      const enabled = !isBuilding && !dockLocked && canAfford;
 
       _lastShipButtons.push({ x: bx, y: by, w: cellW, h: cellH, shipTypeId: entry.id, enabled, isUpgrade: false });
 
@@ -3486,7 +3704,9 @@ function drawShipsPanelBody(
       const icon = getShipIcon(entry.icon);
       if (icon) {
         const iconSize = 24;
+        ctx.globalAlpha = dockLocked ? 0.4 : 1;
         ctx.drawImage(icon, bx + 4, by + cellH - iconSize - 4, iconSize, iconSize);
+        ctx.globalAlpha = 1;
       }
 
       // Ship name + cost
@@ -3496,8 +3716,13 @@ function drawShipsPanelBody(
       ctx.font = 'bold 7px monospace';
       ctx.fillText(entry.name.toUpperCase(), bx + 30, by + 4);
       ctx.font = '6px monospace';
+      ctx.fillStyle = dockLocked ? 'rgba(255, 100, 80, 0.7)' : G_DIM;
+      if (dockLocked) {
+        ctx.fillText(`DOCK LV${entry.dockLevel} REQ`, bx + 30, by + 14);
+      } else {
+        ctx.fillText(`${entry.cost.ore}/${entry.cost.food}/${entry.cost.energy}`, bx + 30, by + 14);
+      }
       ctx.fillStyle = G_DIM;
-      ctx.fillText(`${entry.cost.ore}/${entry.cost.food}/${entry.cost.energy}`, bx + 30, by + 14);
       ctx.fillText(`${entry.buildSeconds}s  SP:${entry.shipPoints}`, bx + 30, by + 24);
     }
   }
@@ -3855,6 +4080,8 @@ let _pendingBuildRequest: { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'w
 let _pendingBuyShipRequest: { shipTypeId: number; quantity: number } | null = null;
 let _pendingUpgradeShipRequest: { fromTypeId: number } | null = null;
 let _pendingCompleteBuilds = false;
+let _pendingColonizeRequest: { starIndex: number } | null = null;
+let _colonizeButton: { x: number; y: number; w: number; h: number } | null = null;
 
 export function setServerStarEconomy(snapshot: ServerEconomySnapshot): void {
   _serverEconomyByStarIndex.set(snapshot.starIndex, snapshot);
@@ -3875,6 +4102,21 @@ type TransitRecord = {
   arrivalAt: number;
 };
 let _serverTransits: TransitRecord[] = [];
+
+// Foreign (enemy) fleet data — ships at other players' stars
+const _foreignShipsByStarIndex = new Map<number, { owner: string; ships: Array<{ typeId: number; count: number }> }>();
+
+export function setForeignFleet(
+  stars: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }> }>,
+): void {
+  _foreignShipsByStarIndex.clear();
+  for (const [key, val] of Object.entries(stars)) {
+    const idx = parseInt(key.replace('s:', ''), 10);
+    if (!Number.isNaN(idx)) {
+      _foreignShipsByStarIndex.set(idx, val);
+    }
+  }
+}
 
 export function setServerShipState(
   starIndex: number,
@@ -3921,6 +4163,12 @@ export function consumePendingUpgradeShipRequest(): { fromTypeId: number } | nul
 export function consumePendingCompleteBuilds(): boolean {
   const next = _pendingCompleteBuilds;
   _pendingCompleteBuilds = false;
+  return next;
+}
+
+export function consumePendingColonizeRequest(): { starIndex: number } | null {
+  const next = _pendingColonizeRequest;
+  _pendingColonizeRequest = null;
   return next;
 }
 
@@ -3976,6 +4224,7 @@ export function triggerDockPanelAction(action: DockPanelAction, dock?: DockState
     const anyActive = Object.values(serverEcon.buildings).some((candidate) => candidate.status === 'UPGRADING');
     if (anyActive || isMaxLevel || !canAfford) return false;
     _pendingBuildRequest = { buildType };
+    playSound('begin_building');
     return true;
   }
   if (action === 'buy_ships') {
@@ -4060,11 +4309,56 @@ export function drawDockPanel(
     ctx.fillText(act.label, bx + 32, by + btnH / 2);
   }
 
+  // ── COLONIZE button (above orbit bar) ──
+  // Show when: docked (planet or station) + star not player-owned + Colony Ship present
+  _colonizeButton = null;
+  const canColonizeTarget = dock.targetLabel === 'Station' || dock.targetLabel === 'Planet';
+  if (dock.docked && canColonizeTarget && starIndex != null) {
+    const starShips = _serverShipsByStarIndex.get(starIndex);
+    const hasColonyShip = starShips?.ships.some(s => s.typeId === 8 && s.count > 0) ?? false;
+    if (!_panelsOwned && hasColonyShip) {
+      const colBtnW = 140;
+      const colBtnH = 28;
+      const colBtnX = (screenW - colBtnW) / 2;
+      const colBtnY = barY - colBtnH - 12;
+
+      // Pulsing glow effect
+      const pulse = 0.6 + 0.4 * Math.sin(performance.now() * 0.004);
+      ctx.strokeStyle = `rgba(79, 255, 176, ${pulse})`;
+      ctx.lineWidth = 2;
+      roundedRect(ctx, colBtnX, colBtnY, colBtnW, colBtnH, 5);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(0, 40, 20, 0.9)';
+      roundedRect(ctx, colBtnX, colBtnY, colBtnW, colBtnH, 5);
+      ctx.fill();
+
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = `rgba(79, 255, 176, ${0.8 + 0.2 * pulse})`;
+      ctx.fillText('\u2605 COLONIZE', colBtnX + colBtnW / 2, colBtnY + colBtnH / 2);
+
+      _colonizeButton = { x: colBtnX, y: colBtnY, w: colBtnW, h: colBtnH };
+    }
+  }
+
   ctx.restore();
 }
 
 /** Hit-test dock panel buttons (orbit bar). Returns the action if clicked, null otherwise. */
 export function hitTestDockPanel(screenPos: Vec2): DockPanelAction | null {
+  // Check COLONIZE button first (above orbit bar)
+  if (_colonizeButton) {
+    const b = _colonizeButton;
+    if (screenPos.x >= b.x && screenPos.x <= b.x + b.w &&
+        screenPos.y >= b.y && screenPos.y <= b.y + b.h) {
+      if (_panelsStarIndex != null) {
+        _pendingColonizeRequest = { starIndex: _panelsStarIndex };
+        playSound('click');
+      }
+      return null; // consumed internally
+    }
+  }
   for (const btn of _lastDockButtons) {
     if (
       screenPos.x >= btn.x && screenPos.x <= btn.x + btn.w &&

@@ -21,6 +21,8 @@ export function getGalaxyStarTone(
   homeStarIndex: number,
 ): StarVisualTone {
   if (star.index === homeStarIndex) return 'blue';      // home star (colonized at start)
+  if (star.owner === 'player') return 'blue';             // colonized by player
+  if (star.owner === 'foreign') return 'red';             // another player's star
   if (star.discoveryLevel === 'visited') return 'green';  // visited — colony ship eligible
   if (star.discoveryLevel === 'probed') return 'cyan';    // probed — partial info
   return 'yellow';                                        // unexplored

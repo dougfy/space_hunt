@@ -1,4 +1,4 @@
-export type StarOwner = 'player' | 'foreign';
+export type StarOwner = 'none' | 'player' | 'foreign';
 export type DiscoveryLevel = 'none' | 'probed' | 'visited';
 
 export type StarOwnershipState = {

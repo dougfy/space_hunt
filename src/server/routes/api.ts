@@ -8,6 +8,8 @@ import type {
   ClaimPodRequest,
   ClaimPodResponse,
   ClaimedPodsResponse,
+  ColonizeRequest,
+  ColonizeResponse,
   DecrementResponse,
   FleetAllResponse,
   FleetTransferRequest,
@@ -33,6 +35,7 @@ import {
   buyShip,
   claimHomeStar,
   claimPod,
+  colonizeStar,
   completeAllBuilds,
   getClaimedPods,
   getClaimedStars,
@@ -474,6 +477,23 @@ api.post('/fleet/transfer', async (c) => {
   }
 });
 
+/** Colonize an unclaimed star — consumes Colony Ship, claims star, seeds economy. */
+api.post('/colonize', async (c) => {
+  const body = await c.req.json<ColonizeRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!body.postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
+  if (!Number.isInteger(body.starIndex) || body.starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
+  }
+  try {
+    const response = await colonizeStar(redis, body.postId, body.username, body.starIndex);
+    return c.json<ColonizeResponse>(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to colonize';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
 /** Debug: instantly complete all builds at a star. */
 api.post('/debug/complete-builds', async (c) => {
   const body = await c.req.json<{ username: string; starIndex: number }>();
@@ -486,6 +506,25 @@ api.post('/debug/complete-builds', async (c) => {
     return c.json(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to complete builds';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+/** Debug: spawn an "Enemy" user with a claimed star and a Destroyer. */
+api.post('/debug/spawn-enemy', async (c) => {
+  const body = await c.req.json<{ postId: string }>();
+  if (!body.postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
+  try {
+    const enemyName = 'Enemy';
+    // Claim a star for the enemy (pickNextHomeStar gives a nearby star)
+    const claim = await claimHomeStar(redis, body.postId, enemyName);
+    const starKey = `s:${claim.homeStar}`;
+    // Give them a Destroyer (typeId 3)
+    const shipsProfile = { stars: { [starKey]: { ships: [{ typeId: 3, count: 1 }], building: null } }, transits: [] };
+    await redis.hSet(`profile:${enemyName}`, { ships: JSON.stringify(shipsProfile) });
+    return c.json({ ok: true, enemy: enemyName, starIndex: claim.homeStar });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to spawn enemy';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
   }
 });
@@ -509,6 +548,33 @@ api.post('/debug/reset-fleet', async (c) => {
     return c.json({ ok: true, kept: homeKey, ships: homeData?.ships ?? [] });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to reset fleet';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+/** Fleet summaries for all foreign (non-player) claimed stars. */
+api.get('/fleet/foreign', async (c) => {
+  const postId = c.req.query('postId');
+  const excludeUser = c.req.query('username');
+  if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
+  try {
+    const claims = await getClaimedStars(redis, postId);
+    const result: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }> }> = {};
+    for (const claim of claims) {
+      if (claim.username === excludeUser) continue;
+      const raw = await redis.hGet(`profile:${claim.username}`, 'ships');
+      if (!raw) continue;
+      const profile = JSON.parse(raw) as { stars?: Record<string, { ships?: Array<{ typeId: number; count: number }> }> };
+      // Aggregate all ships this player has at their claimed star
+      const starKey = `s:${claim.starIndex}`;
+      const starShips = profile.stars?.[starKey]?.ships ?? [];
+      if (starShips.length > 0) {
+        result[starKey] = { owner: claim.username, ships: starShips };
+      }
+    }
+    return c.json({ stars: result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to load foreign fleet';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
   }
 });

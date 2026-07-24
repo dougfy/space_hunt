@@ -4,7 +4,7 @@
 
 **Platform:** Devvit WebView (TypeScript/Canvas2D), current `spacehunt` codebase.
 
-**Last Updated:** 2026-07-22 (v0.0.266)
+**Last Updated:** 2026-07-24 (v0.0.301)
 
 ---
 
@@ -15,8 +15,14 @@
 | 1 | Boundary issue in solar tier — no need to scroll | ❌ Open | System view should fit without scrolling. |
 | 2 | Leaving solar→galaxy with bounds on loses bounds state | ❌ Open | Bounds-on flag not preserved across tier transitions. |
 | 3 | Galaxy view: separate ship nav from fleet movement picker | ❌ Open | Ship movement shows where ship is + lets user explore. Fleet picker selects ship/location → directs to destination. Probes can explore any star. Colony ships only to fully-explored stars (not probe-explored). Probe info = summary; ship visit = full info. Touch: need a way to select star and show info without hover. |
-| 4 | Star coloring not working — see red stars after visiting | ❌ Open | Expected: visited = green, foreign-claimed = red, undiscovered = yellow. May be visit-star not overriding foreign ownership. |
+| 4 | Star coloring not working — see red stars after visiting | ✅ Fixed (v0.0.293) | Foreign stars now show red via `getGalaxyStarTone()` checking `owner === 'foreign'`. |
 | 5 | Ship name editing blocked by steering keys | ✅ Fixed (v0.0.257) | Mode flag added — keyboard input passes through when editing ship name. |
+| 6 | iPad sizing | ❌ Open | Layout/canvas not adapting properly to iPad screen dimensions. |
+| 7 | Pinch gesture conflicts with ship movement | ❌ Open | Pinch-to-zoom triggers ship movement instead of being handled as zoom. Need gesture disambiguation. |
+| 8 | Galaxy fuel vs system fuel | ❌ Open | Does galaxy view show fuel status? Should there be separate fuel pools for warp (galaxy) vs thruster (system/planet)? |
+| 9 | Extended discovery: belt items, planet items, multiple ores, Knowledge | ❌ Open | Items discoverable in belts and on planets. Multiple ore types. Knowledge = plans/blueprints that unlock build tree upgrades. |
+| 10 | Entry into solar tier dumps into belt | ❌ Open | Entering system tier should place ship near system edge, not inside a belt. |
+| 11 | Belt (Local tier) missing side controls | ❌ Open | STATUS/BUILD/SHIPS/FLEET tabs not rendering in Local tier. |
 
 ---
 
@@ -98,20 +104,22 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 
 ---
 
-## Feature 4 — Star Colonization ❌ NOT STARTED
+## Feature 4 — Star Colonization ✅ DONE (v0.0.301)
 
-**What:** Send a Colony Ship (type 8) to an undiscovered or unclaimed star to claim it, install a Command Center, and start producing resources.
+**What:** Send a Colony Ship (type 8) to a probed/visited unclaimed star, fly there, dock at station, and press COLONIZE to claim it.
 
 **Why fourth:** colonization is the expansion loop. It creates new stars that generate resources, enabling further growth.
 
 ### Sub-features
-| # | Item | Detail |
-|---|---|---|
-| 4.1 | Colonize command | Ship must be type 8, at target star, target must be unowned. Creates star ownership record, installs base buildings, marks star as `owned`. |
-| 4.2 | Star capacity (SpanOfControl) | Command Center level determines max building slots on the star. |
-| 4.3 | Visual update | Colonized star switches to `player` owner → blue tint in galaxy/system views. |
-| 4.4 | Colony Ship consumed | Colony ship is removed from player inventory on successful colonization. |
-| 4.5 | Tests | Colonize command: valid, invalid owner, wrong ship type, already owned. |
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 4.1 | Colonize endpoint | ✅ | `POST /api/colonize` — validates Colony Ship at star, consumes it, claims star, seeds economy (Station lv1 + Dock lv1 + starter resources). First-write-wins for race conditions. |
+| 4.2 | COLONIZE button | ✅ | Pulsing green button above orbit bar when docked at unowned station with Colony Ship present. Hit-test sets `_pendingColonizeRequest`. |
+| 4.3 | Colony Ship SEND filtering | ✅ | Selection circles only appear on probed/visited + non-player-owned stars (not all stars). |
+| 4.4 | Probe SEND filtering | ✅ | Selection circles only appear on unvisited OR foreign-owned stars. |
+| 4.5 | Colony Ship consumed | ✅ | Colony ship removed from fleet on successful colonization. |
+| 4.6 | Visual update | ✅ | Colonized star immediately set to `owner: 'player'` in local game state → blue tint. BUILD/SHIPS tabs unlock. |
+| 4.7 | Probe intel at foreign stars | ⏳ | Deferred — requires passing postId through fleet reconciliation. Planned for follow-up. |
 
 ---
 
@@ -237,6 +245,56 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 | **P3** | 5 Cargo, 6 Movement | ⚠️ Transfer/transit exists, no cargo or interpolation | Trade routes and inter-star economy emerge. |
 | **P4** | 7 Currency, 8 Combat | ❌ Not started | Economy rewards and conflict. |
 | **P5** | 9 Quests, 10 Social | ❌ Not started | Onboarding, retention, alliances. |
+| **P6** | 11 Sharing | ❌ Not started | Organic virality via Reddit-native sharing. |
+
+---
+
+## Feature 11 — Sharing ❌ NOT STARTED
+
+**What:** Voluntary share buttons let players post game moments to the subreddit as formatted comments or image cards, driving organic discovery.
+
+**Why:** Reddit apps grow through subreddit engagement. Every share is a mini-ad that shows the game is active and interesting. Players sharing accomplishments creates social proof and FOMO.
+
+### Design Approach
+
+**Mechanism:** Each share action calls a server endpoint that creates a **Reddit comment** on a pinned "Activity Feed" post (or the game post itself) using the Devvit `reddit.submitComment()` API. The comment contains formatted text + optional inline image (generated server-side as an SVG→PNG card). The player sees a confirmation toast.
+
+**Alternative:** If comment posting isn't viable (rate limits, permissions), fall back to **clipboard copy** of formatted text that players can paste wherever they want.
+
+### Share Types
+
+| # | Share Type | Trigger Location | Content |
+|---|---|---|---|
+| 11.1 | Station | Dock panel (BUILD tab) | "🏗️ {username} upgraded {starName} Station to Level {N}! ({ore}/{food}/{energy} production)" |
+| 11.2 | Fleet | Fleet panel | "🚀 {username}'s fleet: {shipList} — {totalShips} ships across {starCount} systems" |
+| 11.3 | Mission Result | Fleet panel (transit arrival) | "📡 {username}'s {shipName} arrived at {starName}! ({discoveryLevel})" |
+| 11.4 | Discovered System | Galaxy view (star info card) | "🌟 {username} discovered {starName} — {spectralType} with {planetCount} planets and {beltCount} asteroid belts" |
+| 11.5 | Leaderboard | Weekly auto-post or manual | "🏆 Week {N} Rankings: 1. {user} ({score}) 2. {user} ({score}) ..." |
+
+### Sub-features
+
+| # | Item | Detail |
+|---|---|---|
+| 11.1 | Share button UI | Small share icon (⤴) on each shareable panel. Canvas-rendered, hit-tested. Subtle — not intrusive. |
+| 11.2 | Share API endpoint | `POST /api/share` — accepts `{ username, shareType, payload }`. Server formats the message and posts via Devvit API. Rate-limited: 1 share per type per 5 minutes per user. |
+| 11.3 | Devvit comment posting | Server uses `context.reddit.submitComment()` on the game post (or a designated activity post). Formatted with markdown + flair. |
+| 11.4 | Fallback: clipboard | If Devvit comment API unavailable or rate-limited, copy formatted text to clipboard with toast "Copied! Paste in comments." |
+| 11.5 | Share cooldown | Redis key `share:{username}:{type}` with TTL = 300s. Prevents spam. Client shows cooldown timer on button. |
+| 11.6 | Activity feed post | On app install, create a pinned "Activity Feed" post where all shares go as comments. Keeps the game post clean. |
+| 11.7 | Leaderboard automation | Scheduled job (Devvit scheduler) runs weekly, computes rankings from player stats, posts leaderboard comment. |
+| 11.8 | Share card image (stretch) | Server-side SVG template rendered to PNG — shows station/fleet/star as a visual card embedded in the comment. |
+
+### Technical Notes
+
+- **Devvit API access:** The server runs inside Devvit's context and has access to `context.reddit` for comment posting. The WebView client cannot call Reddit APIs directly — must go through the server.
+- **Rate limiting:** Both client-side (disable button + timer) and server-side (Redis TTL check) to prevent abuse.
+- **Message formatting:** Use Reddit markdown in comments. Ship names from `SHIP_CATALOG`, star names from galaxy seed, building levels from economy profile.
+- **Privacy:** All shares are opt-in. No automatic posting. Player must click the share button deliberately.
+- **Spam prevention:** Max 1 share per type per 5 min. Max 10 total shares per hour per user. Server enforces both.
+
+### Implementation Priority
+
+Start with **11.4 Discovered System** (simplest — just star data, no complex aggregation) and **11.2 Fleet** (already have the data in fleet panel). Station and Mission follow naturally. Leaderboard is a separate scheduled job.
 
 ---
 
@@ -248,3 +306,62 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 - **Shared TypeScript contracts** define request/response shapes across client/server.
 - UI is a **thin adapter** over the domain layer; no game logic in render functions.
 - Existing non-UI test harness (Vitest, game-service layer, shared contract tests) is the foundation — every new feature adds reducer tests first.
+
+---
+
+## Feature 12 — Help System (Contextual Idle Hints)
+
+**What:** A tutorial/hint system that shows contextual guidance when the player is idle, teaching them what to do next based on their current state.
+
+**Why:** New players have no onboarding. The game is complex (multiple tiers, fleet management, economy, colonization). Players who don't know what to do next churn.
+
+### Design
+
+- **Trigger:** Player hasn't interacted for ~8 seconds.
+- **Placement:** Thin bar at bottom of screen, above orbit/dock bar.
+- **Behavior:** Fades in after idle timeout, fades out on any input.
+- **Dismissal:** Tapping anywhere or interacting with any control.
+- **Dedup:** Each hint shown once per session (tracked in a `Set<string>`).
+- **Expandable:** Small "?" icon on right; tap to expand full tip text.
+
+### Contextual Hints
+
+| # | State | Hint Text |
+|---|---|---|
+| 12.1 | Docked at home station, no ships built | "Tap BUILD to construct your first scout ship" |
+| 12.2 | Has scout, never visited another star | "Tap FLEET → send your scout to explore nearby stars" |
+| 12.3 | In galaxy view, no target set | "Tap a star to see info, then VISIT to fly there" |
+| 12.4 | At unowned star with colony ship | "Orbit the planet and tap COLONIZE to claim this star" |
+| 12.5 | Docked at owned station, low resources | "Build mines and solar arrays to generate resources" |
+| 12.6 | In system view, never entered a planet | "Fly close to a planet to enter orbit" |
+| 12.7 | Ship idle in transit view | "Your ship is en route. Tap another star to explore" |
+| 12.8 | Docked, full storage | "Build a warehouse to increase storage capacity" |
+| 12.9 | Has multiple stars, no transfers | "Use FLEET to transfer ships between your colonies" |
+| 12.10 | New player, splash screen | "Tap anywhere to begin your journey" |
+
+### Voice Prompt Locations (future audio cues)
+
+| # | Event | Prompt |
+|---|---|---|
+| V.1 | Leave dock | "Undocking. Safe travels, pilot." |
+| V.2 | Dock established | "Docking complete. Station online." |
+| V.3 | Colonize success | "Colony established. Star claimed." |
+| V.4 | Ship build complete | "Construction complete. Ship ready." |
+| V.5 | Enter new star system | "Entering [star name] system." |
+| V.6 | Low fuel warning | "Fuel reserves critical." |
+| V.7 | Under attack | "Shields taking fire." |
+| V.8 | Fleet arrival | "Ship has arrived at destination." |
+| V.9 | First discovery | "New system detected." |
+| V.10 | Exit to galaxy | "Leaving system. Engaging warp." |
+
+### Implementation Priority
+
+Start with **12.1–12.4** (early game flow). Add idle timer + hint bar renderer. Voice prompts are a separate pass (requires audio asset creation).
+
+### Onboarding — Side Panel Pulse
+
+For brand-new players (no ships built, first session), pulse/brighten the right-side tab buttons (STATUS, BUILD, SHIPS, FLEET) with a slow glow animation to draw attention. The pulse fades once the player taps any tab. Implementation:
+- Track `hasEverOpenedPanel` in session state (starts false).
+- While false, apply a sine-wave alpha boost (0.4→1.0) on the tab button borders/text.
+- On first tab tap, set flag true, stop pulsing permanently for that session.
+- Optionally pulse only the most relevant tab (e.g. BUILD when docked with no ships).

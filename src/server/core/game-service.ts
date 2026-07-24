@@ -511,8 +511,14 @@ export async function loadStarShips(
   const hadBuilding = !!starData.building;
   reconcileShipBuilding(starData, now);
 
-  // Seed starter Scout if fleet is completely empty (first load)
-  if (starData.ships.length === 0 && !starData.building) {
+  // Seed starter Scout only on very first load (entire fleet profile is empty)
+  const hasAnyShips = Object.values(profile.stars).some(
+    (s) => {
+      const d = normalizeStarShipData(s);
+      return d.ships.length > 0 || d.building != null;
+    },
+  );
+  if (!hasAnyShips && starData.ships.length === 0 && !starData.building && (!profile.transits || profile.transits.length === 0)) {
     starData.ships.push({ typeId: 1, count: 1 });
     profile.stars[key] = starData;
     await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
@@ -923,6 +929,93 @@ export async function getClaimedStars(
     starIndex: parseInt(k.replace('s:', ''), 10),
     username: v,
   }));
+}
+
+// ── Colonization ────────────────────────────────────────────────────────────
+
+import type { ColonizeResponse } from '../../shared/api';
+
+const COLONY_SHIP_TYPE_ID = 8;
+
+/**
+ * Colonize an unclaimed star. Consumes one Colony Ship at that star,
+ * claims the star for the player, and seeds initial economy (Station lv1).
+ * First-write-wins for race conditions.
+ */
+export async function colonizeStar(
+  store: RedisGameStore,
+  postId: string,
+  username: string,
+  starIndex: number,
+  now = Date.now(),
+): Promise<ColonizeResponse> {
+  const registryKey = `stars:${postId}`;
+
+  // Check if star is already claimed
+  const existingOwner = await store.hGet(registryKey, `s:${starIndex}`);
+  if (existingOwner) {
+    if (existingOwner === username) {
+      throw new Error('You already own this star');
+    }
+    throw new Error('This star is already claimed by another player');
+  }
+
+  // Check player has a Colony Ship at this star
+  const shipsRaw = await store.hGet(`profile:${username}`, 'ships');
+  if (!shipsRaw) throw new Error('No fleet data');
+  const shipsProfile = JSON.parse(shipsRaw) as {
+    stars: Record<string, { ships: Array<{ typeId: number; count: number }>; building: { typeId: number; completeAt: number } | null }>;
+    transits: ShipTransit[];
+  };
+
+  const sKey = `s:${starIndex}`;
+  const starFleet = shipsProfile.stars[sKey];
+  if (!starFleet) throw new Error('No ships at this star');
+
+  const colonySlot = starFleet.ships.find(s => s.typeId === COLONY_SHIP_TYPE_ID);
+  if (!colonySlot || colonySlot.count < 1) throw new Error('No Colony Ship at this star');
+
+  // Consume one Colony Ship
+  colonySlot.count -= 1;
+  if (colonySlot.count <= 0) {
+    starFleet.ships = starFleet.ships.filter(s => s.typeId !== COLONY_SHIP_TYPE_ID || s.count > 0);
+  }
+
+  // Claim the star (first-write-wins)
+  await store.hSet(registryKey, { [sKey]: username });
+
+  // Verify we won the race
+  const actualOwner = await store.hGet(registryKey, `s:${starIndex}`);
+  if (actualOwner !== username) {
+    throw new Error('Another player colonized this star first');
+  }
+
+  // Save updated ships
+  await store.hSet(`profile:${username}`, { ships: JSON.stringify(shipsProfile) });
+
+  // Seed initial economy at new colony: Station lv1, starting resources
+  const economy = await loadEconomyProfile(store, username);
+  economy.stars[sKey] = {
+    store: { ore: 640, food: 640, energy: 640 },
+    rates: { ore: 0, food: 0, energy: 0 },
+    cap: 1000,
+    buildings: {
+      station: { level: 1, status: 'ACTIVE', completeAt: null },
+      mine: { level: 0, status: 'READY', completeAt: null },
+      solar: { level: 0, status: 'READY', completeAt: null },
+      hab: { level: 0, status: 'LOCKED', completeAt: null },
+      warehouse: { level: 0, status: 'LOCKED', completeAt: null },
+      dock: { level: 1, status: 'ACTIVE', completeAt: null },
+    },
+    lastTickMs: now,
+  };
+  await saveEconomyProfile(store, username, economy);
+
+  // Get star name for response
+  const stars = generateStarPositions(postId);
+  const starName = getStarName(stars[starIndex]?.seed ?? starIndex);
+
+  return { ok: true, starIndex, starName };
 }
 
 // ── Player Stats (playtime + interactions) ──────────────────────────────────

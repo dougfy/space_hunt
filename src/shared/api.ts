@@ -251,6 +251,20 @@ export type FleetTransferResponse = {
   transit: ShipTransit;
 };
 
+// ── Colonization ────────────────────────────────────────────────────────────
+
+export type ColonizeRequest = {
+  username: string;
+  postId: string;
+  starIndex: number;
+};
+
+export type ColonizeResponse = {
+  ok: true;
+  starIndex: number;
+  starName: string;
+};
+
 // ── Player stats (playtime + interactions) ──────────────────────────────────
 
 export type StatsHeartbeatRequest = {

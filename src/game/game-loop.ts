@@ -14,11 +14,12 @@ import { createCamera, updateCamera, updateZoomState, getSafeZone, findNearestAs
 import { updateShip } from './ship';
 import { updateGhosts } from './ghosts';
 import { createInputState, setupInput, processInput, InputState } from './input';
+import { playSound } from './audio';
 import {
   createRenderer, resizeRenderer, clearScreen, drawShip, drawAsteroid,
   drawTargetReticle, drawFuelPod, drawGhostShip, drawHUD, drawGhostLabel,
   drawAsteroidLabel, drawPlayerLabel, drawProjectiles, drawShootingHUD, drawZoomButton,
-  Renderer, drawControlButtons,
+  Renderer, drawControlButtons, drawForeignShipsAtStar, drawPlayerFleetAtStar,
   drawGalaxyView, drawSystemView, drawPlanetView, drawTierHUD,
   drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
@@ -35,6 +36,7 @@ import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
 import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, applyStarNames, generateSystem } from './galaxy';
 import { checkDocking, updateDocking, undock } from './dock';
+import { initJourney, skipJourney, journeyAction, updateJourney } from './journey';
 
 let gameState: GameState | null = null;
 let renderer: Renderer | null = null;
@@ -58,6 +60,18 @@ export function getGameState(): GameState | null {
   return gameState;
 }
 
+/** After colonization succeeds, regenerate the system so the new station appears. */
+export function onColonizeSuccess(starIndex: number): void {
+  if (!gameState) return;
+  const star = gameState.galaxy.stars[starIndex];
+  if (!star) return;
+  star.owner = 'player';
+  // Regenerate system bodies so station feature is created
+  if (gameState.galaxy.currentStarIndex === starIndex) {
+    gameState.galaxy.bodies = generateSystem(star);
+  }
+}
+
 export function refreshGalaxyStarNames(): void {
   if (!gameState) return;
   applyStarNames(gameState.galaxy.stars);
@@ -69,16 +83,22 @@ export function refreshGalaxyStarNames(): void {
  */
 export function setStarClaims(claims: Array<{ starIndex: number; username: string }>, myUsername: string): void {
   if (!gameState) return;
+  let playerClaimCount = 0;
   for (const claim of claims) {
     const star = gameState.galaxy.stars[claim.starIndex];
     if (!star) continue;
     if (claim.username === myUsername) {
       star.owner = 'player';
       star.discovered = true;
+      playerClaimCount++;
     } else {
       star.owner = 'foreign';
       star.discovered = true;
     }
+  }
+  // Skip tutorial for returning players who already have colonies
+  if (playerClaimCount > 1) {
+    skipJourney();
   }
 }
 
@@ -102,6 +122,25 @@ export function getDiscoveredStars(): number[] {
   return gameState.galaxy.stars
     .filter(s => s.discovered)
     .map(s => s.index);
+}
+
+/** Get all star ownership claims (player + foreign). */
+export function getStarOwnership(): Array<{ starIndex: number; owner: 'player' | 'foreign' }> {
+  if (!gameState) return [];
+  return gameState.galaxy.stars
+    .filter(s => s.owner === 'player' || s.owner === 'foreign')
+    .map(s => ({ starIndex: s.index, owner: s.owner as 'player' | 'foreign' }));
+}
+
+/** Re-apply star ownership from saved data. */
+export function applyStarOwnership(claims: Array<{ starIndex: number; owner: 'player' | 'foreign' }>): void {
+  if (!gameState) return;
+  for (const claim of claims) {
+    const star = gameState.galaxy.stars[claim.starIndex];
+    if (!star) continue;
+    star.owner = claim.owner;
+    star.discovered = true;
+  }
 }
 
 /**
@@ -181,7 +220,7 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
   const star = gameState.galaxy.stars[starIndex];
   if (!star) { console.warn(`[RESTORE] star not found at index ${starIndex}`); return; }
 
-  star.owner = 'player';
+  // Only mark discovered — ownership is set by setStarClaims from server data
   star.discovered = true;
   gameState.galaxy.currentStarIndex = starIndex;
 
@@ -205,6 +244,7 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
     gameState.galaxy.currentBodyIndex = bi;
     gameState.galaxy.tier = NavigationTier.Planet;
     const body = gameState.galaxy.bodies[bi];
+    gameState.dock = null; // Clear stale dock state
     if (body) {
       const stationFeature = body.features.find(f => f.type === 'station');
       if (stationFeature) {
@@ -212,6 +252,16 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
         const sy = Math.sin(stationFeature.angle) * stationFeature.dist;
         gameState.ship.pos = vec2(sx + Math.cos(stationFeature.angle) * 0.6, sy + Math.sin(stationFeature.angle) * 0.6);
         gameState.ship.ang = stationFeature.angle + Math.PI;
+        const fi = body.features.indexOf(stationFeature);
+        gameState.dock = {
+          docked: true,
+          targetType: 'feature',
+          bodyIndex: bi,
+          featureIndex: fi,
+          targetName: stationFeature.name,
+          targetLabel: 'Station',
+          approachTimer: 1,
+        };
       } else {
         gameState.ship.pos = vec2(0, 3);
       }
@@ -321,6 +371,11 @@ export function startGame(
 
   console.log('[INIT] tier=', gameState.galaxy.tier, 'starIdx=', gameState.galaxy.currentStarIndex, 'bodies=', gameState.galaxy.bodies.length, 'shipPos=', gameState.ship.pos, 'asteroids=', gameState.asteroids.length);
 
+  // Initialize journey/tutorial system (only for play mode, not splash)
+  if (!isSplash) {
+    initJourney();
+  }
+
   renderer = createRenderer(canvas);
   resizeRenderer(renderer);
   // Set camera aspect from actual canvas dimensions (avoids distortion)
@@ -388,6 +443,9 @@ function update(dt: number): void {
 
   gameState.elapsedTime += dt;
 
+  // Update journey/tutorial system
+  updateJourney();
+
   // Tick down scout warning timer
   if (_scoutWarningTimer > 0) _scoutWarningTimer = Math.max(0, _scoutWarningTimer - dt);
 
@@ -407,9 +465,11 @@ function update(dt: number): void {
     const dockAction = hitTestDockPanel(inputState.pointerPos);
     if (dockAction) {
       inputState.pointerDown = false;
+      playSound('click');
       if (dockAction === 'leave') {
         console.log('[DOCK] Undocking from', gameState.dock.targetName);
         undock(gameState);
+        journeyAction();
       } else if (dockAction === 'ships' || dockAction === 'buy_ships') {
         // Ship panel toggle/buy handled inside hitTestDockPanel
       } else if (triggerDockPanelAction(dockAction, gameState.dock)) {
@@ -437,6 +497,7 @@ function update(dt: number): void {
   if (inputState.pointerDown && inputState.pointerPos) {
     const panelIdx = hitTestPlanetPanels(screenW, screenH, inputState.pointerPos.x, inputState.pointerPos.y);
     if (panelIdx >= 0) {
+      journeyAction();
       const fleetAction = togglePlanetPanel(panelIdx);
       // Fleet tab opened from non-galaxy tier → jump to galaxy map (scouts cannot use fleet)
       if (fleetAction === 'fleet-opened' && gameState.shipShape === 'scout') {
@@ -718,8 +779,16 @@ function update(dt: number): void {
 
   // Fuel drain
   if (gameState.fuelPercent > 0 && gameState.ship.thrust) {
+    const prevFuel = gameState.fuelPercent;
     gameState.fuelPercent -= FUEL_DRAIN_PER_SECOND * dt;
     if (gameState.fuelPercent < 0) gameState.fuelPercent = 0;
+    // Play fuel warnings once when crossing thresholds
+    if (prevFuel > LOW_FUEL_THRESHOLD && gameState.fuelPercent <= LOW_FUEL_THRESHOLD) {
+      playSound('low_fuel');
+    }
+    if (prevFuel > 10 && gameState.fuelPercent <= 10) {
+      playSound('fuel_critical');
+    }
   }
 
   // Pod discovery
@@ -956,7 +1025,9 @@ function render(): void {
   if (tier === NavigationTier.Planet) {
     const shieldPercent = (gameState.shooting.hp / PLAYER_MAX_HP) * 100;
     const isDocked = gameState.dock?.docked === true;
-    setPanelContext(isDocked, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'planet', gameState.shipShape);
+    const currentStar = gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.stars[gameState.galaxy.currentStarIndex] : null;
+    const isOwned = currentStar?.owner === 'player';
+    setPanelContext(isDocked, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'planet', gameState.shipShape, isOwned);
     drawPlanetView(
       renderer,
       camera,
@@ -982,6 +1053,19 @@ function render(): void {
       }
       drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot);
       drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
+    }
+
+    // Draw fleet ships near station (or near planet if no station)
+    if (gameState.galaxy.currentStarIndex >= 0) {
+      const body = gameState.galaxy.bodies[gameState.galaxy.currentBodyIndex];
+      if (body) {
+        const stationFeat = body.features.find(f => f.type === 'station');
+        const anchorPos = stationFeat
+          ? { x: Math.cos(stationFeat.angle) * stationFeat.dist, y: Math.sin(stationFeat.angle) * stationFeat.dist }
+          : { x: 0, y: 1.5 }; // above planet center
+        drawPlayerFleetAtStar(renderer, camera, gameState.galaxy.currentStarIndex, anchorPos);
+        drawForeignShipsAtStar(renderer, camera, gameState.galaxy.currentStarIndex, anchorPos);
+      }
     }
 
     // Draw ship
@@ -1086,4 +1170,8 @@ function render(): void {
   const bodyName = gameState.galaxy.currentBodyIndex >= 0
     ? gameState.galaxy.bodies[gameState.galaxy.currentBodyIndex]?.name ?? '' : '';
   drawTierHUD(renderer, 'LOCAL', bodyName, 'center');
+
+  // Draw side panels (Local tier)
+  setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'system', gameState.shipShape);
+  drawPlanetPanels(renderer.ctx, screenW, screenH, ['TIER: LOCAL']);
 }

@@ -3,7 +3,7 @@
 // Detects inline vs expanded mode and shows overlay buttons when inline.
 
 import { context, requestExpandedMode } from '@devvit/web/client';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingTransfer, createDevvitBridge, getGameState, getDiscoveredStars, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, createDevvitBridge, getGameState, getDiscoveredStars, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, playSound, preloadSounds, onColonizeSuccess } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
@@ -183,6 +183,7 @@ const bridge: DevvitBridge = createDevvitBridge(canvas, {
 bridge.setPlayerName(username);
 bridge.setShipShape('scout');
 bridge.setSharedWorldSeed(postId);
+preloadSounds();
 
 // Start rendering immediately (splash/preview mode — no networking yet)
 const _tSplash = performance.now();
@@ -313,6 +314,8 @@ async function pollEconomy() {
           if (!transferRes.ok) {
             const err = await transferRes.json().catch(() => ({ message: 'unknown' }));
             console.warn('[FLEET] transfer failed:', err);
+          } else {
+            playSound('send');
           }
         } catch (e) {
           console.warn('[FLEET] transfer error:', e);
@@ -336,13 +339,16 @@ async function pollEconomy() {
           if (probeStars.length > 0) {
             const gs2 = getGameState();
             if (gs2) {
+              let newDiscovery = false;
               for (const si of probeStars) {
                 const star = gs2.galaxy.stars[si];
                 if (star && star.discoveryLevel === 'none') {
                   star.discoveryLevel = 'probed';
                   star.discovered = true;
+                  newDiscovery = true;
                 }
               }
+              if (newDiscovery) playSound('arrive');
             }
           }
           // Update ship shape from home star fleet
@@ -359,11 +365,63 @@ async function pollEconomy() {
           }
         }
       } catch { /* ignore */ }
+
+      // Fetch foreign fleet data for red badges
+      try {
+        const foreignRes = await fetch(`/api/fleet/foreign?postId=${encodeURIComponent(postId)}&username=${encodeURIComponent(username)}`);
+        if (foreignRes.ok) {
+          const foreignData = await foreignRes.json() as { stars: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }> }> };
+          setForeignFleet(foreignData.stars);
+          // Also mark these stars as foreign-owned in game state
+          const gs2 = getGameState();
+          if (gs2) {
+            for (const key of Object.keys(foreignData.stars)) {
+              const idx = parseInt(key.replace('s:', ''), 10);
+              if (!Number.isNaN(idx) && gs2.galaxy.stars[idx]) {
+                gs2.galaxy.stars[idx].owner = 'foreign';
+              }
+            }
+          }
+        }
+      } catch { /* ignore */ }
       return;
     }
 
     const starIndex = gs.galaxy.currentStarIndex;
     if (starIndex < 0) return;
+
+    // Process colonize request
+    const pendingColonize = consumePendingColonizeRequest();
+    if (pendingColonize) {
+      try {
+        const colonizeRes = await fetch('/api/colonize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username,
+            postId,
+            starIndex: pendingColonize.starIndex,
+          }),
+        });
+        if (colonizeRes.ok) {
+          // Regenerate system with station, mark star owned
+          onColonizeSuccess(pendingColonize.starIndex);
+          // Remove colony ship from local fleet display
+          setServerShipState(pendingColonize.starIndex,
+            [], // server consumed the colony ship; next fleet poll will refresh
+            null,
+          );
+          playSound('colonize');
+          console.log('[COLONIZE] Success! Star colonized:', pendingColonize.starIndex);
+        } else {
+          const err = await colonizeRes.json().catch(() => ({ message: 'unknown' }));
+          console.warn('[COLONIZE] failed:', err);
+        }
+      } catch (e) {
+        console.warn('[COLONIZE] error:', e);
+      }
+    }
+
     const pendingBuild = consumePendingBuildRequest();
     if (pendingBuild) {
       const payload: BuildBuildingRequest = {
@@ -842,6 +900,23 @@ document.getElementById('admin-complete-builds')!.addEventListener('click', asyn
       body: JSON.stringify({ username, starIndex }),
     });
     adminStatus!.textContent = 'builds completed';
+  } catch { adminStatus!.textContent = 'error'; }
+});
+document.getElementById('admin-spawn-enemy')!.addEventListener('click', async () => {
+  adminStatus!.textContent = 'spawning enemy...';
+  try {
+    const res = await fetch('/api/debug/spawn-enemy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ postId }),
+    });
+    const data = await res.json() as { ok?: boolean; enemy?: string; starIndex?: number; message?: string };
+    if (data.ok) {
+      adminStatus!.textContent = `spawned ${data.enemy} at star #${data.starIndex} with Destroyer`;
+      refreshAdminClaims();
+    } else {
+      adminStatus!.textContent = data.message ?? 'error';
+    }
   } catch { adminStatus!.textContent = 'error'; }
 });
 } catch (adminErr) { console.error('[ADMIN] init error:', adminErr); }

@@ -2,6 +2,12 @@
 
 A multiplayer space exploration and strategy game built on Reddit's [Devvit](https://developers.reddit.com/) platform. Explore a procedurally generated galaxy, build stations, manage fleets, and expand your empire — all from within a Reddit post.
 
+## Screenshots
+
+| Galaxy Map | Solar System | Planet View |
+|:---:|:---:|:---:|
+| ![Galaxy tier](assets/screenshots/galaxy-tier.png) | ![System tier](assets/screenshots/solar-tier.png) | ![Planet tier](assets/screenshots/planet-tier.png) |
+
 ## Gameplay
 
 Players start docked at a home star station with a Scout ship. From there:
@@ -11,6 +17,7 @@ Players start docked at a home star station with a Scout ship. From there:
 - **Upgrade** — Follow the ship upgrade path: Scout → Destroyer → Frigate → Battleship → Command Cruiser → Dreadnought
 - **Probe** — Send Basic or Enhanced Probes to reveal distant star systems before visiting
 - **Fleet Management** — Build and deploy ships across multiple star systems, transfer ships between stars
+- **Colonize** — Send Colony Ships to unclaimed stars, dock at the station, and press COLONIZE to expand your empire
 - **Discover** — Stars progress from Unexplored → Probed → Visited as you explore
 
 ### Navigation Tiers
@@ -100,7 +107,7 @@ assets/
 
 ## Current Version
 
-v0.0.290
+v0.0.301
 
 ## License
 
