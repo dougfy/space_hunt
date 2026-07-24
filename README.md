@@ -107,7 +107,7 @@ assets/
 
 ## Current Version
 
-v0.0.301
+v1.0.0
 
 ## License
 
