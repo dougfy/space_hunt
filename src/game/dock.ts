@@ -129,7 +129,9 @@ export function updateDocking(state: GameState, dt: number): void {
     dock.docked = true;
     state.ship.pos = targetPos;
     state.ship.ang = targetAngle;
-    playSound('docked');
+    const soundId = dock.targetType === 'planet' ? 'ship_entered' : 'docked';
+    console.log('[DOCK] fully docked, targetType=', dock.targetType, 'playing sound:', soundId);
+    playSound(soundId);
   }
 }
 

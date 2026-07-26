@@ -31,23 +31,29 @@ import {
   drawGalaxyModeToggle, drawGalaxyModeBanner, hitTestGalaxyModeBtn, toggleGalaxyMode, setGalaxyMode, getGalaxyMode,
   setGalaxyJumpReturnTier, isFleetPanelOpen, closeFleetPanel,
 } from './renderer';
-import type { GalaxyMode } from './renderer';
+import type { GalaxyMode as _GalaxyMode } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
 import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, applyStarNames, generateSystem } from './galaxy';
 import { checkDocking, updateDocking, undock } from './dock';
-import { initJourney, skipJourney, journeyAction, updateJourney } from './journey';
+import type { DockAction } from './dock';
+import { initJourney, skipJourney, journeyAction, updateJourney, isJourneyDone as _isJourneyDone } from './journey';
 
 let gameState: GameState | null = null;
 let renderer: Renderer | null = null;
 let inputState: InputState | null = null;
 let _debugBounds = false;
+try { _debugBounds = localStorage.getItem('spacehunt_debug_bounds') === '1'; } catch { /* ignore */ }
 export function getDebugBounds(): boolean { return _debugBounds; }
-export function setDebugBounds(v: boolean): void { _debugBounds = v; }
+export function setDebugBounds(v: boolean): void {
+  _debugBounds = v;
+  try { localStorage.setItem('spacehunt_debug_bounds', v ? '1' : '0'); } catch { /* ignore */ }
+}
 let cleanupInput: (() => void) | null = null;
 let animFrame: number | null = null;
 let lastTime = 0;
 let poseTimer = 0;
+let _savedDock: GameState['dock'] = null; // preserved across temporary galaxy jumps
 let devvitCb: DevvitCallbacks | null = null;
 
 const POSE_INTERVAL = 1 / 12; // ~12Hz pose reporting
@@ -231,11 +237,12 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
     gameState.galaxyCamPos = { x: star.pos.x, y: star.pos.y };
     gameState.dock = null; // Clear dock state from startGame
   } else if (tier === NavigationTier.System) {
-    // At system view — generate system, place ship near system center
+    // At system view — generate system, place ship near system edge (not center)
     gameState.galaxy.bodies = generateSystem(star);
     gameState.galaxy.tier = NavigationTier.System;
     const center = SYSTEM_SIZE / 2;
-    gameState.ship.pos = vec2(center, center - 3);
+    const edgeDist = 20; // SYSTEM_EXIT_RADIUS - 2, near outer boundary
+    gameState.ship.pos = vec2(center, center + edgeDist);
     gameState.dock = null; // Clear dock state from startGame
   } else {
     // Planet tier — generate system, go to specific body
@@ -443,8 +450,10 @@ function update(dt: number): void {
 
   gameState.elapsedTime += dt;
 
-  // Update journey/tutorial system
-  updateJourney();
+  // Update journey/tutorial system (Planet tier only — voice/pulse shouldn't fire in other tiers)
+  if (gameState.galaxy.tier === NavigationTier.Planet) {
+    updateJourney();
+  }
 
   // Tick down scout warning timer
   if (_scoutWarningTimer > 0) _scoutWarningTimer = Math.max(0, _scoutWarningTimer - dt);
@@ -465,16 +474,19 @@ function update(dt: number): void {
     const dockAction = hitTestDockPanel(inputState.pointerPos);
     if (dockAction) {
       inputState.pointerDown = false;
-      playSound('click');
       if (dockAction === 'leave') {
         console.log('[DOCK] Undocking from', gameState.dock.targetName);
+        playSound(gameState.dock.targetType === 'planet' ? 'leaving_orbit' : 'undocking');
         undock(gameState);
         journeyAction();
       } else if (dockAction === 'ships' || dockAction === 'buy_ships') {
+        playSound('click');
         // Ship panel toggle/buy handled inside hitTestDockPanel
       } else if (triggerDockPanelAction(dockAction, gameState.dock)) {
+        playSound('click');
         console.log('[DOCK] Extension started:', dockAction);
       } else {
+        playSound('click');
         console.log('[DOCK] Action stub:', dockAction);
       }
     }
@@ -485,8 +497,9 @@ function update(dt: number): void {
   if (isFleetPanelOpen() && gameState.shipShape === 'scout') {
     closeFleetPanel();
   } else if (isFleetPanelOpen() && gameState.galaxy.tier !== NavigationTier.Galaxy) {
-    const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : 'planet';
+    const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet';
     setGalaxyJumpReturnTier(returnTier);
+    _savedDock = gameState.dock; // preserve dock across temporary galaxy jump
     gameState.galaxy.tier = NavigationTier.Galaxy;
     gameState.ship.vel = { x: 0, y: 0 };
     gameState.ship.thrust = false;
@@ -504,7 +517,8 @@ function update(dt: number): void {
         // Block — close it back immediately
         togglePlanetPanel(3);
       } else if (fleetAction === 'fleet-opened' && gameState.galaxy.tier !== NavigationTier.Galaxy) {
-        const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : 'planet';
+        _savedDock = gameState.dock; // preserve dock across temporary galaxy jump
+        const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet';
         setGalaxyJumpReturnTier(returnTier);
         gameState.galaxy.tier = NavigationTier.Galaxy;
         gameState.ship.vel = { x: 0, y: 0 };
@@ -521,7 +535,7 @@ function update(dt: number): void {
   if (gameState.dock) {
     const extAction = consumePendingExtensionAction();
     if (extAction) {
-      triggerDockPanelAction(extAction as any, gameState.dock);
+      triggerDockPanelAction(extAction as DockAction, gameState.dock);
     }
   }
 
@@ -536,9 +550,14 @@ function update(dt: number): void {
   // Consume pending tier revert when fleet panel closes after galaxy jump
   const revertTier = consumePendingTierRevert();
   if (revertTier) {
-    gameState.galaxy.tier = revertTier === 'system' ? NavigationTier.System : NavigationTier.Planet;
+    gameState.galaxy.tier = revertTier === 'system' ? NavigationTier.System : revertTier === 'local' ? NavigationTier.Local : NavigationTier.Planet;
     gameState.ship.vel = { x: 0, y: 0 };
     gameState.ship.thrust = false;
+    // Restore dock state saved before temporary galaxy jump
+    if (_savedDock) {
+      gameState.dock = _savedDock;
+      _savedDock = null;
+    }
   }
 
   // Handle galaxy zoom +/- button taps
@@ -666,7 +685,7 @@ function update(dt: number): void {
     // Reset galaxy zoom and camera position to ship
     gameState.galaxyZoom = GALAXY_ORTHO_DEFAULT;
     gameState.galaxyCamPos = { x: gameState.ship.pos.x, y: gameState.ship.pos.y };
-    _debugBounds = !_debugBounds;
+    setDebugBounds(!_debugBounds);
   }
 
   // ── Galaxy zoom: consume scroll/pinch delta ──
@@ -933,7 +952,7 @@ function render(): void {
   // ── Galaxy tier ──
   if (tier === NavigationTier.Galaxy) {
     const shipRenderSize = SHIP_SIZE * 3;
-    drawGalaxyView(renderer, camera, gameState.galaxy, gameState.ship.pos, !_debugBounds, !_debugBounds);
+    drawGalaxyView(renderer, camera, gameState.galaxy, gameState.ship.pos, true, true);
 
     // Draw ghost ships in galaxy
     for (const g of gameState.ghosts) {
@@ -1169,9 +1188,11 @@ function render(): void {
   // Local tier HUD
   const bodyName = gameState.galaxy.currentBodyIndex >= 0
     ? gameState.galaxy.bodies[gameState.galaxy.currentBodyIndex]?.name ?? '' : '';
-  drawTierHUD(renderer, 'LOCAL', bodyName, 'center');
+  drawTierHUD(renderer, 'BELT', bodyName, 'center');
 
-  // Draw side panels (Local tier)
-  setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'system', gameState.shipShape);
-  drawPlanetPanels(renderer.ctx, screenW, screenH, ['TIER: LOCAL']);
+  drawControlButtons(renderer, false, false, _debugBounds);
+
+  // Draw side panels (Belt tier)
+  setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'local', gameState.shipShape);
+  drawPlanetPanels(renderer.ctx, screenW, screenH, ['TIER: BELT']);
 }

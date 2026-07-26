@@ -6,13 +6,13 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "deploy": "npm run type-check && npm run lint && devvit upload",
+    "deploy": "npm run type-check && npm run lint && devvit upload && npx devvit install valcordia_space_dev",
     "dev": "devvit playtest",
     "launch": "npm run deploy && devvit publish",
     "lint": "eslint 'src/**/*.{ts,tsx}'",
     "login": "devvit login",
     "prettier": "prettier --write .",
-    "ship": "node -e \"const f='version.json';const j=JSON.parse(require('fs').readFileSync(f));const p=j.version.split('.');p[2]=+p[2]+1;j.version=p.join('.');require('fs').writeFileSync(f,JSON.stringify(j,null,2)+'\\n');console.log('v'+j.version);require('fs').writeFileSync('.ship-version',j.version)\" && npx devvit upload --version $(cat .ship-version) && npx devvit install valcordia_space_dev",
+    "ship": "npm run type-check && npm run lint && node -e \"const f='version.json';const j=JSON.parse(require('fs').readFileSync(f));const p=j.version.split('.');p[2]=+p[2]+1;j.version=p.join('.');require('fs').writeFileSync(f,JSON.stringify(j,null,2)+'\\n');console.log('v'+j.version);require('fs').writeFileSync('.ship-version',j.version)\" && npx devvit upload --version $(cat .ship-version) && npx devvit install valcordia_space_dev",
     "test": "vitest run",
     "test:watch": "vitest",
     "type-check": "tsc --build"

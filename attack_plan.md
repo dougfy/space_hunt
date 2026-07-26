@@ -13,7 +13,7 @@
 | # | Issue | Status | Notes |
 |---|---|---|---|
 | 1 | Boundary issue in solar tier — no need to scroll | ❌ Open | System view should fit without scrolling. |
-| 2 | Leaving solar→galaxy with bounds on loses bounds state | ❌ Open | Bounds-on flag not preserved across tier transitions. |
+| 2 | Leaving solar→galaxy with bounds on loses bounds state | 🧪 Ready to Test | Bounds state now persisted in localStorage. Survives tier changes and page reloads. |
 | 3 | Galaxy view: separate ship nav from fleet movement picker | ❌ Open | Ship movement shows where ship is + lets user explore. Fleet picker selects ship/location → directs to destination. Probes can explore any star. Colony ships only to fully-explored stars (not probe-explored). Probe info = summary; ship visit = full info. Touch: need a way to select star and show info without hover. |
 | 4 | Star coloring not working — see red stars after visiting | ✅ Fixed (v0.0.293) | Foreign stars now show red via `getGalaxyStarTone()` checking `owner === 'foreign'`. |
 | 5 | Ship name editing blocked by steering keys | ✅ Fixed (v0.0.257) | Mode flag added — keyboard input passes through when editing ship name. |
@@ -21,8 +21,13 @@
 | 7 | Pinch gesture conflicts with ship movement | ❌ Open | Pinch-to-zoom triggers ship movement instead of being handled as zoom. Need gesture disambiguation. |
 | 8 | Galaxy fuel vs system fuel | ❌ Open | Does galaxy view show fuel status? Should there be separate fuel pools for warp (galaxy) vs thruster (system/planet)? |
 | 9 | Extended discovery: belt items, planet items, multiple ores, Knowledge | ❌ Open | Items discoverable in belts and on planets. Multiple ore types. Knowledge = plans/blueprints that unlock build tree upgrades. |
-| 10 | Entry into solar tier dumps into belt | ❌ Open | Entering system tier should place ship near system edge, not inside a belt. |
-| 11 | Belt (Local tier) missing side controls | ❌ Open | STATUS/BUILD/SHIPS/FLEET tabs not rendering in Local tier. |
+| 10 | Entry into solar tier dumps into belt | 🧪 Ready to Test | `restorePosition` now places ship at system edge (dist 20) instead of center (dist 3). Live Galaxy→System transitions already placed at edge. |
+| 11 | Belt (Local tier) missing side controls | ✅ Done | Added `drawControlButtons` to Local tier render. Side panels (STATUS/FLEET) were already drawn; recenter/boundary button was missing. |
+| 12 | Ship docked voice repeats on fleet/galaxy view switch | 🧪 Ready to Test | Dock state now saved/restored across temporary galaxy jumps for fleet panel. |
+| 13 | COMPLETE button visible to all players | 🧪 Ready to Test | COMPLETE button now gated behind `_isAdmin` flag, set from `ADMIN_USERS` list in client. |
+| 14 | Help/journey system not persisting across sessions | 🧪 Ready to Test | Journey completion now saved to localStorage (`spacehunt_journey_done`). |
+| 15 | Help/journey voice plays in system tier | 🧪 Ready to Test | `updateJourney()` now gated to Planet tier only. |
+| 16 | Probe not consumed after arrival | 🧪 Ready to Test | Probes (type 11/12) now consumed on arrival instead of being added to destination fleet. Still marks star as discovered. |
 
 ---
 

@@ -40,8 +40,8 @@ Reddit's WebView CDN can cache aggressively. A new post always loads the latest 
 
 | Command | Purpose |
 |---------|---------|
-| `npm run ship` | Full deploy (bump + upload + install) |
-| `npm run deploy` | Type-check + lint + upload (no install) |
+| `npm run ship` | Full deploy (type-check + lint + bump + upload + install) |
+| `npm run deploy` | Type-check + lint + upload + install (no version bump) |
 | `npm run dev` | Start devvit playtest (live reload) |
 | `npm run launch` | Deploy + publish (sends to Reddit review — avoid for dev) |
 

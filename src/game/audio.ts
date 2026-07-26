@@ -2,7 +2,7 @@
 // Handles sound effects for game events. WAV files served from /sounds/.
 // Button click is synthesized via Web Audio API (no file needed).
 
-type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'begin_building';
+type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'begin_building' | 'undocking' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit';
 
 const SOUND_FILES: Partial<Record<SoundId, string>> = {
   docked: '/sounds/Ship%20docked.wav',
@@ -12,6 +12,12 @@ const SOUND_FILES: Partial<Record<SoundId, string>> = {
   arrive: '/sounds/Probe%20arrived.wav',
   status_docked: '/sounds/Status%20docked%20begin.wav',
   begin_building: '/sounds/Begin%20building.wav',
+  undocking: '/sounds/Undocking%20Safe%20travels.wav',
+  insufficient_resources: '/sounds/Insufficient%20Resources%20Build.wav',
+  dock_low: '/sounds/Dock%20Level%202%20Low.wav',
+  hey_there: '/sounds/Hey%20there%20sailor.wav',
+  ship_entered: '/sounds/Ship%20has%20entered.wav',
+  leaving_orbit: '/sounds/Leaving%20orbit.wav',
 };
 
 let _audioCtx: AudioContext | null = null;
@@ -26,7 +32,7 @@ function getAudioContext(): AudioContext {
   }
   // Resume if suspended (browser autoplay policy)
   if (_audioCtx.state === 'suspended') {
-    _audioCtx.resume();
+    void _audioCtx.resume();
   }
   return _audioCtx;
 }
@@ -67,6 +73,7 @@ function playSynthClick(): void {
 
 /** Play a sound effect by id. Non-blocking — fires and forgets. */
 export function playSound(id: SoundId): void {
+  console.log('[AUDIO] playSound called:', id, 'muted=', _muted);
   if (_muted) return;
 
   if (id === 'click') {
@@ -89,7 +96,7 @@ export function playSound(id: SoundId): void {
     source.start();
   } else {
     // Load then play
-    loadBuffer(url).then((buf) => {
+    void loadBuffer(url).then((buf) => {
       if (!buf) return;
       const ctx = getAudioContext();
       const source = ctx.createBufferSource();
@@ -106,7 +113,7 @@ export function playSound(id: SoundId): void {
 /** Preload sound files so first play is instant. */
 export function preloadSounds(): void {
   for (const url of Object.values(SOUND_FILES)) {
-    if (url) loadBuffer(url);
+    if (url) void loadBuffer(url);
   }
 }
 

@@ -3,7 +3,7 @@
 // Detects inline vs expanded mode and shows overlay buttons when inline.
 
 import { context, requestExpandedMode } from '@devvit/web/client';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, createDevvitBridge, getGameState, getDiscoveredStars, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, playSound, preloadSounds, onColonizeSuccess } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, createDevvitBridge, getGameState, getDiscoveredStars, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, playSound, preloadSounds, onColonizeSuccess } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
@@ -39,7 +39,7 @@ async function loadRealStarNames(): Promise<void> {
         return;
       }
     }
-  } catch {
+  } catch (_e) {
     // Ignore cache parse/storage issues.
   }
 
@@ -51,6 +51,7 @@ void loadRealStarNames();
 // ── Mode detection ──────────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const overlay = document.getElementById('overlay') ?? document.createElement('div');
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const isInline = !!(globalThis as any).__INLINE_MODE__ || overlay.classList.contains('visible');
 
 const playHereBtn = document.getElementById('play-here') ?? document.createElement('button');
@@ -235,6 +236,12 @@ function loadPlayerProfile(): Promise<void> {
       } else {
         console.log('[PROFILE] no lastPosition or homeStar');
       }
+      // Skip journey/tutorial if already completed on server, or if returning player
+      if (profile.journeyDone || profile.lastPosition) {
+        skipJourney();
+      } else {
+        startJourney();
+      }
     })
     .catch(() => {});
   
@@ -269,7 +276,7 @@ async function pollGhosts() {
         bridge.setRemotePoses(JSON.stringify({ items: mapped }));
       }
     }
-  } catch {
+  } catch (_e) {
     // ignore network errors
   }
 }
@@ -284,7 +291,7 @@ async function pollShots() {
         bridge.addRemoteShots(JSON.stringify(data));
       }
     }
-  } catch {
+  } catch (_e) {
     // ignore
   }
 }
@@ -364,7 +371,7 @@ async function pollEconomy() {
             }
           }
         }
-      } catch { /* ignore */ }
+      } catch (_e) { /* ignore */ }
 
       // Fetch foreign fleet data for red badges
       try {
@@ -383,7 +390,7 @@ async function pollEconomy() {
             }
           }
         }
-      } catch { /* ignore */ }
+      } catch (_e) { /* ignore */ }
       return;
     }
 
@@ -429,14 +436,25 @@ async function pollEconomy() {
         starIndex,
         buildType: pendingBuild.buildType,
       };
-      await fetch('/api/buildings/buy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }).catch(() => null);
+      console.log('[BUILD] sending build request, starIndex=', starIndex, 'type=', pendingBuild.buildType);
+      try {
+        const buildRes = await fetch('/api/buildings/buy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (buildRes.ok) {
+          console.log('[BUILD] build success');
+          playSound('begin_building');
+        } else {
+          console.warn('[BUILD] build failed');
+          playSound('low_fuel');
+        }
+      } catch (_e) { /* ignore */ }
     }
     const pendingShip = consumePendingBuyShipRequest();
     if (pendingShip) {
+      console.log('[SHIPS] sending buy request, starIndex=', starIndex, 'shipTypeId=', pendingShip.shipTypeId);
       try {
         const shipRes = await fetch('/api/ships/buy', {
           method: 'POST',
@@ -448,9 +466,16 @@ async function pollEconomy() {
             quantity: pendingShip.quantity,
           }),
         });
-        if (!shipRes.ok) {
+        if (shipRes.ok) {
+          console.log('[SHIPS] buy success');
+          playSound('begin_building');
+        } else {
           const err = await shipRes.json().catch(() => ({ message: 'unknown' }));
           console.warn('[SHIPS] buy failed:', err);
+          const msg = String((err as Record<string, unknown>)?.message ?? '');
+          if (msg.includes('Insufficient')) playSound('insufficient_resources');
+          else if (msg.includes('Dock level') || msg.includes('dock')) playSound('dock_low');
+          else playSound('fuel_critical');
         }
       } catch (e) {
         console.warn('[SHIPS] buy error:', e);
@@ -458,6 +483,7 @@ async function pollEconomy() {
     }
     const pendingUpgrade = consumePendingUpgradeShipRequest();
     if (pendingUpgrade) {
+      console.log('[SHIPS] sending upgrade request, starIndex=', starIndex, 'fromTypeId=', pendingUpgrade.fromTypeId);
       try {
         const upgradeRes = await fetch('/api/ships/upgrade', {
           method: 'POST',
@@ -468,12 +494,20 @@ async function pollEconomy() {
             fromTypeId: pendingUpgrade.fromTypeId,
           }),
         });
-        if (!upgradeRes.ok) {
+        if (upgradeRes.ok) {
+          console.log('[SHIPS] upgrade success');
+          playSound('begin_building');
+        } else {
           const err = await upgradeRes.json().catch(() => ({ message: 'unknown' }));
           console.warn('[SHIPS] upgrade failed:', err);
+          const msg = String((err as Record<string, unknown>)?.message ?? '');
+          if (msg.includes('Insufficient')) playSound('insufficient_resources');
+          else if (msg.includes('Dock level')) playSound('dock_low');
+          else playSound('fuel_critical');
         }
       } catch (e) {
         console.warn('[SHIPS] upgrade error:', e);
+        playSound('fuel_critical');
       }
     }
     if (consumePendingCompleteBuilds()) {
@@ -528,7 +562,7 @@ async function pollEconomy() {
             bridge.setShipShape(fleetShape);
           }
         }
-      } catch { /* ignore */ }
+      } catch (_e) { /* ignore */ }
     }
     // Also fetch full fleet state so fleet panel shows all stars
     try {
@@ -552,8 +586,8 @@ async function pollEconomy() {
           }
         }
       }
-    } catch { /* ignore */ }
-  } catch {
+    } catch (_e) { /* ignore */ }
+  } catch (_e) {
     // Ignore temporary network errors.
   }
 }
@@ -561,6 +595,7 @@ async function pollEconomy() {
 // ── Save position periodically ──────────────────────────────────────────────
 let _lastSavedPosition = '';
 let _lastSavedDiscovered = '';
+let _lastSavedJourneyDone = false;
 function savePositionIfChanged() {
   const gs = getGameState();
   if (!gs) return;
@@ -575,16 +610,20 @@ function savePositionIfChanged() {
   });
   const discovered = getDiscoveredStars();
   const discoveredKey = discovered.join(',');
+  const journeyDone = isJourneyDone();
   const posChanged = pos !== _lastSavedPosition;
   const discoveredChanged = discoveredKey !== _lastSavedDiscovered;
-  if (!posChanged && !discoveredChanged) return;
+  const journeyChanged = journeyDone && !_lastSavedJourneyDone;
+  if (!posChanged && !discoveredChanged && !journeyChanged) return;
   _lastSavedPosition = pos;
   _lastSavedDiscovered = discoveredKey;
+  if (journeyDone) _lastSavedJourneyDone = true;
   // Always send BOTH fields — Devvit hSet may replace the entire hash
   const payload: Record<string, unknown> = {
     username,
     lastPosition: JSON.parse(pos),
     discoveredStars: discovered,
+    journeyDone,
   };
   console.log('[SAVE] saving profile:', JSON.stringify(payload));
   fetch('/api/profile', {
@@ -752,14 +791,15 @@ function saveProfile() {
 // ── Admin Panel (only for authorized user) ──────────────────────────────────
 try {
 const ADMIN_USERS = ['WeirdAd4511', 'Fred', 'weirdad4511', 'fred'];
-const adminBtn = document.getElementById('admin-btn');
-const adminPanel = document.getElementById('admin-panel');
-const adminClaims = document.getElementById('admin-claims');
-const adminStatus = document.getElementById('admin-status');
+const adminBtn = document.getElementById('admin-btn')!;
+const adminPanel = document.getElementById('admin-panel')!;
+const adminClaims = document.getElementById('admin-claims')!;
+const adminStatus = document.getElementById('admin-status')!;
 
 console.log('[ADMIN] elements:', !!adminBtn, !!adminPanel, !!adminClaims, !!adminStatus, 'username=', username);
 if (adminBtn && adminPanel && ADMIN_USERS.some(u => u.toLowerCase() === username.toLowerCase())) {
   adminBtn.style.display = 'inline-flex';
+  setIsAdmin(true);
   console.log('[ADMIN] button shown');
 }
 
@@ -771,8 +811,8 @@ adminBtn.addEventListener('click', (e) => {
   const opening = !adminPanel.classList.contains('visible');
   adminPanel.classList.toggle('visible');
   if (opening) {
-    refreshAdminClaims();
-    refreshAdminPlayerStats();
+    void refreshAdminClaims();
+    void refreshAdminPlayerStats();
   }
 });
 adminPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -798,8 +838,8 @@ async function refreshAdminClaims() {
 }
 
 document.getElementById('admin-refresh')!.addEventListener('click', () => {
-  refreshAdminClaims();
-  refreshAdminPlayerStats();
+  void refreshAdminClaims();
+  void refreshAdminPlayerStats();
 });
 
 const adminPlayerStats = document.getElementById('admin-player-stats')!;
@@ -840,7 +880,7 @@ async function refreshAdminPlayerStats() {
         <div class="player-detail">Buildings: ${p.totalBuildingLevels} lvls | Ships: ${p.totalShips} (${ships})</div>
       </div>`;
     }).join('');
-  } catch {
+  } catch (_e) {
     adminPlayerStats.innerHTML = '<span style="color:#776655">error</span>';
   }
 }
@@ -870,12 +910,12 @@ document.getElementById('admin-reset-claims')!.addEventListener('click', async (
     });
     const data = await res.json();
     adminStatus.textContent = `cleared ${data.cleared} claim(s) — reload to re-assign`;
-    refreshAdminClaims();
-  } catch { adminStatus.textContent = 'error'; }
+    void refreshAdminClaims();
+  } catch (_e) { adminStatus.textContent = 'error'; }
 });
 
 document.getElementById('admin-reset-all')!.addEventListener('click', async () => {
-  adminStatus.textContent = 'full reset in progress...';
+  adminStatus!.textContent = 'full reset in progress...';
   try {
     const res = await fetch('/api/admin/reset-all', {
       method: 'POST',
@@ -883,9 +923,9 @@ document.getElementById('admin-reset-all')!.addEventListener('click', async () =
       body: JSON.stringify({ postId, adminUser: username }),
     });
     const data = await res.json();
-    adminStatus.textContent = `reset: ${data.usersCleared} users, ${data.claimsCleared} claims — reload`;
-    refreshAdminClaims();
-  } catch { adminStatus.textContent = 'error'; }
+    adminStatus!.textContent = `reset: ${data.usersCleared} users, ${data.claimsCleared} claims — reload`;
+    void refreshAdminClaims();
+  } catch (_e) { adminStatus!.textContent = 'error'; }
 });
 
 document.getElementById('admin-complete-builds')!.addEventListener('click', async () => {
@@ -900,7 +940,7 @@ document.getElementById('admin-complete-builds')!.addEventListener('click', asyn
       body: JSON.stringify({ username, starIndex }),
     });
     adminStatus!.textContent = 'builds completed';
-  } catch { adminStatus!.textContent = 'error'; }
+  } catch (_e) { adminStatus!.textContent = 'error'; }
 });
 document.getElementById('admin-spawn-enemy')!.addEventListener('click', async () => {
   adminStatus!.textContent = 'spawning enemy...';
@@ -913,11 +953,11 @@ document.getElementById('admin-spawn-enemy')!.addEventListener('click', async ()
     const data = await res.json() as { ok?: boolean; enemy?: string; starIndex?: number; message?: string };
     if (data.ok) {
       adminStatus!.textContent = `spawned ${data.enemy} at star #${data.starIndex} with Destroyer`;
-      refreshAdminClaims();
+      void refreshAdminClaims();
     } else {
       adminStatus!.textContent = data.message ?? 'error';
     }
-  } catch { adminStatus!.textContent = 'error'; }
+  } catch (_e) { adminStatus!.textContent = 'error'; }
 });
 } catch (adminErr) { console.error('[ADMIN] init error:', adminErr); }
 

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { context, redis, reddit } from '@devvit/web/server';
+import { onColonize, onShipBuy, onShipUpgrade, onDockUpgrade, onFirstTransfer } from '../core/achievements';
 import type {
   BuildBuildingRequest,
   BuildBuildingResponse,
@@ -378,6 +379,14 @@ api.post('/buildings/upgrade', async (c) => {
 
   try {
     const response = await upgradeBuilding(redis, body);
+    // Fire-and-forget: dock tier achievements (target level = current + 1 since it's now UPGRADING)
+    if (body.buildType === 'dock') {
+      const { postId } = context;
+      if (postId) {
+        const targetLevel = response.buildings.dock.level + 1;
+        onDockUpgrade(redis, postId, body.username, targetLevel).catch(() => {});
+      }
+    }
     return c.json<BuildBuildingResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to start building upgrade';
@@ -416,6 +425,11 @@ api.post('/ships/buy', async (c) => {
 
   try {
     const response = await buyShip(redis, body);
+    // Fire-and-forget: first ship achievement
+    const { postId } = context;
+    if (postId) {
+      onShipBuy(redis, postId, body.username, 1).catch(() => {});
+    }
     return c.json<BuyShipResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to buy ship';
@@ -434,6 +448,11 @@ api.post('/ships/upgrade', async (c) => {
 
   try {
     const response = await upgradeShip(redis, body);
+    // Fire-and-forget: ship upgrade achievements
+    const { postId } = context;
+    if (postId && response.building) {
+      onShipUpgrade(redis, postId, body.username, response.building.typeId).catch(() => {});
+    }
     return c.json<UpgradeShipResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to upgrade ship';
@@ -470,6 +489,11 @@ api.post('/fleet/transfer', async (c) => {
     const response = await transferShips(
       redis, body.username, body.fromStarIndex, body.toStarIndex, body.shipTypeId, body.count,
     );
+    // Fire-and-forget: first transfer achievement
+    const { postId } = context;
+    if (postId) {
+      onFirstTransfer(redis, postId, body.username).catch(() => {});
+    }
     return c.json<FleetTransferResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to transfer ships';
@@ -487,6 +511,11 @@ api.post('/colonize', async (c) => {
   }
   try {
     const response = await colonizeStar(redis, body.postId, body.username, body.starIndex);
+    // Fire-and-forget: count stars owned and trigger achievements
+    getClaimedStars(redis, body.postId).then((claims) => {
+      const userStars = claims.filter((c) => c.username === body.username).length;
+      onColonize(redis, body.postId, body.username, response.starName ?? '', userStars).catch(() => {});
+    }).catch(() => {});
     return c.json<ColonizeResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to colonize';

@@ -111,6 +111,7 @@ export type PlayerProfileResponse = {
   lastPosition?: { starIndex: number; tier: number; bodyIndex: number };
   claimed?: Array<{ starIndex: number; username: string }>;
   discoveredStars?: number[];
+  journeyDone?: boolean;
 };
 
 export type ResourceStore = {
@@ -170,6 +171,7 @@ export type SaveProfileRequest = {
   name?: string;
   lastPosition?: { starIndex: number; tier: number; bodyIndex: number };
   discoveredStars?: number[];
+  journeyDone?: boolean;
 };
 
 // ── Ship Types ──────────────────────────────────────────────────────────────

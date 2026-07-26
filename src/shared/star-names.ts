@@ -23,5 +23,5 @@ export const STAR_NAMES: string[] = [
 ];
 
 export function getStarName(index: number): string {
-  return STAR_NAMES[index % STAR_NAMES.length];
+  return STAR_NAMES[index % STAR_NAMES.length] ?? `Star-${index}`;
 }

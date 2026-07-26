@@ -8,7 +8,6 @@ import type {
   ClaimedPodsResponse,
   BuildType,
   FleetAllResponse,
-  FleetTransferRequest,
   FleetTransferResponse,
   ResourceStore,
   ShipBuildingState,
@@ -310,6 +309,9 @@ export async function loadProfile(
       result.discoveredStars = JSON.parse(raw.discoveredStars);
     } catch { /* ignore bad data */ }
   }
+  if (raw.journeyDone === '1') {
+    result.journeyDone = true;
+  }
   return result;
 }
 
@@ -438,6 +440,7 @@ export async function saveProfile(
   if (body.name !== undefined) fields.name = body.name;
   if (body.lastPosition !== undefined) fields.lastPosition = JSON.stringify(body.lastPosition);
   if (body.discoveredStars !== undefined) fields.discoveredStars = JSON.stringify(body.discoveredStars);
+  if (body.journeyDone !== undefined) fields.journeyDone = body.journeyDone ? '1' : '0';
   if (Object.keys(fields).length > 0) {
     await store.hSet(`profile:${body.username}`, fields);
   }
@@ -668,17 +671,19 @@ export async function loadAllFleet(
         // Transit complete — deliver ships to destination
         const toKey = starKey(t.toStarIndex);
         const toData = normalizeStarShipData(profile.stars[toKey]);
-        const destSlot = toData.ships.find((s) => s.typeId === t.shipTypeId);
-        if (destSlot) {
-          destSlot.count += t.count;
-        } else {
-          toData.ships.push({ typeId: t.shipTypeId, count: t.count });
-        }
-        profile.stars[toKey] = toData;
-        // If a probe arrived, mark the star as discovered
+        // If a probe arrived, mark the star as discovered but consume the probe
         if (PROBE_TYPE_IDS.includes(t.shipTypeId)) {
           newlyDiscovered.push(t.toStarIndex);
+        } else {
+          // Non-probe ships: add to destination fleet
+          const destSlot = toData.ships.find((s) => s.typeId === t.shipTypeId);
+          if (destSlot) {
+            destSlot.count += t.count;
+          } else {
+            toData.ships.push({ typeId: t.shipTypeId, count: t.count });
+          }
         }
+        profile.stars[toKey] = toData;
         dirty = true;
       } else {
         pendingTransits.push(t);
@@ -796,20 +801,17 @@ export async function completeAllBuilds(
   // Complete building upgrades
   const economy = await loadEconomyProfile(store, username);
   const base = normalizeStarState(economy.stars[key] ?? {}, now);
-  let changed = false;
   for (const type of Object.keys(base.buildings) as Array<keyof typeof base.buildings>) {
     const b = base.buildings[type];
     if (b.status === 'UPGRADING' && b.completeAt != null && b.completeAt > now) {
       b.completeAt = now;
-      changed = true;
     }
   }
 
   // Fill resources to cap
   base.store = { ore: base.cap, food: base.cap, energy: base.cap };
-  changed = true;
 
-  if (changed) {
+  {
     const reconciledBuildings = reconcileStarBuildings(base.buildings, now);
     const next: StarEconomyState = tickStarEconomy({
       ...base,
@@ -1013,7 +1015,7 @@ export async function colonizeStar(
 
   // Get star name for response
   const stars = generateStarPositions(postId);
-  const starName = getStarName(stars[starIndex]?.seed ?? starIndex);
+  const starName = getStarName(stars[starIndex]?.index ?? starIndex);
 
   return { ok: true, starIndex, starName };
 }

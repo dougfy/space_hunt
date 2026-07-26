@@ -4,8 +4,8 @@
     "lib": ["DOM", "DOM.Iterable", "ES2023"],
     "outDir": "../dist/types/game",
     "tsBuildInfoFile": "../dist/types/game/tsconfig.tsbuildinfo",
-    "rootDir": "../src/game"
+    "rootDir": "../src"
   },
-  "include": ["../src/game/**/*"],
+  "include": ["../src/game/**/*", "../src/shared/**/*"],
   "exclude": []
 }

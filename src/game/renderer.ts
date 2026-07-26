@@ -908,7 +908,7 @@ export function isFireButtonHit(
 import type { GalaxyStar, GalaxyState, FeatureType, PlanetFeature, SystemBody } from './galaxy';
 import { generateSystem } from './galaxy';
 import { buildGalaxyViewModel, getGalaxyStarTone } from './galaxy-view-model';
-import { getEnabledResources, getFeatureResourceIds, getFeatureResourceNames } from './economy-catalog';
+import { getEnabledResources, getFeatureResourceIds as _getFeatureResourceIds, getFeatureResourceNames } from './economy-catalog';
 import { BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, FEATURE_LABELS, STAR_NAMES } from './constants';
 
 // ── Monochrome green palette (sci-fi terminal) ─────────────────────────────
@@ -1102,7 +1102,7 @@ type TransferMode = {
 
 let _transferMode: TransferMode = null;
 let _lastScreenStars: Array<{ starIndex: number; sx: number; sy: number }> = [];
-let _validTransferTargets: Set<number> = new Set();
+const _validTransferTargets: Set<number> = new Set();
 let _pendingTransfer: { fromStarIndex: number; toStarIndex: number; shipTypeId: number; count: number } | null = null;
 let _transferCancelButton: { x: number; y: number; w: number; h: number } | null = null;
 
@@ -1363,8 +1363,6 @@ export function drawGalaxyView(
         ctx.fillStyle = dist < 15 ? 'rgb(255, 130, 110)' : 'rgba(255, 100, 80, 0.85)';
       } else if (tone === 'cyan') {
         ctx.fillStyle = dist < 15 ? 'rgb(100, 220, 240)' : 'rgba(80, 200, 220, 0.85)';
-      } else if (tone === 'orange') {
-        ctx.fillStyle = dist < 15 ? 'rgb(255, 200, 100)' : 'rgba(255, 180, 60, 0.85)';
       } else if (tone === 'yellow') {
         ctx.fillStyle = dist < 15 ? 'rgb(255, 240, 100)' : 'rgba(255, 230, 60, 0.85)';
       } else {
@@ -2443,7 +2441,7 @@ export function drawDebugBounds(
   r: Renderer,
   camera: Camera,
   galaxy: GalaxyState,
-  shipPos: Vec2,
+  _shipPos: Vec2,
 ) {
   const { ctx } = r;
   const screenW = r.width / (window.devicePixelRatio || 1);
@@ -2524,7 +2522,7 @@ export function drawPlanetDebugBounds(
   r: Renderer,
   camera: Camera,
   galaxy: GalaxyState,
-  shipPos: Vec2,
+  _shipPos: Vec2,
   worldOffset: Vec2,
 ) {
   const { ctx } = r;
@@ -2900,7 +2898,7 @@ function buildMockPlanetStatusRows(
   void fuelPercent;
   void shieldPercent;
 
-  rows.push(`DOCK: ${docked ? 'established' : 'in orbit'}`);
+  rows.push(`ORBIT: ${docked ? 'established' : 'approaching'}`);
 
   const enabledResources = getEnabledResources();
   const serverEcon = _serverEconomyByStarIndex.get(starIndex) ?? null;
@@ -2949,7 +2947,7 @@ export function togglePlanetPanel(index: number): 'fleet-opened' | 'fleet-closed
   return null;
 }
 
-export function setGalaxyJumpReturnTier(tier: 'system' | 'planet'): void {
+export function setGalaxyJumpReturnTier(tier: 'system' | 'local' | 'planet'): void {
   _galaxyJumpReturnTier = tier;
 }
 
@@ -3055,12 +3053,16 @@ let _lastPanelBodyY = 0;
 // Track docked state for greying out tabs
 let _panelsDocked = false;
 let _panelsStarIndex: number | null = null;
-let _panelsTier: 'galaxy' | 'system' | 'planet' = 'planet';
+let _panelsTier: 'galaxy' | 'system' | 'local' | 'planet' = 'planet';
 let _panelsShipShape: string = 'scout';
 let _panelsOwned = false; // whether player owns the current star
+let _isAdmin = false; // whether current player is an admin
+
+/** Set admin flag (gates debug features like COMPLETE button). */
+export function setIsAdmin(v: boolean): void { _isAdmin = v; }
 
 /** Called before drawing to set panel context */
-export function setPanelContext(docked: boolean, starIndex: number | null, tier: 'galaxy' | 'system' | 'planet' = 'planet', shipShape?: string, owned?: boolean): void {
+export function setPanelContext(docked: boolean, starIndex: number | null, tier: 'galaxy' | 'system' | 'local' | 'planet' = 'planet', shipShape?: string, owned?: boolean): void {
   // Auto-close dock-required panels when undocking or leaving planet tier
   if (!docked && _panelsDocked && _openPanel >= 0 && PANEL_TABS[_openPanel]?.requiresDock) {
     _openPanel = -1;
@@ -3078,8 +3080,8 @@ export function setPanelContext(docked: boolean, starIndex: number | null, tier:
 
 // Pending galaxy jump from fleet panel MAP button
 let _pendingGalaxyJump = false;
-let _galaxyJumpReturnTier: 'system' | 'planet' | null = null;
-let _pendingTierRevert: 'system' | 'planet' | null = null;
+let _galaxyJumpReturnTier: 'system' | 'local' | 'planet' | null = null;
+let _pendingTierRevert: 'system' | 'local' | 'planet' | null = null;
 
 export function consumePendingGalaxyJump(): boolean {
   const v = _pendingGalaxyJump;
@@ -3087,7 +3089,7 @@ export function consumePendingGalaxyJump(): boolean {
   return v;
 }
 
-export function consumePendingTierRevert(): 'system' | 'planet' | null {
+export function consumePendingTierRevert(): 'system' | 'local' | 'planet' | null {
   const v = _pendingTierRevert;
   _pendingTierRevert = null;
   return v;
@@ -3125,7 +3127,16 @@ function hitTestShipsPanel(sx: number, sy: number): void {
         } else {
           _pendingBuyShipRequest = { shipTypeId: btn.shipTypeId, quantity: 1 };
         }
-        playSound('begin_building');
+        playSound('click');
+      } else if (btn.disableReason) {
+        // Voice feedback for why the button is disabled
+        if (btn.disableReason === 'insufficient resources') {
+          playSound('insufficient_resources');
+        } else if (btn.disableReason === 'dock level too low') {
+          playSound('dock_low');
+        } else {
+          playSound('fuel_critical');
+        }
       }
       return;
     }
@@ -3350,7 +3361,7 @@ function drawBuildPanelBody(
   const fleetState = starIndex != null ? _serverShipsByStarIndex.get(starIndex) : null;
   const buildingShip = fleetState?.building ?? null;
   const hasActiveShipBuild = buildingShip != null && buildingShip.completeAt > Date.now();
-  if (hasActiveBuild || hasActiveShipBuild) {
+  if (_isAdmin && (hasActiveBuild || hasActiveShipBuild)) {
     const cbW = 54;
     const cbH = 12;
     const cbX = x + w - cbW - PANEL_PAD;
@@ -3482,7 +3493,7 @@ function drawShipsPanelBody(
 
   // Check if player has any ship on the upgrade path
   const hasUpgradePathShip = fleetShips.some(
-    (s) => s.count > 0 && UPGRADE_PATH.includes(s.typeId as any),
+    (s) => s.count > 0 && UPGRADE_PATH.includes(s.typeId as ShipTypeId),
   );
 
   // Show Basic Probe (11) and Colony Ship (8); also show Scout (1) if player has no upgrade-path ship
@@ -3499,20 +3510,20 @@ function drawShipsPanelBody(
   const upgradeEntries: { from: typeof SHIP_CATALOG[keyof typeof SHIP_CATALOG]; to: typeof SHIP_CATALOG[keyof typeof SHIP_CATALOG]; dockLocked: boolean }[] = [];
   for (const ship of fleetShips) {
     if (ship.count <= 0) continue;
-    const pathIdx = UPGRADE_PATH.indexOf(ship.typeId as any);
+    const pathIdx = UPGRADE_PATH.indexOf(ship.typeId as ShipTypeId);
     if (pathIdx >= 0 && pathIdx < UPGRADE_PATH.length - 1) {
       const nextTypeId = UPGRADE_PATH[pathIdx + 1]!;
       const fromEntry = SHIP_CATALOG[ship.typeId as keyof typeof SHIP_CATALOG];
       const toEntry = SHIP_CATALOG[nextTypeId as keyof typeof SHIP_CATALOG];
       if (fromEntry && toEntry) {
-        upgradeEntries.push({ from: fromEntry, to: toEntry, dockLocked: toEntry.dockLevel > dockLevel });
+        upgradeEntries.push({ from: fromEntry, to: toEntry, dockLocked: !canUpgradeShip(ship.typeId as ShipTypeId, dockLevel) });
       }
     }
   }
 
   // Calculate body height: upgrade section first, then build grid
   // Check if there's an active upgrade build to show even without upgradeEntries
-  const isUpgradeBuildActive = buildingShip != null && UPGRADE_PATH.includes(buildingShip.typeId as any) && buildingShip.completeAt > nowMs;
+  const isUpgradeBuildActive = buildingShip != null && UPGRADE_PATH.includes(buildingShip.typeId as ShipTypeId) && buildingShip.completeAt > nowMs;
   const upgradeRows = Math.max(upgradeEntries.length, isUpgradeBuildActive ? 1 : 0);
   const upgradeDisplayH = upgradeRows > 0 ? 16 + upgradeRows * (cellH + cellGap) : 0;
   const buildRows = Math.ceil(availableShips.length / cols);
@@ -3595,8 +3606,9 @@ function drawShipsPanelBody(
         : false;
       const isBuilding = buildingShip != null && buildingShip.completeAt > nowMs;
       const enabled = !isBuilding && canAfford && !ue.dockLocked;
+      const disableReason = isBuilding ? 'already building' : ue.dockLocked ? 'dock level too low' : !canAfford ? 'insufficient resources' : undefined;
 
-      _lastShipButtons.push({ x: bx, y: by, w: fullW, h: cellH, shipTypeId: ue.to.id, enabled, isUpgrade: true, upgradeFromTypeId: ue.from.id });
+      _lastShipButtons.push({ x: bx, y: by, w: fullW, h: cellH, shipTypeId: ue.to.id, enabled, isUpgrade: true, upgradeFromTypeId: ue.from.id, disableReason });
 
       roundedRect(ctx, bx, by, fullW, cellH, 3);
       ctx.fillStyle = isUpgradeBuild ? 'rgba(60, 50, 10, 0.5)' : enabled ? 'rgba(50, 40, 10, 0.4)' : 'rgba(30, 25, 10, 0.4)';
@@ -3655,7 +3667,7 @@ function drawShipsPanelBody(
     cursorY += 12;
 
     // Building indicator with progress bar
-    if (buildingShip && !UPGRADE_PATH.includes(buildingShip.typeId as any)) {
+    if (buildingShip && !UPGRADE_PATH.includes(buildingShip.typeId as ShipTypeId)) {
       const bEntry = SHIP_CATALOG[buildingShip.typeId as keyof typeof SHIP_CATALOG];
       if (bEntry) {
         const remaining = Math.max(0, Math.ceil((buildingShip.completeAt - nowMs) / 1000));
@@ -3684,13 +3696,14 @@ function drawShipsPanelBody(
       const by = cursorY + row * (cellH + cellGap);
 
       const isBuilding = buildingShip != null && buildingShip.completeAt > nowMs;
-      const dockLocked = entry.dockLevel > dockLevel;
+      const dockLocked = !canBuildShip(entry.id as ShipTypeId, dockLevel);
       const canAfford = serverEcon
         ? serverEcon.store.ore >= entry.cost.ore && serverEcon.store.food >= entry.cost.food && serverEcon.store.energy >= entry.cost.energy
         : false;
       const enabled = !isBuilding && !dockLocked && canAfford;
+      const disableReason = isBuilding ? 'already building' : dockLocked ? 'dock level too low' : !canAfford ? 'insufficient resources' : undefined;
 
-      _lastShipButtons.push({ x: bx, y: by, w: cellW, h: cellH, shipTypeId: entry.id, enabled, isUpgrade: false });
+      _lastShipButtons.push({ x: bx, y: by, w: cellW, h: cellH, shipTypeId: entry.id, enabled, isUpgrade: false, disableReason });
 
       roundedRect(ctx, bx, by, cellW, cellH, 3);
       ctx.fillStyle = enabled ? 'rgba(20, 60, 80, 0.5)' : 'rgba(15, 25, 35, 0.5)';
@@ -3906,7 +3919,7 @@ function drawFleetGalaxyView(
 }
 
 /** Fleet panel at System/Planet tier: single star + MAP button */
-function drawFleetLocalView(
+export function drawFleetLocalView(
   ctx: CanvasRenderingContext2D,
   x: number, y: number, w: number,
 ): number {
@@ -3991,7 +4004,8 @@ export function drawTierHUD(
 
 import type { DockState } from './types';
 import type { DockAction } from './dock';
-import { SHIP_CATALOG, UPGRADE_PATH } from '../shared/ships';
+import type { ShipTypeId } from '../shared/api';
+import { SHIP_CATALOG, UPGRADE_PATH, canBuildShip, canUpgradeShip } from '../shared/ships';
 
 // ── Ship Icon Cache ─────────────────────────────────────────────────────────
 const _shipIconCache = new Map<string, HTMLImageElement>();
@@ -4190,7 +4204,8 @@ function toRoman(level: number): string {
 
 function isDockedAtStation(dock?: DockState): boolean {
   if (!dock || !dock.docked) return false;
-  return dock.targetType === 'feature' && dock.targetLabel === 'Station';
+  // Allow building when docked at the planet (orbit) or at a station feature
+  return dock.targetType === 'planet' || (dock.targetType === 'feature' && dock.targetLabel === 'Station');
 }
 
 export function triggerDockPanelAction(action: DockPanelAction, dock?: DockState): boolean {
@@ -4224,7 +4239,7 @@ export function triggerDockPanelAction(action: DockPanelAction, dock?: DockState
     const anyActive = Object.values(serverEcon.buildings).some((candidate) => candidate.status === 'UPGRADING');
     if (anyActive || isMaxLevel || !canAfford) return false;
     _pendingBuildRequest = { buildType };
-    playSound('begin_building');
+    playSound('click');
     return true;
   }
   if (action === 'buy_ships') {
@@ -4381,6 +4396,7 @@ type ShipButton = {
   enabled: boolean;
   isUpgrade?: boolean;
   upgradeFromTypeId?: number;
+  disableReason?: string | undefined;
 };
 
 let _lastShipButtons: ShipButton[] = [];
