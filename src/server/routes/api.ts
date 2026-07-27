@@ -262,7 +262,7 @@ api.post('/stars/reset', async (c) => {
   const users = new Set(Object.values(allClaims));
   for (const user of users) {
     try {
-      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition']);
+      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition', 'journeyDone']);
     } catch { /* ignore */ }
   }
 
@@ -285,11 +285,14 @@ api.post('/admin/reset-all', async (c) => {
   // Also include the admin user themselves (in case they aren't in claims)
   users.add(body.adminUser);
 
-  // Clear each user's game data (economy, ships, stats, discoveredStars, lastPosition)
+  // Clear each user's game data (economy, ships, stats, discoveredStars, lastPosition, achievements)
   let cleared = 0;
   for (const user of users) {
     try {
-      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition']);
+      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition', 'journeyDone']);
+      // Clear achievements so they can fire again
+      const achKeys = Object.keys(await redis.hGetAll(`achievements:${user}`));
+      if (achKeys.length > 0) await redis.hDel(`achievements:${user}`, achKeys);
       cleared++;
     } catch { /* ignore */ }
   }
@@ -427,8 +430,11 @@ api.post('/ships/buy', async (c) => {
     const response = await buyShip(redis, body);
     // Fire-and-forget: first ship achievement
     const { postId } = context;
+    console.log(`[ACHIEVEMENTS-DEBUG] /ships/buy postId=${postId} username=${body.username}`);
     if (postId) {
-      onShipBuy(redis, postId, body.username, 1).catch(() => {});
+      onShipBuy(redis, postId, body.username, 1).catch((e) => console.error('[ACHIEVEMENTS] onShipBuy error:', e));
+    } else {
+      console.warn('[ACHIEVEMENTS] no postId in context — cannot post achievement');
     }
     return c.json<BuyShipResponse>(response);
   } catch (error) {

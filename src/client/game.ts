@@ -3,6 +3,8 @@
 // Detects inline vs expanded mode and shows overlay buttons when inline.
 
 import { context, requestExpandedMode } from '@devvit/web/client';
+import { telemetry } from '@devvit/analytics/client/reddit';
+import versionJson from '../../version.json';
 import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, createDevvitBridge, getGameState, getDiscoveredStars, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, playSound, preloadSounds, onColonizeSuccess } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
@@ -123,7 +125,7 @@ if (debugCheckRedis) {
   });
 }
 
-console.log(`[INIT] isInline=${isInline} username=${username} postId=${postId}`);
+console.log(`[INIT] v${versionJson.version} isInline=${isInline} username=${username} postId=${postId}`);
 
 const sessionId = `${username}:${Math.random().toString(36).slice(2, 8)}`;
 
@@ -241,6 +243,7 @@ function loadPlayerProfile(): Promise<void> {
         skipJourney();
       } else {
         startJourney();
+        journeyStart();
       }
     })
     .catch(() => {});
@@ -420,6 +423,7 @@ async function pollEconomy() {
           );
           playSound('colonize');
           console.log('[COLONIZE] Success! Star colonized:', pendingColonize.starIndex);
+          journeyEnd(true);
         } else {
           const err = await colonizeRes.json().catch(() => ({ message: 'unknown' }));
           console.warn('[COLONIZE] failed:', err);
@@ -445,7 +449,8 @@ async function pollEconomy() {
         });
         if (buildRes.ok) {
           console.log('[BUILD] build success');
-          playSound('begin_building');
+          playSound('begin_building_facility');
+          if (pendingBuild.buildType === 'dock') journeyProgress(0.25, 'dock_upgraded');
         } else {
           console.warn('[BUILD] build failed');
           playSound('low_fuel');
@@ -468,7 +473,8 @@ async function pollEconomy() {
         });
         if (shipRes.ok) {
           console.log('[SHIPS] buy success');
-          playSound('begin_building');
+          playSound('begin_building_ship');
+          journeyProgress(0.50, 'ship_upgraded');
         } else {
           const err = await shipRes.json().catch(() => ({ message: 'unknown' }));
           console.warn('[SHIPS] buy failed:', err);
@@ -496,7 +502,8 @@ async function pollEconomy() {
         });
         if (upgradeRes.ok) {
           console.log('[SHIPS] upgrade success');
-          playSound('begin_building');
+          playSound('begin_ship_upgrade');
+          journeyProgress(0.50, 'ship_upgraded');
         } else {
           const err = await upgradeRes.json().catch(() => ({ message: 'unknown' }));
           console.warn('[SHIPS] upgrade failed:', err);
@@ -615,6 +622,10 @@ function savePositionIfChanged() {
   const discoveredChanged = discoveredKey !== _lastSavedDiscovered;
   const journeyChanged = journeyDone && !_lastSavedJourneyDone;
   if (!posChanged && !discoveredChanged && !journeyChanged) return;
+  // Track star discovery milestone
+  if (discoveredChanged && discovered.length >= 2) {
+    journeyProgress(0.75, 'star_discovered');
+  }
   _lastSavedPosition = pos;
   _lastSavedDiscovered = discoveredKey;
   if (journeyDone) _lastSavedJourneyDone = true;
@@ -631,6 +642,31 @@ function savePositionIfChanged() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   }).then(r => r.json()).then(d => console.log('[SAVE] response:', JSON.stringify(d))).catch(e => console.error('[SAVE] FAILED:', e));
+}
+
+// ── Devvit Journey Telemetry ────────────────────────────────────────────────
+// Simple progression funnel: start → dock_upgraded → ship_upgraded → star_discovered → colonized
+let _journeyStarted = false;
+const _progressSent = new Set<string>();
+
+function journeyAppReady() {
+  void telemetry.appReady().then(() => console.log('[TELEMETRY] app ready sent')).catch((e) => console.warn('[TELEMETRY] app ready failed:', e));
+}
+
+function journeyStart() {
+  if (_journeyStarted) return;
+  _journeyStarted = true;
+  void telemetry.startJourney().then((r) => console.log('[TELEMETRY] journey started, id:', r.journeyId)).catch((e) => console.warn('[TELEMETRY] journey start failed:', e));
+}
+
+function journeyProgress(progress: number, action: string) {
+  if (_progressSent.has(action)) return; // only fire each milestone once
+  _progressSent.add(action);
+  void telemetry.progress({ progress, action }).then(() => console.log('[TELEMETRY] progress:', progress, action)).catch((e) => console.warn('[TELEMETRY] progress failed:', e));
+}
+
+function journeyEnd(win: boolean) {
+  void telemetry.endJourney({ complete: true, game: { win, score: 0 } }).then(() => console.log('[TELEMETRY] journey ended, win:', win)).catch((e) => console.warn('[TELEMETRY] end failed:', e));
 }
 
 // ── Player stats tracking ───────────────────────────────────────────────────
@@ -660,6 +696,7 @@ function sendStatsHeartbeat() {
 // ── Activate multiplayer networking ─────────────────────────────────────────
 function startMultiplayer() {
   bridge.beginPlay(); // Activate networking callbacks on existing game
+  journeyAppReady();
   ghostPollInterval = setInterval(pollGhosts, 250);
   shotPollInterval = setInterval(pollShots, 250);
   economyPollInterval = setInterval(pollEconomy, 1500);

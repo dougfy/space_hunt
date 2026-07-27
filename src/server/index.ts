@@ -5,6 +5,7 @@ import { api } from './routes/api';
 import { forms } from './routes/forms';
 import { menu } from './routes/menu';
 import { triggers } from './routes/triggers';
+import telemetryRoutes from './routes/telemetry';
 
 const app = new Hono();
 const internal = new Hono();
@@ -14,6 +15,7 @@ internal.route('/form', forms);
 internal.route('/triggers', triggers);
 
 app.route('/api', api);
+app.route('/api/telemetry', telemetryRoutes);
 app.route('/internal', internal);
 
 serve({

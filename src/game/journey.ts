@@ -11,6 +11,7 @@ let _pulseCount = 0;       // how many pulse cycles have fired
 let _completed = false;     // journey step completed
 let _stabilized = false;    // game has rendered enough frames to be "ready"
 let _frameCount = 0;        // frames since init
+let _activatedByProfile = false; // set by startJourney/skipJourney — prevents initJourney from clobbering
 
 // Pulse state for tabs
 let _pulseActive = false;
@@ -21,6 +22,11 @@ const JOURNEY_DONE_KEY = 'spacehunt_journey_done';
 
 /** Initialize journey tracking. Starts in paused state — call startJourney() after profile loads. */
 export function initJourney(): void {
+  // If profile already decided (startJourney or skipJourney ran), don't clobber
+  if (_activatedByProfile) {
+    console.log('[JOURNEY] initJourney() skipped — profile already set state');
+    return;
+  }
   // Default to done; startJourney() will activate if server says not done
   _currentStep = 'done';
   _completed = true;
@@ -29,6 +35,8 @@ export function initJourney(): void {
 
 /** Activate the journey/tutorial (call only when server confirms journeyDone is false). */
 export function startJourney(): void {
+  console.log('[JOURNEY] startJourney() called — activating tutorial');
+  _activatedByProfile = true;
   _currentStep = 'first_action';
   _stepStartTime = 0;
   _pulseCount = 0;
@@ -40,6 +48,8 @@ export function startJourney(): void {
 
 /** Mark journey as already past first step (returning player). */
 export function skipJourney(): void {
+  console.log('[JOURNEY] skipJourney() — returning player');
+  _activatedByProfile = true;
   _currentStep = 'done';
   _completed = true;
   _pulseActive = false;
@@ -49,6 +59,7 @@ export function skipJourney(): void {
 /** Notify the journey system that the player did something (undock, open panel, etc.) */
 export function journeyAction(): void {
   if (_completed || _currentStep === 'done') return;
+  console.log('[JOURNEY] journeyAction() — marking done, stack:', new Error().stack?.split('\n').slice(1, 4).join(' <- '));
   if (_currentStep === 'first_action') {
     _currentStep = 'done';
     _completed = true;
@@ -79,18 +90,27 @@ export function updateJourney(): void {
       _pulseStartTime = performance.now();
       _pulseCount = 1;
     }
-    // Step 2: Voice + blink at 10s (once only)
+    // Step 2: Voice "Status docked begin" + blink at 10s
     else if (_pulseCount === 1 && elapsed >= 10000) {
       _pulseActive = true;
       _pulseStartTime = performance.now();
       _pulseCount = 2;
-      playSound('hey_there');
+      console.log('[JOURNEY] Voice trigger — playing status_docked');
+      playSound('status_docked');
     }
-    // Step 3: Final blink at 15s
-    else if (_pulseCount === 2 && elapsed >= 15000) {
+    // Step 3: Blink at 20s
+    else if (_pulseCount === 2 && elapsed >= 20000) {
       _pulseActive = true;
       _pulseStartTime = performance.now();
       _pulseCount = 3;
+    }
+    // Step 4: Voice "Hey there sailor" + blink at 30s (still no action)
+    else if (_pulseCount === 3 && elapsed >= 30000) {
+      _pulseActive = true;
+      _pulseStartTime = performance.now();
+      _pulseCount = 4;
+      console.log('[JOURNEY] Voice trigger — playing hey_there');
+      playSound('hey_there');
     }
   }
 

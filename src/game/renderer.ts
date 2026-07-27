@@ -406,6 +406,22 @@ export function drawForeignShipsAtStar(
   }
 }
 
+/** Draw compact fuel/shields in the upper-left corner. Used across all tiers. */
+export function drawShipStatus(r: Renderer, fuelPercent: number, shieldPercent: number): void {
+  const { ctx } = r;
+  ctx.save();
+  ctx.font = 'bold 12px monospace';
+  ctx.textBaseline = 'top';
+  const y0 = 52; // below system info panel
+  const fuelColor = fuelPercent <= 25 ? '#FF5A3D' : '#4fffb0';
+  ctx.fillStyle = fuelColor;
+  ctx.fillText(`FUEL: ${Math.round(fuelPercent)}%`, 12, y0);
+  const shieldColor = shieldPercent <= 33 ? '#FF5A3D' : '#4fffb0';
+  ctx.fillStyle = shieldColor;
+  ctx.fillText(`SHIELDS: ${Math.round(shieldPercent)}%`, 12, y0 + 14);
+  ctx.restore();
+}
+
 export function drawHUD(
   r: Renderer,
   fuelPercent: number,
@@ -4098,6 +4114,18 @@ let _pendingColonizeRequest: { starIndex: number } | null = null;
 let _colonizeButton: { x: number; y: number; w: number; h: number } | null = null;
 
 export function setServerStarEconomy(snapshot: ServerEconomySnapshot): void {
+  // Detect building completions: was UPGRADING, now ACTIVE → play sound
+  const prev = _serverEconomyByStarIndex.get(snapshot.starIndex);
+  if (prev?.buildings && snapshot.buildings) {
+    for (const key of Object.keys(snapshot.buildings) as Array<keyof typeof snapshot.buildings>) {
+      const oldB = prev.buildings[key];
+      const newB = snapshot.buildings[key];
+      if (oldB && newB && oldB.status === 'UPGRADING' && newB.status === 'ACTIVE') {
+        playSound('construction_complete_building');
+        break; // one sound per poll cycle
+      }
+    }
+  }
   _serverEconomyByStarIndex.set(snapshot.starIndex, snapshot);
 }
 
@@ -4137,6 +4165,11 @@ export function setServerShipState(
   ships: Array<{ typeId: number; count: number }>,
   building: { typeId: number; completeAt: number } | null,
 ): void {
+  // Detect ship build completion: was building, now not (or past completeAt)
+  const prev = _serverShipsByStarIndex.get(starIndex);
+  if (prev?.building && !building) {
+    playSound('construction_complete');
+  }
   _serverShipsByStarIndex.set(starIndex, { ships, building });
 }
 

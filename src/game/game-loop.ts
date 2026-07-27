@@ -7,7 +7,7 @@ import {
   FUEL_DRAIN_PER_SECOND, LOW_FUEL_THRESHOLD, LOW_FUEL_BLINK_PERIOD,
   SHIP_IMPACT_BUFFER, SYSTEM_SIZE, SHIP_SIZE, PLAYER_MAX_HP, GALAXY_SIZE,
 } from './constants';
-import { vec2, add } from './math';
+import { vec2 } from './math';
 import { generateAsteroids, generateRingAsteroids } from './asteroids';
 import { generateFuelPods, updatePodDiscovery, checkPodCollection } from './pods';
 import { createCamera, updateCamera, updateZoomState, getSafeZone, findNearestAsteroidIndex, isOverrideClear, GALAXY_ORTHO_MIN, GALAXY_ORTHO_MAX, GALAXY_ZOOM_STEP, GALAXY_ORTHO_DEFAULT } from './camera';
@@ -20,7 +20,7 @@ import {
   drawTargetReticle, drawFuelPod, drawGhostShip, drawHUD, drawGhostLabel,
   drawAsteroidLabel, drawPlayerLabel, drawProjectiles, drawShootingHUD, drawZoomButton,
   Renderer, drawControlButtons, drawForeignShipsAtStar, drawPlayerFleetAtStar,
-  drawGalaxyView, drawSystemView, drawPlanetView, drawTierHUD,
+  drawGalaxyView, drawSystemView, drawPlanetView, drawTierHUD, drawShipStatus,
   drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
   worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
@@ -830,9 +830,8 @@ function update(dt: number): void {
   if (!gameState.splashMode && !gameState.dock) {
   const tier = gameState.galaxy.tier;
   // In ring model, Local tier uses system coords directly (no worldOffset)
-  const worldShipPos = (tier === NavigationTier.Planet)
-    ? add(gameState.ship.pos, gameState.worldOffset)
-    : gameState.ship.pos;
+  // Planet tier: static boundary — ship pos IS the world pos (no scrolling)
+  const worldShipPos = gameState.ship.pos;
   const transition = checkTierTransition(worldShipPos, gameState.galaxy);
   if (transition) {
     // Belt pass-through: if ship has active target beyond the belt, don't enter Local tier
@@ -874,6 +873,7 @@ function update(dt: number): void {
       gameState.tgtActive = false;
       // Show warning message
       _scoutWarningTimer = SCOUT_WARNING_DURATION;
+      playSound('scout_range_exceeded');
       // Don't apply transition
     } else {
     console.log('[TRANSITION] from tier=', gameState.galaxy.tier, 'to=', transition.newTier, 'shipPos=', gameState.ship.pos, 'worldShipPos=', worldShipPos, 'starIdx=', transition.starIndex, 'bodyIdx=', transition.bodyIndex);
@@ -984,6 +984,7 @@ function render(): void {
     // Draw side panels (not docked at galaxy level)
     setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'galaxy', gameState.shipShape);
     drawPlanetPanels(renderer.ctx, screenW, screenH, ['TIER: GALAXY']);
+    drawShipStatus(renderer, gameState.fuelPercent, (gameState.shooting.hp / PLAYER_MAX_HP) * 100);
     return;
   }
 
@@ -1037,6 +1038,7 @@ function render(): void {
       ctx.fillText('Upgrade ship at station to leave system', screenW / 2, screenH * 0.18 + 20);
       ctx.restore();
     }
+    drawShipStatus(renderer, gameState.fuelPercent, (gameState.shooting.hp / PLAYER_MAX_HP) * 100);
     return;
   }
 

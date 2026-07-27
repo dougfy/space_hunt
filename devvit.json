@@ -38,5 +38,8 @@
   },
   "dev": {
     "subreddit": "valcordia_space_dev"
+  },
+  "permissions": {
+    "journeys": true
   }
 }

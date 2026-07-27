@@ -242,28 +242,8 @@ export function updateShip(state: GameState, dt: number, safeZone: { minX: numbe
 
   ship.pos = add(ship.pos, scale(ship.vel, dt));
 
-  // Boundary scrolling (Planet tier only — Galaxy/System/Local tiers follow the ship with the camera)
-  if (state.galaxy.tier === NavigationTier.Planet) {
-  let worldShift = vec2(0, 0);
-  if (ship.pos.x < safeZone.minX) {
-    worldShift = { ...worldShift, x: ship.pos.x - safeZone.minX };
-    ship.pos = { ...ship.pos, x: safeZone.minX };
-  } else if (ship.pos.x > safeZone.maxX) {
-    worldShift = { ...worldShift, x: ship.pos.x - safeZone.maxX };
-    ship.pos = { ...ship.pos, x: safeZone.maxX };
-  }
-  if (ship.pos.y < safeZone.minY) {
-    worldShift = { ...worldShift, y: ship.pos.y - safeZone.minY };
-    ship.pos = { ...ship.pos, y: safeZone.minY };
-  } else if (ship.pos.y > safeZone.maxY) {
-    worldShift = { ...worldShift, y: ship.pos.y - safeZone.maxY };
-    ship.pos = { ...ship.pos, y: safeZone.maxY };
-  }
-
-  if (sqrMagnitude(worldShift) > 0) {
-    applyWorldShift(state, worldShift);
-  }
-  }
+  // Boundary scrolling disabled — planet tier uses static exit boundary.
+  // Ship flies freely until it crosses the exit boundary in galaxy.ts.
 
   // Hard collision resolution
   resolveShipCollisions(state);
@@ -271,28 +251,5 @@ export function updateShip(state: GameState, dt: number, safeZone: { minX: numbe
   // Update angle from velocity (mouse mode only — keyboard mode controls angle directly)
   if (state.inputMode !== 'keyboard' && sqrMagnitude(ship.vel) > 0.01) {
     ship.ang = Math.atan2(ship.vel.y, ship.vel.x);
-  }
-}
-
-function applyWorldShift(state: GameState, shift: Vec2): void {
-  // Only used by Planet tier for edge-based transitions
-  const desired = add(state.worldOffset, shift);
-
-  const actual = sub(desired, state.worldOffset);
-  state.worldOffset = desired;
-
-  if (sqrMagnitude(actual) > 0) {
-    for (const asteroid of state.asteroids) {
-      asteroid.pos = sub(asteroid.pos, actual);
-    }
-    for (const pod of state.pods) {
-      pod.pos = sub(pod.pos, actual);
-    }
-    for (const projectile of state.shooting.projectiles) {
-      projectile.origin = sub(projectile.origin, actual);
-    }
-    if (state.tgtActive) {
-      state.tgtPos = sub(state.tgtPos, actual);
-    }
   }
 }

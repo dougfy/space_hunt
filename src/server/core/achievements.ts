@@ -77,16 +77,24 @@ async function postAchievement(
   id: AchievementId,
   detail?: string,
 ): Promise<void> {
-  if (await hasAchievement(store, username, id)) return;
+  console.log(`[ACHIEVEMENTS] checking ${id} for ${username}, postId=${postId}`);
+  if (await hasAchievement(store, username, id)) {
+    console.log(`[ACHIEVEMENTS] ${id} already granted for ${username}, skipping`);
+    return;
+  }
   await grantAchievement(store, username, id);
 
   const text = formatMessage(id, username, detail);
+  console.log(`[ACHIEVEMENTS] posting comment for ${id}: ${text}`);
   try {
+    // postId from context already has t3_ prefix
+    const fullId = postId.startsWith('t3_') ? postId : `t3_${postId}`;
     await reddit.submitComment({
-      id: `t3_${postId}` as `t3_${string}`,
+      id: fullId as `t3_${string}`,
       text,
       runAs: 'APP',
     });
+    console.log(`[ACHIEVEMENTS] comment posted for ${id}`);
   } catch (e) {
     console.error(`[ACHIEVEMENTS] Failed to post comment for ${id}:`, e);
   }

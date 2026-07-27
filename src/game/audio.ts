@@ -2,22 +2,32 @@
 // Handles sound effects for game events. WAV files served from /sounds/.
 // Button click is synthesized via Web Audio API (no file needed).
 
-type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'begin_building' | 'undocking' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit';
+import versionJson from '../../version.json';
 
+type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded';
+
+// Cache-bust sound URLs with version so updated wavs are fetched fresh
+const V = versionJson.version;
 const SOUND_FILES: Partial<Record<SoundId, string>> = {
-  docked: '/sounds/Ship%20docked.wav',
-  low_fuel: '/sounds/Fuel%20low.wav',
-  fuel_critical: '/sounds/Warning%20fuel%20critical.wav',
-  colonize: '/sounds/Colonize%20complete.wav',
-  arrive: '/sounds/Probe%20arrived.wav',
-  status_docked: '/sounds/Status%20docked%20begin.wav',
-  begin_building: '/sounds/Begin%20building.wav',
-  undocking: '/sounds/Undocking%20Safe%20travels.wav',
-  insufficient_resources: '/sounds/Insufficient%20Resources%20Build.wav',
-  dock_low: '/sounds/Dock%20Level%202%20Low.wav',
-  hey_there: '/sounds/Hey%20there%20sailor.wav',
-  ship_entered: '/sounds/Ship%20has%20entered.wav',
-  leaving_orbit: '/sounds/Leaving%20orbit.wav',
+  docked: `/sounds/Ship%20docked.wav?v=${V}`,
+  low_fuel: `/sounds/Fuel%20low.wav?v=${V}`,
+  fuel_critical: `/sounds/Warning%20fuel%20critical.wav?v=${V}`,
+  colonize: `/sounds/Colonize%20complete.wav?v=${V}`,
+  arrive: `/sounds/Probe%20arrived.wav?v=${V}`,
+  status_docked: `/sounds/Status%20docked%20begin.wav?v=${V}`,
+  begin_building: `/sounds/Begin%20building.wav?v=${V}`,
+  begin_building_facility: `/sounds/Begin%20building%20facility.wav?v=${V}`,
+  begin_building_ship: `/sounds/Begin%20building%20ship.wav?v=${V}`,
+  undocking: `/sounds/Undocking%20Safe%20travels.wav?v=${V}`,
+  insufficient_resources: `/sounds/Insufficient%20Resources%20Build.wav?v=${V}`,
+  dock_low: `/sounds/Dock%20Level%202%20Low.wav?v=${V}`,
+  hey_there: `/sounds/Hey%20there%20sailor.wav?v=${V}`,
+  ship_entered: `/sounds/Ship%20has%20entered.wav?v=${V}`,
+  leaving_orbit: `/sounds/Leaving%20orbit.wav?v=${V}`,
+  construction_complete: `/sounds/Construction%20complete%20ship.wav?v=${V}`,
+  construction_complete_building: `/sounds/Construction%20complete%20building.wav?v=${V}`,
+  begin_ship_upgrade: `/sounds/Begin%20ship%20upgrade.wav?v=${V}`,
+  scout_range_exceeded: `/sounds/Scout%20range%20exceeded.wav?v=${V}`,
 };
 
 let _audioCtx: AudioContext | null = null;
