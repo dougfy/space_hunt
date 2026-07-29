@@ -10,6 +10,7 @@ import {
 import { vec2, clamp } from './math';
 import { distanceToAsteroidSurface } from './asteroids';
 import { NavigationTier } from './galaxy';
+import { getSelectedStarIndex } from './renderer';
 
 // Trigger zoom when ship is within ZOOM_TRIGGER_PIXELS screen pixels of an
 // asteroid surface. Converted to world units at runtime using the actual canvas
@@ -61,7 +62,17 @@ export function updateCamera(state: GameState, dt: number): void {
     }
 
     // Auto-lerps only when user is NOT actively zooming
-    if (state.galaxyZoomCooldown <= 0) {
+    const selectedIdx = getSelectedStarIndex();
+    if (selectedIdx >= 0) {
+      // Star selected — keep camera centered on it (important during zoom)
+      const selectedStar = state.galaxy.stars[selectedIdx];
+      if (selectedStar) {
+        const tx = clamp(selectedStar.pos.x, minX, maxX);
+        const ty = clamp(selectedStar.pos.y, minY, maxY);
+        state.galaxyCamPos.x += (tx - state.galaxyCamPos.x) * 0.15;
+        state.galaxyCamPos.y += (ty - state.galaxyCamPos.y) * 0.15;
+      }
+    } else if (state.galaxyZoomCooldown <= 0) {
       if (state.galaxyZoom >= GALAXY_CENTER_THRESHOLD) {
         state.galaxyCamPos.x += (mid - state.galaxyCamPos.x) * 0.1;
         state.galaxyCamPos.y += (mid - state.galaxyCamPos.y) * 0.1;

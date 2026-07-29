@@ -628,6 +628,12 @@ function update(dt: number): void {
         inputState.pointerDown = false;
       } else if (tappedStar >= 0) {
         selectGalaxyStar(tappedStar);
+        // Center camera on the tapped star, keep current zoom level
+        const star = gameState.galaxy.stars[tappedStar];
+        if (star) {
+          gameState.galaxyCamPos = { x: star.pos.x, y: star.pos.y };
+          gameState.galaxyZoomCooldown = 1.0;
+        }
         inputState.pointerDown = false; // consume click — don't move ship
       } else if (getSelectedStarIndex() >= 0) {
         // Tapped empty space — deselect
