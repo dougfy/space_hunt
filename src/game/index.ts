@@ -8,5 +8,5 @@ export type { GameState, ShipShape, Ghost } from './types';
 export { getGameState, getDiscoveredStars, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, onColonizeSuccess } from './game-loop';
 export { skipJourney, startJourney, isJourneyDone } from './journey';
 export { setExternalStarNames } from './galaxy';
-export { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin } from './renderer';
+export { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, setComsMessages, setComsUnread, clearComsUnread, isComsPanelOpen, setComsLoading, setPostId, setTradeStationInfo, consumePendingTrade } from './renderer';
 export { playSound, preloadSounds, toggleMute, isMuted, setVolume } from './audio';

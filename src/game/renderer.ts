@@ -324,9 +324,9 @@ export function drawPlayerFleetAtStar(
     const catalogEntry = SHIP_CATALOG[entry.typeId as keyof typeof SHIP_CATALOG];
     const countToDraw = Math.min(entry.count, 3); // cap visual at 3 per type
     for (let i = 0; i < countToDraw; i++) {
-      // Offset ships upward (+Y world = up on screen) from station, tightly packed
-      const offsetAngle = Math.PI * 0.5 + (slotIdx - 1) * 0.5;
-      const offsetDist = 0.25 + slotIdx * 0.08;
+      // Offset ships upward (+Y world = up on screen) from station, spread out more
+      const offsetAngle = Math.PI * 0.5 + (slotIdx - 1) * 0.6;
+      const offsetDist = 0.45 + slotIdx * 0.12;
       const pos = {
         x: stationWorldPos.x + Math.cos(offsetAngle) * offsetDist,
         y: stationWorldPos.y + Math.sin(offsetAngle) * offsetDist,
@@ -353,7 +353,7 @@ export function drawPlayerFleetAtStar(
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
           ctx.fillStyle = FLEET_COLOR;
-          ctx.fillText(label, sc.x, sc.y - 16);
+          ctx.fillText(label, sc.x, sc.y - 20);
           ctx.restore();
         }
       }
@@ -536,11 +536,11 @@ export function drawPlayerLabel(
 
   // Shadow for readability
   ctx.fillStyle = 'rgba(0,0,0,0.9)';
-  ctx.fillText(name, sc.x + 1, sc.y + 22);
+  ctx.fillText(name, sc.x + 1, sc.y + 30);
 
   // Main text
   ctx.fillStyle = '#4fffb0';
-  ctx.fillText(name, sc.x, sc.y + 21);
+  ctx.fillText(name, sc.x, sc.y + 29);
   ctx.restore();
 }
 
@@ -926,6 +926,8 @@ import { generateSystem } from './galaxy';
 import { buildGalaxyViewModel, getGalaxyStarTone } from './galaxy-view-model';
 import { getEnabledResources, getFeatureResourceIds as _getFeatureResourceIds, getFeatureResourceNames } from './economy-catalog';
 import { BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, FEATURE_LABELS, STAR_NAMES } from './constants';
+import type { ComsMessage } from '../shared/api';
+import { isTradingStation } from '../shared/trading';
 
 // ── Monochrome green palette (sci-fi terminal) ─────────────────────────────
 const G_BRIGHT = '#4fffb0';        // primary bright green
@@ -1386,6 +1388,13 @@ export function drawGalaxyView(
       }
       ctx.fillText(star.name, sx, sy + rayLen + 4);
 
+      // ── Trading station icon (only after probed/visited) ──
+      if (_postId && isTradingStation(_postId, star.index) && star.discoveryLevel !== 'none') {
+        ctx.font = 'bold 9px monospace';
+        ctx.fillStyle = 'rgb(255, 215, 0)'; // gold
+        ctx.fillText('⚖', sx, sy - rayLen - 6);
+      }
+
       // ── Fleet badge ──
       const fleetState = _serverShipsByStarIndex.get(star.index);
       if (fleetState && fleetState.ships.length > 0) {
@@ -1522,6 +1531,11 @@ export function drawGalaxyView(
     _validTransferTargets.clear();
     for (const s of screenStars) {
       if (s.star.index === _transferMode.fromStarIndex) continue;
+      // Freighter (2): player-owned stars OR trading stations (if discovered)
+      if (_transferMode.shipTypeId === 2) {
+        const isTradeTarget = _postId && isTradingStation(_postId, s.star.index) && s.star.discoveryLevel !== 'none';
+        if (s.star.owner !== 'player' && !isTradeTarget) continue;
+      }
       // Colony Ship (8): only probed/visited + not player-owned
       if (_transferMode.shipTypeId === 8) {
         if (s.star.discoveryLevel === 'none' || s.star.owner === 'player') continue;
@@ -1561,7 +1575,11 @@ export function drawGalaxyView(
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = G_BRIGHT;
-    ctx.fillText(`SENDING ${shipName.toUpperCase()} — TAP DESTINATION STAR`, screenW / 2, screenH - bannerH / 2 - 2);
+    const isFreighter = _transferMode!.shipTypeId === 2;
+    const bannerText = isFreighter
+      ? `ASSIGN TRADE ROUTE — TAP PICKUP STAR`
+      : `SENDING ${shipName.toUpperCase()} — TAP DESTINATION STAR`;
+    ctx.fillText(bannerText, screenW / 2, screenH - bannerH / 2 - 2);
 
     // Cancel button
     const cancelW = 60;
@@ -2809,18 +2827,18 @@ export function drawPlanetView(
       // Feature name and type label
       ctx.save();
       const leftSide = feat.angle > Math.PI / 2 && feat.angle < Math.PI * 1.5;
-      const nameOffset = leftSide ? -16 : 16;
+      const nameOffset = leftSide ? -24 : 24;
 
       ctx.font = 'bold 9px monospace';
       ctx.textAlign = leftSide ? 'right' : 'left';
       ctx.textBaseline = 'bottom';
       ctx.fillStyle = G_BRIGHT;
-      ctx.fillText(feat.name, fx + nameOffset, fy - 4);
+      ctx.fillText(feat.name, fx + nameOffset, fy - 6);
 
       ctx.font = '8px monospace';
       ctx.fillStyle = G_MED;
       ctx.textBaseline = 'top';
-      ctx.fillText(FEATURE_LABELS[feat.type] || feat.type, fx + nameOffset, fy + 4);
+      ctx.fillText(FEATURE_LABELS[feat.type] || feat.type, fx + nameOffset, fy + 6);
       ctx.restore();
     }
   }
@@ -2902,6 +2920,7 @@ const PANEL_TABS: PanelTab[] = [
   { title: 'BUILD',  icon: '\u2302', requiresDock: true },  // ⌂
   { title: 'SHIPS',  icon: '\u{1F680}', requiresDock: true }, // 🚀
   { title: 'FLEET',  icon: '\u2694' },        // ⚔
+  { title: 'COMS',   icon: '\u{1F4E1}' },    // 📡
 ];
 
 function buildMockPlanetStatusRows(
@@ -2913,6 +2932,24 @@ function buildMockPlanetStatusRows(
   const rows: string[] = [];
   void fuelPercent;
   void shieldPercent;
+
+  // Trading station info
+  if (_postId && isTradingStation(_postId, starIndex)) {
+    rows.push('⚖ TRADING STATION');
+    if (_tradeStationInfo && _tradeStationInfo.starIndex === starIndex) {
+      rows.push(`STOCK O:${Math.floor(_tradeStationInfo.stock.ore)} F:${Math.floor(_tradeStationInfo.stock.food)} E:${Math.floor(_tradeStationInfo.stock.energy)}`);
+      rows.push('RATES (give:receive)');
+      rows.push(`Ore→Food  ${_tradeStationInfo.rates.ore_food.toFixed(2)}`);
+      rows.push(`Ore→Enrg  ${_tradeStationInfo.rates.ore_energy.toFixed(2)}`);
+      rows.push(`Food→Ore  ${_tradeStationInfo.rates.food_ore.toFixed(2)}`);
+      rows.push(`Food→Enrg ${_tradeStationInfo.rates.food_energy.toFixed(2)}`);
+      rows.push(`Enrg→Ore  ${_tradeStationInfo.rates.energy_ore.toFixed(2)}`);
+      rows.push(`Enrg→Food ${_tradeStationInfo.rates.energy_food.toFixed(2)}`);
+    } else {
+      rows.push('Loading rates...');
+    }
+    return rows;
+  }
 
   rows.push(`ORBIT: ${docked ? 'established' : 'approaching'}`);
 
@@ -2931,18 +2968,18 @@ function buildMockPlanetStatusRows(
   return rows;
 }
 
-// -1 = all closed, 0..3 = which panel is open
+// -1 = all closed, 0..4 = which panel is open
 let _openPanel = -1;
 
 // Layout constants
 const TAB_W = 28;      // width of the vertical tab strip
-const TAB_H = 56;      // height of each tab (smaller to fit 4)
-const TAB_GAP = 4;
+const TAB_H = 48;      // height of each tab (smaller to fit 5)
+const TAB_GAP = 3;
 const ROW_H = 14;
 const PANEL_PAD = 10;
 
 // Per-tab panel widths
-const PANEL_WIDTHS: number[] = [180, 280, 260, 220]; // STATUS, BUILD, SHIPS, FLEET
+const PANEL_WIDTHS: number[] = [180, 280, 260, 220, 220]; // STATUS, BUILD, SHIPS, FLEET, COMS
 
 function getEffectivePanelW(tabIndex: number, screenW: number): number {
   const base = PANEL_WIDTHS[tabIndex] ?? 180;
@@ -3023,6 +3060,8 @@ export function hitTestPlanetPanels(
       // Handle interactive clicks inside BUILD / SHIPS / FLEET tabs
       if (_openPanel === 1) {
         hitTestBuildPanel(sx, sy);
+      } else if (_openPanel === 0) {
+        hitTestTradeButtons(sx, sy);
       } else if (_openPanel === 2) {
         hitTestShipsPanel(sx, sy);
       } else if (_openPanel === 3) {
@@ -3074,6 +3113,39 @@ let _panelsShipShape: string = 'scout';
 let _panelsOwned = false; // whether player owns the current star
 let _isAdmin = false; // whether current player is an admin
 
+// ── Coms state ──────────────────────────────────────────────────────────────
+let _comsMessages: ComsMessage[] = [];
+let _comsUnreadCount = 0;
+let _comsLoading = false;
+// eslint-disable-next-line prefer-const
+let _comsScrollOffset = 0; // scroll offset for message list (0 = bottom)
+
+/** Update coms messages from server. */
+export function setComsMessages(messages: ComsMessage[]): void {
+  _comsMessages = messages;
+  _comsLoading = false;
+}
+
+/** Set loading state for coms panel. */
+export function setComsLoading(loading: boolean): void {
+  _comsLoading = loading;
+}
+
+/** Update unread badge count. */
+export function setComsUnread(count: number): void {
+  _comsUnreadCount = count;
+}
+
+/** Clear unread badge (when coms panel is opened). */
+export function clearComsUnread(): void {
+  _comsUnreadCount = 0;
+}
+
+/** Check if coms panel is open. */
+export function isComsPanelOpen(): boolean {
+  return _openPanel === 4;
+}
+
 /** Set admin flag (gates debug features like COMPLETE button). */
 export function setIsAdmin(v: boolean): void { _isAdmin = v; }
 
@@ -3112,6 +3184,16 @@ export function consumePendingTierRevert(): 'system' | 'local' | 'planet' | null
 }
 
 // Hit test helpers for interactive panels (called from hitTestPlanetPanels)
+function hitTestTradeButtons(sx: number, sy: number): void {
+  for (const btn of _tradeButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      _pendingTrade = { giveType: btn.giveType, receiveType: btn.receiveType };
+      playSound('click');
+      return;
+    }
+  }
+}
+
 function hitTestBuildPanel(sx: number, sy: number): void {
   // Check COMPLETE button
   if (_completeButton) {
@@ -3178,6 +3260,14 @@ function hitTestFleetPanel(sx: number, sy: number): void {
       return;
     }
   }
+  // CANCEL route buttons
+  for (const btn of _fleetCancelRouteButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      _pendingCancelRoute = btn.routeId;
+      playSound('click');
+      return;
+    }
+  }
 }
 
 // Pending extension action from BUILD panel click
@@ -3239,6 +3329,21 @@ export function drawPlanetPanels(
     ctx.fillText(tab.title, 0, 0);
     ctx.restore();
 
+    // ── Unread badge on COMS tab ──
+    if (i === 4 && _comsUnreadCount > 0 && !isOpen) {
+      const badgeX = tabX + TAB_W - 6;
+      const badgeY = ty + 4;
+      ctx.fillStyle = '#FF5A3D';
+      ctx.beginPath();
+      ctx.arc(badgeX, badgeY, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = 'bold 6px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(_comsUnreadCount > 9 ? '9+' : String(_comsUnreadCount), badgeX, badgeY);
+    }
+
     // ── Slide-out body (only when open and not disabled) ──
     if (isOpen && !isDisabled) {
       const panelW = getEffectivePanelW(i, screenW);
@@ -3259,6 +3364,7 @@ export function drawPlanetPanels(
         case 1: bodyH = drawBuildPanelBody(ctx, panelX, panelY, panelW); break;
         case 2: bodyH = drawShipsPanelBody(ctx, panelX, panelY, panelW); break;
         case 3: bodyH = drawFleetPanelBody(ctx, panelX, panelY, panelW); break;
+        case 4: bodyH = drawComsPanelBody(ctx, panelX, panelY, panelW); break;
         default: bodyH = TAB_H;
       }
       _lastPanelBodyH = bodyH;
@@ -3327,6 +3433,66 @@ function drawStatusPanelBody(
   x: number, y: number, w: number,
   statusRows: string[],
 ): number {
+  _tradeButtons = [];
+
+  // If at a trading station with info, render trade UI with buttons
+  if (_tradeStationInfo && _postId && _panelsStarIndex != null && isTradingStation(_postId, _panelsStarIndex) && _tradeStationInfo.starIndex === _panelsStarIndex) {
+    const trades: { give: 'ore' | 'food' | 'energy'; receive: 'ore' | 'food' | 'energy'; rateKey: keyof typeof _tradeStationInfo.rates }[] = [
+      { give: 'ore', receive: 'food', rateKey: 'ore_food' },
+      { give: 'ore', receive: 'energy', rateKey: 'ore_energy' },
+      { give: 'food', receive: 'ore', rateKey: 'food_ore' },
+      { give: 'food', receive: 'energy', rateKey: 'food_energy' },
+      { give: 'energy', receive: 'ore', rateKey: 'energy_ore' },
+      { give: 'energy', receive: 'food', rateKey: 'energy_food' },
+    ];
+    const btnH = 16;
+    const btnGap = 3;
+    const headerH = 42;
+    const bodyH = headerH + trades.length * (btnH + btnGap) + PANEL_PAD;
+    drawPanelFrame(ctx, x, y, w, bodyH, 'TRADE', '\u2696');
+
+    // Stock header
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_MED;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`STOCK O:${Math.floor(_tradeStationInfo.stock.ore)} F:${Math.floor(_tradeStationInfo.stock.food)} E:${Math.floor(_tradeStationInfo.stock.energy)}`, x + PANEL_PAD, y + 28);
+
+    // Trade buttons
+    for (let i = 0; i < trades.length; i++) {
+      const t = trades[i]!;
+      const rate = _tradeStationInfo.rates[t.rateKey];
+      const btnY = y + headerH + i * (btnH + btnGap);
+      const btnX = x + PANEL_PAD;
+      const btnW = w - PANEL_PAD * 2;
+
+      // Button background
+      ctx.fillStyle = 'rgba(0, 30, 20, 0.7)';
+      roundedRect(ctx, btnX, btnY, btnW, btnH, 3);
+      ctx.fill();
+      ctx.strokeStyle = G_DIM;
+      ctx.lineWidth = 0.5;
+      roundedRect(ctx, btnX, btnY, btnW, btnH, 3);
+      ctx.stroke();
+
+      // Label
+      const shortNames = { ore: 'ORE', food: 'FOOD', energy: 'ENRG' };
+      ctx.font = 'bold 7px monospace';
+      ctx.fillStyle = G_BRIGHT;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${shortNames[t.give]}→${shortNames[t.receive]}  @${rate.toFixed(2)}`, btnX + 6, btnY + btnH / 2);
+
+      // "TRADE 50" label on right
+      ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgb(255, 215, 0)';
+      ctx.fillText('TRADE 50', btnX + btnW - 6, btnY + btnH / 2);
+
+      _tradeButtons.push({ x: btnX, y: btnY, w: btnW, h: btnH, giveType: t.give, receiveType: t.receive });
+    }
+    return bodyH;
+  }
+
   const bodyH = Math.max(TAB_H, statusRows.length * ROW_H + PANEL_PAD * 2 + 24);
   drawPanelFrame(ctx, x, y, w, bodyH, 'STATUS', '\u25B3');
 
@@ -3512,8 +3678,8 @@ function drawShipsPanelBody(
     (s) => s.count > 0 && UPGRADE_PATH.includes(s.typeId as ShipTypeId),
   );
 
-  // Show Basic Probe (11) and Colony Ship (8); also show Scout (1) if player has no upgrade-path ship
-  const SHOWN_BUILD_IDS = hasUpgradePathShip ? [11, 8] : [1, 11, 8];
+  // Show Basic Probe (11), Colony Ship (8), Freighter (2); also show Scout (1) if player has no upgrade-path ship
+  const SHOWN_BUILD_IDS = hasUpgradePathShip ? [2, 11, 8] : [1, 2, 11, 8];
   const availableShips = Object.values(SHIP_CATALOG).filter(
     (entry) => SHOWN_BUILD_IDS.includes(entry.id),
   );
@@ -3828,6 +3994,7 @@ function drawFleetGalaxyView(
   }
 
   const transits = _serverTransits;
+  const fRoutes = _serverFreighterRoutes;
 
   // Calculate height
   let lineCount = 0;
@@ -3839,7 +4006,11 @@ function drawFleetGalaxyView(
     lineCount += 1; // "IN TRANSIT" header
     lineCount += transits.length; // one row per transit
   }
-  if (entries.length === 0 && transits.length === 0) lineCount = 2; // "No fleet" + hint
+  if (fRoutes.length > 0) {
+    lineCount += 1; // "TRADE ROUTES" header
+    lineCount += fRoutes.length * 2; // two rows per route (route + cargo/status)
+  }
+  if (entries.length === 0 && transits.length === 0 && fRoutes.length === 0) lineCount = 2;
   lineCount += 1; // total row
 
   const bodyH = Math.max(TAB_H, lineCount * ROW_H + PANEL_PAD * 2 + 28);
@@ -3921,6 +4092,59 @@ function drawFleetGalaxyView(
         ctx.textAlign = 'right';
         ctx.fillText(`${fromName}\u2192${toName} ${timeStr}`, x + w - PANEL_PAD, cy + 1);
         ctx.textAlign = 'left';
+        ctx.font = '8px monospace';
+        cy += ROW_H;
+      }
+    }
+
+    // ── Trade Routes Section ──
+    _fleetCancelRouteButtons = [];
+    if (fRoutes.length > 0) {
+      ctx.fillStyle = '#4af'; // CYAN-BLUE
+      ctx.fillText('\u{1F6A2} TRADE ROUTES', x + PANEL_PAD, cy);
+      cy += ROW_H;
+
+      const now = Date.now();
+      for (const route of fRoutes) {
+        const homeName = STAR_NAMES[route.homeStarIndex % STAR_NAMES.length] ?? '?';
+        const targetName = STAR_NAMES[route.targetStarIndex % STAR_NAMES.length] ?? '?';
+        const remainMs = Math.max(0, route.arrivalAt - now);
+        const remainSec = Math.ceil(remainMs / 1000);
+        const mm = Math.floor(remainSec / 60);
+        const ss = remainSec % 60;
+        const timeStr = mm > 0 ? `${mm}m${ss.toString().padStart(2, '0')}s` : `${ss}s`;
+        const legLabel = route.leg === 'outbound' ? '\u2192 PICKUP' : '\u2190 DELIVER';
+
+        // Route line: "HomeStarName ↔ TargetStarName"
+        ctx.fillStyle = '#4af';
+        ctx.fillText(`  ${homeName} \u21c4 ${targetName}`, x + PANEL_PAD, cy);
+
+        // [CANCEL] button
+        const cancelW = 28;
+        const cancelH = 10;
+        const cancelX = x + w - PANEL_PAD - cancelW;
+        const cancelY = cy;
+        ctx.strokeStyle = 'rgba(255, 100, 80, 0.6)';
+        ctx.lineWidth = 0.5;
+        roundedRect(ctx, cancelX, cancelY, cancelW, cancelH, 2);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(255, 100, 80, 0.8)';
+        ctx.font = '7px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('STOP', cancelX + cancelW / 2, cancelY + 1.5);
+        ctx.textAlign = 'left';
+        ctx.font = '8px monospace';
+        _fleetCancelRouteButtons.push({ x: cancelX, y: cancelY, w: cancelW, h: cancelH, routeId: route.id });
+        cy += ROW_H;
+
+        // Status line: leg direction + ETA + cargo summary
+        const hasCargo = route.cargo.ore > 0 || route.cargo.food > 0 || route.cargo.energy > 0;
+        const cargoStr = hasCargo
+          ? ` [${Math.floor(route.cargo.ore)}o/${Math.floor(route.cargo.food)}f/${Math.floor(route.cargo.energy)}e]`
+          : '';
+        ctx.fillStyle = 'rgba(68, 170, 255, 0.6)';
+        ctx.font = '7px monospace';
+        ctx.fillText(`    ${legLabel} ${timeStr}${cargoStr}`, x + PANEL_PAD, cy);
         ctx.font = '8px monospace';
         cy += ROW_H;
       }
@@ -4014,6 +4238,78 @@ export function drawTierHUD(
     ctx.fillText(locationName, x, 28);
   }
   ctx.restore();
+}
+
+// ── Coms Panel Body ─────────────────────────────────────────────────────────
+
+function drawComsPanelBody(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  const maxVisibleMessages = 12;
+  const msgH = 28; // height per message (2 lines: author + body)
+  const inputH = 24;
+  const headerH = 28;
+  const msgs = _comsMessages;
+  const visibleCount = Math.min(msgs.length, maxVisibleMessages);
+  const bodyH = headerH + visibleCount * msgH + inputH + PANEL_PAD;
+
+  drawPanelFrame(ctx, x, y, w, bodyH, 'COMMS', '\u{1F4E1}');
+
+  if (msgs.length === 0) {
+    ctx.font = '8px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(_comsLoading ? 'PROCESSING TRANSMISSIONS...' : 'NO TRANSMISSIONS', x + w / 2, y + bodyH / 2);
+    return bodyH;
+  }
+
+  // Show most recent messages (scroll from bottom)
+  const startIdx = Math.max(0, msgs.length - maxVisibleMessages - _comsScrollOffset);
+  const endIdx = Math.min(msgs.length, startIdx + maxVisibleMessages);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x + 4, y + headerH, w - 8, visibleCount * msgH);
+  ctx.clip();
+
+  for (let i = startIdx; i < endIdx; i++) {
+    const msg = msgs[i];
+    if (!msg) continue;
+    const rowIdx = i - startIdx;
+    const my = y + headerH + rowIdx * msgH;
+    const indent = Math.min(msg.depth || 0, 3) * 8; // indent nested replies, max 3 levels
+
+    // Author line
+    ctx.font = 'bold 7px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = msg.isApp ? '#FFD24A' : G_BRIGHT;
+    const timeStr = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const prefix = indent > 0 ? '\u21B3 ' : '';
+    ctx.fillText(`${prefix}${msg.author}  ${timeStr}`, x + PANEL_PAD + indent, my + 2);
+
+    // Body line (truncate to fit)
+    ctx.font = '7px monospace';
+    ctx.fillStyle = msg.isApp ? 'rgba(255, 210, 74, 0.7)' : G_MED;
+    const maxChars = Math.floor((w - PANEL_PAD * 2 - indent) / 4.2);
+    const bodyText = msg.body.length > maxChars ? msg.body.slice(0, maxChars - 1) + '\u2026' : msg.body;
+    ctx.fillText(bodyText, x + PANEL_PAD + indent, my + 14);
+  }
+
+  ctx.restore();
+
+  // Scroll hint if more messages
+  if (msgs.length > maxVisibleMessages) {
+    ctx.font = '6px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`\u25B2 ${msgs.length - maxVisibleMessages} more`, x + w / 2, y + headerH - 8);
+  }
+
+  return bodyH;
 }
 
 // ── Dock Panel ──────────────────────────────────────────────────────────────
@@ -4144,6 +4440,47 @@ type TransitRecord = {
   arrivalAt: number;
 };
 let _serverTransits: TransitRecord[] = [];
+let _postId: string = '';
+
+export function setPostId(postId: string): void {
+  _postId = postId;
+}
+
+// ── Trade Station State ──
+import type { TradeStationInfoResponse } from '../shared/api';
+let _tradeStationInfo: TradeStationInfoResponse | null = null;
+
+export function setTradeStationInfo(info: TradeStationInfoResponse | null): void {
+  _tradeStationInfo = info;
+}
+
+export function getTradeStationInfo(): TradeStationInfoResponse | null {
+  return _tradeStationInfo;
+}
+
+// Trade buttons state
+type TradeButtonDef = { x: number; y: number; w: number; h: number; giveType: 'ore' | 'food' | 'energy'; receiveType: 'ore' | 'food' | 'energy' };
+let _tradeButtons: TradeButtonDef[] = [];
+let _pendingTrade: { giveType: 'ore' | 'food' | 'energy'; receiveType: 'ore' | 'food' | 'energy' } | null = null;
+
+export function consumePendingTrade(): { giveType: 'ore' | 'food' | 'energy'; receiveType: 'ore' | 'food' | 'energy' } | null {
+  const t = _pendingTrade;
+  _pendingTrade = null;
+  return t;
+}
+
+type FreighterRouteRecord = {
+  id: string;
+  homeStarIndex: number;
+  targetStarIndex: number;
+  cargo: { ore: number; food: number; energy: number };
+  departedAt: number;
+  arrivalAt: number;
+  leg: 'outbound' | 'return';
+};
+let _serverFreighterRoutes: FreighterRouteRecord[] = [];
+let _pendingCancelRoute: string | null = null;
+let _fleetCancelRouteButtons: Array<{ x: number; y: number; w: number; h: number; routeId: string }> = [];
 
 // Foreign (enemy) fleet data — ships at other players' stars
 const _foreignShipsByStarIndex = new Map<number, { owner: string; ships: Array<{ typeId: number; count: number }> }>();
@@ -4177,7 +4514,22 @@ export function setServerShipState(
 export function setServerFleetAll(
   stars: Record<string, { ships: Array<{ typeId: number; count: number }>; building: { typeId: number; completeAt: number } | null }>,
   transits?: TransitRecord[],
+  freighterRoutes?: FreighterRouteRecord[],
 ): void {
+  // Detect freighter route leg completions for sound effects (disabled — voice too repetitive)
+  // if (freighterRoutes && _serverFreighterRoutes.length > 0) {
+  //   for (const newRoute of freighterRoutes) {
+  //     const oldRoute = _serverFreighterRoutes.find(r => r.id === newRoute.id);
+  //     if (oldRoute && oldRoute.leg !== newRoute.leg) {
+  //       if (newRoute.leg === 'outbound') {
+  //         playSound('freighter_unloading');
+  //       } else {
+  //         playSound('freighter_arrived');
+  //       }
+  //     }
+  //   }
+  // }
+
   _serverShipsByStarIndex.clear();
   for (const [key, val] of Object.entries(stars)) {
     // keys are "s:N" format
@@ -4187,6 +4539,14 @@ export function setServerFleetAll(
     }
   }
   _serverTransits = transits ?? [];
+  _serverFreighterRoutes = freighterRoutes ?? [];
+}
+
+/** Consume a pending freighter route cancel request. */
+export function consumePendingCancelRoute(): string | null {
+  const id = _pendingCancelRoute;
+  _pendingCancelRoute = null;
+  return id;
 }
 
 export function consumePendingBuildRequest(): { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' } | null {

@@ -4,7 +4,7 @@
 
 **Platform:** Devvit WebView (TypeScript/Canvas2D), current `spacehunt` codebase.
 
-**Last Updated:** 2026-07-24 (v0.0.301)
+**Last Updated:** 2026-07-28 (v1.1.31)
 
 ---
 
@@ -13,21 +13,25 @@
 | # | Issue | Status | Notes |
 |---|---|---|---|
 | 1 | Boundary issue in solar tier — no need to scroll | ❌ Open | System view should fit without scrolling. |
-| 2 | Leaving solar→galaxy with bounds on loses bounds state | 🧪 Ready to Test | Bounds state now persisted in localStorage. Survives tier changes and page reloads. |
-| 3 | Galaxy view: separate ship nav from fleet movement picker | ❌ Open | Ship movement shows where ship is + lets user explore. Fleet picker selects ship/location → directs to destination. Probes can explore any star. Colony ships only to fully-explored stars (not probe-explored). Probe info = summary; ship visit = full info. Touch: need a way to select star and show info without hover. |
+| 2 | Leaving solar→galaxy with bounds on loses bounds state | ✅ Fixed | Bounds state now persisted in localStorage. Survives tier changes and page reloads. |
+| 3 | Galaxy view: separate ship nav from fleet movement picker | ✅ Done | Transfer mode with per-ship-type filtering (probes→undiscovered, colony→probed+unowned, freighter→owned+trade stations). |
 | 4 | Star coloring not working — see red stars after visiting | ✅ Fixed (v0.0.293) | Foreign stars now show red via `getGalaxyStarTone()` checking `owner === 'foreign'`. |
 | 5 | Ship name editing blocked by steering keys | ✅ Fixed (v0.0.257) | Mode flag added — keyboard input passes through when editing ship name. |
 | 6 | iPad sizing | ❌ Open | Layout/canvas not adapting properly to iPad screen dimensions. |
 | 7 | Pinch gesture conflicts with ship movement | ❌ Open | Pinch-to-zoom triggers ship movement instead of being handled as zoom. Need gesture disambiguation. |
 | 8 | Galaxy fuel vs system fuel | ❌ Open | Does galaxy view show fuel status? Should there be separate fuel pools for warp (galaxy) vs thruster (system/planet)? |
 | 9 | Extended discovery: belt items, planet items, multiple ores, Knowledge | ❌ Open | Items discoverable in belts and on planets. Multiple ore types. Knowledge = plans/blueprints that unlock build tree upgrades. |
-| 10 | Entry into solar tier dumps into belt | 🧪 Ready to Test | `restorePosition` now places ship at system edge (dist 20) instead of center (dist 3). Live Galaxy→System transitions already placed at edge. |
-| 11 | Belt (Local tier) missing side controls | ✅ Done | Added `drawControlButtons` to Local tier render. Side panels (STATUS/FLEET) were already drawn; recenter/boundary button was missing. |
-| 12 | Ship docked voice repeats on fleet/galaxy view switch | 🧪 Ready to Test | Dock state now saved/restored across temporary galaxy jumps for fleet panel. |
-| 13 | COMPLETE button visible to all players | 🧪 Ready to Test | COMPLETE button now gated behind `_isAdmin` flag, set from `ADMIN_USERS` list in client. |
-| 14 | Help/journey system not persisting across sessions | 🧪 Ready to Test | Journey completion now saved to localStorage (`spacehunt_journey_done`). |
-| 15 | Help/journey voice plays in system tier | 🧪 Ready to Test | `updateJourney()` now gated to Planet tier only. |
-| 16 | Probe not consumed after arrival | 🧪 Ready to Test | Probes (type 11/12) now consumed on arrival instead of being added to destination fleet. Still marks star as discovered. |
+| 10 | Entry into solar tier dumps into belt | ✅ Fixed | `restorePosition` now places ship at system edge (dist 20) instead of center (dist 3). |
+| 11 | Belt (Local tier) missing side controls | ✅ Done | Added `drawControlButtons` to Local tier render. |
+| 12 | Ship docked voice repeats on fleet/galaxy view switch | ✅ Fixed | Dock state now saved/restored across temporary galaxy jumps for fleet panel. |
+| 13 | COMPLETE button visible to all players | ✅ Fixed | COMPLETE button now gated behind `_isAdmin` flag. |
+| 14 | Help/journey system not persisting across sessions | ✅ Fixed | Journey completion saved to localStorage. |
+| 15 | Help/journey voice plays in system tier | ✅ Fixed | `updateJourney()` now gated to Planet tier only. |
+| 16 | Probe not consumed after arrival | ✅ Fixed | Probes consumed on arrival, star marked as discovered. discoveredStars returned in FleetAllResponse. |
+| 17 | COMS nested replies + loading state | ✅ Fixed (v1.1.20) | Reddit comment threading support with depth display. |
+| 18 | Layout overlapping (fleet ships, feature labels, player names) | ✅ Fixed (v1.1.25) | Increased spacing constants across galaxy view. |
+| 19 | Trading station ⚖ icon visible before discovery | ✅ Fixed (v1.1.31) | Icon only shown after star is probed/visited. |
+| 20 | Probe arrival not updating star to probed state | ✅ Fixed (v1.1.29) | Server now returns discoveredStars in FleetAllResponse; client uses authoritative list. |
 
 ---
 
@@ -109,7 +113,7 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 
 ---
 
-## Feature 4 — Star Colonization ✅ DONE (v0.0.301)
+## Feature 4 — Star Colonization ✅ DONE (v1.1.25)
 
 **What:** Send a Colony Ship (type 8) to a probed/visited unclaimed star, fly there, dock at station, and press COLONIZE to claim it.
 
@@ -124,42 +128,51 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 | 4.4 | Probe SEND filtering | ✅ | Selection circles only appear on unvisited OR foreign-owned stars. |
 | 4.5 | Colony Ship consumed | ✅ | Colony ship removed from fleet on successful colonization. |
 | 4.6 | Visual update | ✅ | Colonized star immediately set to `owner: 'player'` in local game state → blue tint. BUILD/SHIPS tabs unlock. |
-| 4.7 | Probe intel at foreign stars | ⏳ | Deferred — requires passing postId through fleet reconciliation. Planned for follow-up. |
+| 4.7 | Trading stations blocked | ✅ | `colonizeStar()` rejects trading station stars with error. |
 
 ---
 
-## Feature 5 — Cargo and Trade ❌ NOT STARTED
+## Feature 5 — Freighter Trade Routes & Trading Stations ✅ COMPLETE (v1.1.31)
 
-**What:** Freighters carry resources between stars. Resources at a star can be loaded into a ship's cargo hold and unloaded at the destination.
+**What:** Freighters run persistent cargo loops between player-owned stars (automated trade routes). Trading stations are neutral stars (~5% of galaxy) where players exchange resources at dynamic rates.
 
-**Why fifth:** cargo transport connects isolated economies — excess ore at one star can fuel building at another.
+**Why fifth:** cargo transport connects isolated economies — excess ore at one star can fuel building at another. Trading stations provide a resource exchange mechanism without requiring multiple colonies.
 
 ### Sub-features
-| # | Item | Detail |
-|---|---|---|
-| 5.1 | Cargo schema | Each ship carries `{ ore, food, energy }` cargo, capped at ship's transport capacity. |
-| 5.2 | LoadCargo command | Server checks ship is at star, resources available, deducts from star store, adds to cargo. |
-| 5.3 | UnloadCargo command | Server checks ship is at destination, adds cargo to star store (up to cap). |
-| 5.4 | Cargo UI | Ship detail panel shows current cargo. Load/Unload buttons on dock panel when at a star. |
-| 5.5 | Tests | Load/unload success, cap enforcement, ship-not-present rejection. |
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 5.1 | Freighter route schema | ✅ | `FreighterRoute` with id, homeStar, targetStar, cargo, leg (outbound/return), departedAt, arrivalAt. Stored in `ships` profile field. |
+| 5.2 | Assign route command | ✅ | `POST /api/fleet/freighter-route` — validates freighter at home star, creates persistent loop. |
+| 5.3 | Cancel route command | ✅ | `DELETE /api/fleet/freighter-route` — returns freighter to home star. |
+| 5.4 | Route reconciliation | ✅ | `loadAllFleet()` reconciles route legs: outbound→load cargo from target, return→deliver to home. Auto-relaunches. |
+| 5.5 | Trading station selection | ✅ | Deterministic: hash(postId, starIndex) mod 20 === 0 → ~5% of stars. `shared/trading.ts`. |
+| 5.6 | Trading station economy | ✅ | Each station has stock (ore/food/energy), restocks toward equilibrium (1000) at 10/min. `server/core/trading.ts`. |
+| 5.7 | Exchange rates | ✅ | Dynamic: `rate = clamp(stationHasReceive / stationHasGive, 0.5, 2.0)`. Supply/demand pricing. |
+| 5.8 | Trade execution | ✅ | `POST /api/trade-station/trade` — deducts from player's best star, updates station stock, returns received amount. Max 200/tx. |
+| 5.9 | Trade UI | ✅ | STATUS panel becomes TRADE panel at trading stations: shows stock, 6 exchange rate buttons (TRADE 50 each). |
+| 5.10 | Galaxy map icon | ✅ | Gold ⚖ icon above trading station stars (only visible after probed/visited). |
+| 5.11 | Freighter target filtering | ✅ | Freighters can be sent to player-owned stars OR discovered trading stations. |
+| 5.12 | Colonization block | ✅ | Trading stations cannot be colonized — server rejects with error. |
+| 5.13 | Admin: Show Trade Stations | ✅ | Admin panel button lists all trading station names and indices. |
+| 5.14 | Sound: first trade only | ✅ | Voice announcement plays only on first trade per session to avoid repetition. |
 
 ---
 
-## Feature 6 — Ship Movement ⚠️ PARTIAL (transfer/transit exists, no real-time interpolation)
+## Feature 6 — Ship Movement ✅ DONE (transit-based)
 
-**What:** Ships and fleets move across the galaxy map between stars. Movement is time-based; the server stores start/target/ETA and the client interpolates.
+**What:** Ships and fleets move across the galaxy map between stars. Movement is time-based with server-stored start/target/ETA; client shows transit progress.
 
 **Why sixth:** movement is the connective tissue for trade, colonization, and combat.
 
 ### Sub-features
-| # | Item | Detail |
-|---|---|---|
-| 6.1 | MoveShip command | Server records `{ startTime, startPos, targetPos, eta }` based on ship speed. |
-| 6.2 | Client interpolation | Client estimates current ship position from stored movement data without additional server calls. |
-| 6.3 | Arrival handling | On profile load: if `eta` past, snap ship to target, trigger arrival event (unload, colonize trigger, etc.). |
-| 6.4 | Fleet movement | MoveFleet issues one command for all ships in fleet; same ETA logic. |
-| 6.5 | Galaxy view markers | Moving ships shown as ghost trails or markers on galaxy/system maps. |
-| 6.6 | Tests | ETA computation. Arrival state machine. Fleet movement grouping. |
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 6.1 | Transfer command | ✅ | `POST /fleet/transfer` creates `ShipTransit` with speed-based travel time (`BASE_TRANSIT_SECONDS / speed`). |
+| 6.2 | Transit reconciliation | ✅ | `loadAllFleet()` resolves arrived transits on every poll — delivers ships to destination star. |
+| 6.3 | Transit display | ✅ | Fleet panel shows in-transit ships with progress indicator and ETA. Galaxy view shows transit lines. |
+| 6.4 | Per-ship-type filtering | ✅ | Transfer mode shows valid targets based on ship type (probes→undiscovered, colony→probed+unowned, freighter→owned+trade). |
+| 6.5 | Freighter routes | ✅ | Persistent automated loops (outbound/return legs) with cargo loading/unloading on arrival. |
+| 6.6 | Client interpolation | ⏳ | No real-time position interpolation on galaxy map — ships jump on arrival. Cosmetic only. |
 
 ---
 
@@ -246,8 +259,8 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 | Phase | Features | Status | Goal |
 |---|---|---|---|
 | **P1** | 1 Resources, 2 Buildings | ✅ Complete | Stars produce resources. Players can build and upgrade. |
-| **P2** | 3 Ship Building, 4 Colonization | ⚠️ Ships done, Colonization not started | Players build ships and expand. |
-| **P3** | 5 Cargo, 6 Movement | ⚠️ Transfer/transit exists, no cargo or interpolation | Trade routes and inter-star economy emerge. |
+| **P2** | 3 Ship Building, 4 Colonization | ✅ Complete | Players build ships and expand to new stars. |
+| **P3** | 5 Trade Routes + Trading Stations, 6 Movement | ✅ Complete | Freighter routes, trading stations, inter-star economy. |
 | **P4** | 7 Currency, 8 Combat | ❌ Not started | Economy rewards and conflict. |
 | **P5** | 9 Quests, 10 Social | ❌ Not started | Onboarding, retention, alliances. |
 | **P6** | 11 Sharing | ❌ Not started | Organic virality via Reddit-native sharing. |

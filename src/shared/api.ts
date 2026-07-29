@@ -234,9 +234,37 @@ export type ShipTransit = {
   arrivalAt: number;    // epoch ms
 };
 
+export type FreighterRoute = {
+  id: string;                       // unique route id
+  homeStarIndex: number;            // where cargo is delivered (home base)
+  targetStarIndex: number;          // where cargo is picked up
+  cargo: ResourceStore;             // what the freighter is currently carrying
+  departedAt: number;               // epoch ms when current leg started
+  arrivalAt: number;                // epoch ms when current leg completes
+  leg: 'outbound' | 'return';      // outbound = going to pickup, return = coming home loaded
+};
+
+export type FreighterRouteRequest = {
+  username: string;
+  homeStarIndex: number;
+  targetStarIndex: number;
+};
+
+export type FreighterRouteResponse = {
+  ok: true;
+  route: FreighterRoute;
+};
+
+export type FreighterRouteCancelRequest = {
+  username: string;
+  routeId: string;
+};
+
 export type FleetAllResponse = {
   stars: Record<string, { ships: StarShipsState; building: ShipBuildingState | null }>;
   transits: ShipTransit[];
+  freighterRoutes: FreighterRoute[];
+  discoveredStars: number[];
 };
 
 export type FleetTransferRequest = {
@@ -295,4 +323,68 @@ export type AdminPlayerSummary = {
 
 export type AdminPlayerStatsResponse = {
   players: AdminPlayerSummary[];
+};
+
+// ── Coms (Reddit Comments) ──────────────────────────────────────────────────
+
+export type ComsMessage = {
+  id: string;
+  author: string;
+  body: string;
+  createdAt: number; // epoch ms
+  isApp: boolean;
+  depth: number; // 0 = top-level, 1+ = nested reply
+};
+
+export type ComsResponse = {
+  messages: ComsMessage[];
+  total: number;
+};
+
+export type ComsReplyRequest = {
+  text: string;
+};
+
+export type ComsUnreadResponse = {
+  hasNew: boolean;
+  count: number;
+  latestTimestamp: number;
+};
+
+// ── Trading Stations ────────────────────────────────────────────────────────
+
+export type TradeStationState = {
+  stock: ResourceStore;
+  lastTickMs: number;
+};
+
+export type TradeStationInfoResponse = {
+  starIndex: number;
+  stock: ResourceStore;
+  rates: {
+    ore_food: number;
+    ore_energy: number;
+    food_ore: number;
+    food_energy: number;
+    energy_ore: number;
+    energy_food: number;
+  };
+};
+
+export type TradeRequest = {
+  username: string;
+  starIndex: number;
+  giveType: 'ore' | 'food' | 'energy';
+  receiveType: 'ore' | 'food' | 'energy';
+  giveAmount: number;
+};
+
+export type TradeResponse = {
+  ok: true;
+  gave: number;
+  received: number;
+  giveType: 'ore' | 'food' | 'energy';
+  receiveType: 'ore' | 'food' | 'energy';
+  playerStore: ResourceStore;
+  stationStock: ResourceStore;
 };

@@ -5,7 +5,7 @@
 import { context, requestExpandedMode } from '@devvit/web/client';
 import { telemetry } from '@devvit/analytics/client/reddit';
 import versionJson from '../../version.json';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, createDevvitBridge, getGameState, getDiscoveredStars, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, playSound, preloadSounds, onColonizeSuccess } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, playSound, preloadSounds, onColonizeSuccess, setComsMessages, setComsUnread, clearComsUnread, isComsPanelOpen, setComsLoading, setPostId, setTradeStationInfo } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
@@ -13,6 +13,8 @@ import type {
   BuildBuildingRequest,
   ClaimPodResponse,
   ClaimedPodsResponse,
+  ComsResponse,
+  ComsUnreadResponse,
   FleetAllResponse,
   PlayerProfileResponse,
   PoseUpdateRequest,
@@ -22,7 +24,9 @@ import type {
   StarEconomyResponse,
   StarShipsResponse,
   ShotsResponse,
+  TradeStationInfoResponse,
 } from '../shared/api';
+import { isTradingStation } from '../shared/trading';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) throw new Error('Canvas #game-canvas not found');
@@ -63,6 +67,7 @@ const playFullBtn = document.getElementById('play-full') ?? document.createEleme
 const _t0 = performance.now();
 const username = context.username ?? 'pilot';
 const postId = context.postId ?? 'standalone:dev';
+let hasTraded = false;
 console.log(`[PERF] context resolved in ${(performance.now() - _t0).toFixed(0)}ms`);
 
 // Set version in settings panel (Vite replaces __APP_VERSION__ in JS modules)
@@ -186,6 +191,7 @@ const bridge: DevvitBridge = createDevvitBridge(canvas, {
 bridge.setPlayerName(username);
 bridge.setShipShape('scout');
 bridge.setSharedWorldSeed(postId);
+setPostId(postId);
 preloadSounds();
 
 // Start rendering immediately (splash/preview mode — no networking yet)
@@ -299,6 +305,56 @@ async function pollShots() {
   }
 }
 
+// ── Coms Polling ────────────────────────────────────────────────────────────
+
+async function pollComsUnread() {
+  try {
+    const res = await fetch(`/api/coms/unread?username=${encodeURIComponent(username)}`);
+    if (res.ok) {
+      const data = await res.json() as ComsUnreadResponse;
+      setComsUnread(data.count);
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+async function pollComsMessages() {
+  try {
+    setComsLoading(true);
+    const res = await fetch('/api/coms/messages?limit=50');
+    if (res.ok) {
+      const data = await res.json() as ComsResponse;
+      setComsMessages(data.messages);
+    } else {
+      setComsLoading(false);
+    }
+  } catch (_e) { setComsLoading(false); }
+}
+
+async function markComsRead() {
+  try {
+    await fetch(`/api/coms/mark-read?username=${encodeURIComponent(username)}`, { method: 'POST' });
+    clearComsUnread();
+  } catch (_e) { /* ignore */ }
+}
+
+// Poll coms: check unread every 30s, fetch messages when panel is open
+let _lastComsOpen = false;
+function pollComsLoop() {
+  const panelOpen = isComsPanelOpen();
+  if (panelOpen && !_lastComsOpen) {
+    // Panel just opened — fetch messages and mark read
+    void pollComsMessages();
+    void markComsRead();
+  } else if (panelOpen) {
+    // Panel staying open — refresh messages periodically (handled by interval)
+    void pollComsMessages();
+  } else {
+    // Panel closed — just check unread count
+    void pollComsUnread();
+  }
+  _lastComsOpen = panelOpen;
+}
+
 async function pollEconomy() {
   try {
     const gs = getGameState();
@@ -309,26 +365,98 @@ async function pollEconomy() {
       // Process pending fleet transfers
       const transfer = consumePendingTransfer();
       if (transfer) {
+        // Freighter (typeId 2) → create a persistent trade route instead of one-time transfer
+        if (transfer.shipTypeId === 2) {
+          try {
+            const routeRes = await fetch('/api/fleet/freighter-route', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                username,
+                homeStarIndex: transfer.fromStarIndex,
+                targetStarIndex: transfer.toStarIndex,
+              }),
+            });
+            if (!routeRes.ok) {
+              const err = await routeRes.json().catch(() => ({ message: 'unknown' }));
+              console.warn('[FLEET] freighter route failed:', err);
+            } else {
+              playSound('send');
+            }
+          } catch (e) {
+            console.warn('[FLEET] freighter route error:', e);
+          }
+        } else {
+          try {
+            const transferRes = await fetch('/api/fleet/transfer', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                username,
+                fromStarIndex: transfer.fromStarIndex,
+                toStarIndex: transfer.toStarIndex,
+                shipTypeId: transfer.shipTypeId,
+                count: transfer.count,
+              }),
+            });
+            if (!transferRes.ok) {
+              const err = await transferRes.json().catch(() => ({ message: 'unknown' }));
+              console.warn('[FLEET] transfer failed:', err);
+            } else {
+              playSound('send');
+            }
+          } catch (e) {
+            console.warn('[FLEET] transfer error:', e);
+          }
+        }
+      }
+
+      // Process pending cancel route
+      const cancelRouteId = consumePendingCancelRoute();
+      if (cancelRouteId) {
         try {
-          const transferRes = await fetch('/api/fleet/transfer', {
+          await fetch('/api/fleet/freighter-route', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, routeId: cancelRouteId }),
+          });
+        } catch (e) {
+          console.warn('[FLEET] cancel route error:', e);
+        }
+      }
+
+      // Process pending trade
+      const pendingTrade = consumePendingTrade();
+      if (pendingTrade && gs) {
+        const tradeStarIndex = gs.galaxy.currentStarIndex;
+        try {
+          const tradeRes = await fetch('/api/trade-station/trade', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               username,
-              fromStarIndex: transfer.fromStarIndex,
-              toStarIndex: transfer.toStarIndex,
-              shipTypeId: transfer.shipTypeId,
-              count: transfer.count,
+              starIndex: tradeStarIndex,
+              giveType: pendingTrade.giveType,
+              receiveType: pendingTrade.receiveType,
+              giveAmount: 50,
             }),
           });
-          if (!transferRes.ok) {
-            const err = await transferRes.json().catch(() => ({ message: 'unknown' }));
-            console.warn('[FLEET] transfer failed:', err);
+          if (tradeRes.ok) {
+            if (!hasTraded) { playSound('freighter_unloading'); hasTraded = true; }
+            // Refresh trade station info
+            const refreshRes = await fetch(`/api/trade-station?postId=${encodeURIComponent(postId)}&starIndex=${tradeStarIndex}`);
+            if (refreshRes.ok) {
+              const tradeData = await refreshRes.json() as TradeStationInfoResponse;
+              setTradeStationInfo(tradeData);
+            }
           } else {
-            playSound('send');
+            const err = await tradeRes.json().catch(() => ({ message: 'unknown' }));
+            console.warn('[TRADE] failed:', err);
+            playSound('insufficient_resources');
           }
         } catch (e) {
-          console.warn('[FLEET] transfer error:', e);
+          console.warn('[TRADE] error:', e);
+          playSound('fuel_critical');
         }
       }
 
@@ -336,21 +464,13 @@ async function pollEconomy() {
         const fleetRes = await fetch(`/api/fleet/all?username=${encodeURIComponent(username)}`);
         if (fleetRes.ok) {
           const fleetData = await fleetRes.json() as FleetAllResponse;
-          setServerFleetAll(fleetData.stars, fleetData.transits);
-          // Mark stars with probes as discovered (probed level)
-          const PROBE_TYPE_IDS = [11, 12];
-          const probeStars: number[] = [];
-          for (const [key, val] of Object.entries(fleetData.stars)) {
-            const idx = parseInt(key.replace('s:', ''), 10);
-            if (!Number.isNaN(idx) && val.ships.some(s => PROBE_TYPE_IDS.includes(s.typeId) && s.count > 0)) {
-              probeStars.push(idx);
-            }
-          }
-          if (probeStars.length > 0) {
+          setServerFleetAll(fleetData.stars, fleetData.transits, fleetData.freighterRoutes);
+          // Mark discovered stars from server (probes consumed on arrival)
+          if (fleetData.discoveredStars && fleetData.discoveredStars.length > 0) {
             const gs2 = getGameState();
             if (gs2) {
               let newDiscovery = false;
-              for (const si of probeStars) {
+              for (const si of fleetData.discoveredStars) {
                 const star = gs2.galaxy.stars[si];
                 if (star && star.discoveryLevel === 'none') {
                   star.discoveryLevel = 'probed';
@@ -577,14 +697,12 @@ async function pollEconomy() {
       if (fleetRes.ok) {
         const fleetData = await fleetRes.json() as FleetAllResponse;
         setServerFleetAll(fleetData.stars, fleetData.transits);
-        // Mark stars with probes as discovered (probed level)
-        const PROBE_TYPE_IDS = [11, 12];
-        const gs2 = getGameState();
-        if (gs2) {
-          for (const [key, val] of Object.entries(fleetData.stars)) {
-            const idx = parseInt(key.replace('s:', ''), 10);
-            if (!Number.isNaN(idx) && val.ships.some(s => PROBE_TYPE_IDS.includes(s.typeId) && s.count > 0)) {
-              const star = gs2.galaxy.stars[idx];
+        // Mark discovered stars from server
+        if (fleetData.discoveredStars && fleetData.discoveredStars.length > 0) {
+          const gs2 = getGameState();
+          if (gs2) {
+            for (const si of fleetData.discoveredStars) {
+              const star = gs2.galaxy.stars[si];
               if (star && star.discoveryLevel === 'none') {
                 star.discoveryLevel = 'probed';
                 star.discovered = true;
@@ -594,6 +712,18 @@ async function pollEconomy() {
         }
       }
     } catch (_e) { /* ignore */ }
+    // ── Trade Station polling ──
+    if (isTradingStation(postId, starIndex)) {
+      try {
+        const tradeRes = await fetch(`/api/trade-station?postId=${encodeURIComponent(postId)}&starIndex=${starIndex}`);
+        if (tradeRes.ok) {
+          const tradeData = await tradeRes.json() as TradeStationInfoResponse;
+          setTradeStationInfo(tradeData);
+        }
+      } catch (_e) { /* ignore */ }
+    } else {
+      setTradeStationInfo(null);
+    }
   } catch (_e) {
     // Ignore temporary network errors.
   }
@@ -702,7 +832,9 @@ function startMultiplayer() {
   economyPollInterval = setInterval(pollEconomy, 1500);
   setInterval(savePositionIfChanged, 5000);
   setInterval(sendStatsHeartbeat, STATS_HEARTBEAT_MS);
+  setInterval(pollComsLoop, 15000); // check coms every 15s
   void pollEconomy();
+  void pollComsUnread(); // initial unread check
 
   // Fetch already-claimed pods so late-joiners see correct state
   fetch(`/api/claimed-pods?postId=${encodeURIComponent(postId)}`)
@@ -793,15 +925,50 @@ helpBtn.addEventListener('click', (e) => {
 helpPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
 helpPanel.addEventListener('click', (e) => e.stopPropagation());
 
+// ── Help panel tabs ─────────────────────────────────────────────────────────
+document.querySelectorAll('.help-tab-btn').forEach(btn => {
+  btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const tab = (btn as HTMLElement).dataset.helpTab;
+    if (!tab) return;
+    document.querySelectorAll('.help-tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.help-tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(`help-tab-${tab}`)?.classList.add('active');
+  });
+});
+
+// ── Ghost list with paging ──────────────────────────────────────────────────
+const GHOST_PAGE_SIZE = 5;
+let ghostPage = 0;
+const ghostPagerEl = document.getElementById('ghost-pager');
+
 function updateGhostList() {
   const ghosts = bridge.getGhosts();
   if (ghosts.length === 0) {
     ghostListEl.innerHTML = '<span class="ghost-empty">none nearby</span>';
+    if (ghostPagerEl) ghostPagerEl.innerHTML = '';
+    ghostPage = 0;
     return;
   }
-  ghostListEl.innerHTML = ghosts.map(g =>
+  // Clamp page
+  const maxPage = Math.max(0, Math.ceil(ghosts.length / GHOST_PAGE_SIZE) - 1);
+  if (ghostPage > maxPage) ghostPage = maxPage;
+  const start = ghostPage * GHOST_PAGE_SIZE;
+  const pageGhosts = ghosts.slice(start, start + GHOST_PAGE_SIZE);
+  ghostListEl.innerHTML = pageGhosts.map(g =>
     `<div class="ghost-row"><span class="ghost-name">${escapeHtml(g.name)}</span><span class="ghost-coords">(${g.x}, ${g.y})</span></div>`
   ).join('');
+  // Pager buttons
+  if (ghostPagerEl) {
+    const parts: string[] = [];
+    if (ghostPage > 0) parts.push('<button class="pager-btn" id="ghost-prev">\u25b2 back</button>');
+    if (ghostPage < maxPage) parts.push(`<button class="pager-btn" id="ghost-next">\u25bc ${ghosts.length - start - pageGhosts.length} more</button>`);
+    ghostPagerEl.innerHTML = parts.join('');
+    document.getElementById('ghost-prev')?.addEventListener('click', (e) => { e.stopPropagation(); ghostPage--; updateGhostList(); });
+    document.getElementById('ghost-next')?.addEventListener('click', (e) => { e.stopPropagation(); ghostPage++; updateGhostList(); });
+  }
 }
 
 function escapeHtml(s: string): string {
@@ -880,6 +1047,9 @@ document.getElementById('admin-refresh')!.addEventListener('click', () => {
 });
 
 const adminPlayerStats = document.getElementById('admin-player-stats')!;
+const adminStatsPager = document.getElementById('admin-stats-pager');
+const ADMIN_STATS_PAGE_SIZE = 4;
+let adminStatsPage = 0;
 let lastPlayerStatsData: Array<{username:string;starName:string;starIndex:number;playtimeSeconds:number;interactions:number;lastSeen:number;totalBuildingLevels:number;totalShips:number;shipBreakdown:Array<{name:string;count:number}>}> = [];
 
 function formatPlaytime(seconds: number): string {
@@ -899,24 +1069,43 @@ function formatTimeSince(ts: number): string {
   return `${Math.floor(ago / 86400)}d ago`;
 }
 
+function renderAdminStatsPage() {
+  if (lastPlayerStatsData.length === 0) {
+    adminPlayerStats.innerHTML = '<span style="color:#776655">no players</span>';
+    if (adminStatsPager) adminStatsPager.innerHTML = '';
+    return;
+  }
+  const maxPage = Math.max(0, Math.ceil(lastPlayerStatsData.length / ADMIN_STATS_PAGE_SIZE) - 1);
+  if (adminStatsPage > maxPage) adminStatsPage = maxPage;
+  const start = adminStatsPage * ADMIN_STATS_PAGE_SIZE;
+  const page = lastPlayerStatsData.slice(start, start + ADMIN_STATS_PAGE_SIZE);
+  adminPlayerStats.innerHTML = page.map(p => {
+    const ships = p.shipBreakdown.map(s => `${s.count}x ${escapeHtml(s.name)}`).join(', ') || 'none';
+    return `<div class="admin-player-card">
+      <div><span class="player-name">${escapeHtml(p.username)}</span> — <span class="player-star">${escapeHtml(p.starName)} (#${p.starIndex})</span></div>
+      <div class="player-detail">Playtime: ${formatPlaytime(p.playtimeSeconds)} | Actions: ${p.interactions} | Last: ${formatTimeSince(p.lastSeen)}</div>
+      <div class="player-detail">Buildings: ${p.totalBuildingLevels} lvls | Ships: ${p.totalShips} (${ships})</div>
+    </div>`;
+  }).join('');
+  if (adminStatsPager) {
+    const parts: string[] = [];
+    if (adminStatsPage > 0) parts.push('<button class="admin-pager-btn" id="admin-stats-prev">\u25b2 back</button>');
+    if (adminStatsPage < maxPage) parts.push(`<button class="admin-pager-btn" id="admin-stats-next">\u25bc ${lastPlayerStatsData.length - start - page.length} more</button>`);
+    adminStatsPager.innerHTML = parts.join('');
+    document.getElementById('admin-stats-prev')?.addEventListener('click', (e) => { e.stopPropagation(); adminStatsPage--; renderAdminStatsPage(); });
+    document.getElementById('admin-stats-next')?.addEventListener('click', (e) => { e.stopPropagation(); adminStatsPage++; renderAdminStatsPage(); });
+  }
+}
+
 async function refreshAdminPlayerStats() {
   adminPlayerStats.innerHTML = '<span style="color:#776655">loading...</span>';
+  if (adminStatsPager) adminStatsPager.innerHTML = '';
   try {
     const res = await fetch(`/api/admin/player-stats?postId=${encodeURIComponent(postId)}`);
     const data = await res.json() as { players: typeof lastPlayerStatsData };
     lastPlayerStatsData = data.players ?? [];
-    if (lastPlayerStatsData.length === 0) {
-      adminPlayerStats.innerHTML = '<span style="color:#776655">no players</span>';
-      return;
-    }
-    adminPlayerStats.innerHTML = lastPlayerStatsData.map(p => {
-      const ships = p.shipBreakdown.map(s => `${s.count}x ${escapeHtml(s.name)}`).join(', ') || 'none';
-      return `<div class="admin-player-card">
-        <div><span class="player-name">${escapeHtml(p.username)}</span> — <span class="player-star">${escapeHtml(p.starName)} (#${p.starIndex})</span></div>
-        <div class="player-detail">Playtime: ${formatPlaytime(p.playtimeSeconds)} | Actions: ${p.interactions} | Last: ${formatTimeSince(p.lastSeen)}</div>
-        <div class="player-detail">Buildings: ${p.totalBuildingLevels} lvls | Ships: ${p.totalShips} (${ships})</div>
-      </div>`;
-    }).join('');
+    adminStatsPage = 0;
+    renderAdminStatsPage();
   } catch (_e) {
     adminPlayerStats.innerHTML = '<span style="color:#776655">error</span>';
   }
@@ -995,6 +1184,21 @@ document.getElementById('admin-spawn-enemy')!.addEventListener('click', async ()
       adminStatus!.textContent = data.message ?? 'error';
     }
   } catch (_e) { adminStatus!.textContent = 'error'; }
+});
+document.getElementById('admin-trade-stations')!.addEventListener('click', () => {
+  const gs = getGameState();
+  if (!gs) { adminStatus!.textContent = 'no game state'; return; }
+  const names: string[] = [];
+  for (const star of gs.galaxy.stars) {
+    if (isTradingStation(postId, star.index)) {
+      names.push(`${star.name} (#${star.index})`);
+    }
+  }
+  const el = document.getElementById('admin-trade-list')!;
+  el.innerHTML = names.length > 0
+    ? names.map(n => `<div>${n}</div>`).join('')
+    : '<span style="color:#776655">none</span>';
+  adminStatus!.textContent = `${names.length} trading station(s)`;
 });
 } catch (adminErr) { console.error('[ADMIN] init error:', adminErr); }
 

@@ -9,6 +9,8 @@ import type {
   BuildType,
   FleetAllResponse,
   FleetTransferResponse,
+  FreighterRoute,
+  FreighterRouteResponse,
   ResourceStore,
   ShipBuildingState,
   ShipTransit,
@@ -46,6 +48,7 @@ import {
 } from '../../shared/buildings';
 import { SHIP_CATALOG, canBuildShip, getUpgradeTarget, canUpgradeShip } from '../../shared/ships';
 import { getStarName } from '../../shared/star-names';
+import { isTradingStation } from '../../shared/trading';
 
 const ECONOMY_FIELD = 'economy';
 const DEFAULT_STORE: ResourceStore = { ore: 640, food: 640, energy: 640 };
@@ -456,6 +459,7 @@ type StoredShipsProfile = {
     building: ShipBuildingState | null;
   }>;
   transits?: ShipTransit[];
+  freighterRoutes?: FreighterRoute[];
 };
 
 /** Base transit time in seconds; divided by ship speed. */
@@ -725,7 +729,83 @@ export async function loadAllFleet(
     }
   }
 
-  return { stars: result, transits: pendingTransits };
+  // ── Reconcile freighter routes ──
+  const activeRoutes: FreighterRoute[] = [];
+  let routesDirty = false;
+  if (profile.freighterRoutes && profile.freighterRoutes.length > 0) {
+    for (const route of profile.freighterRoutes) {
+      if (route.arrivalAt <= now) {
+        // A leg completed
+        if (route.leg === 'outbound') {
+          // Arrived at pickup star — load cargo from target star's economy
+          const economy = await loadEconomyProfile(store, username);
+          const tKey = starKey(route.targetStarIndex);
+          const targetStar = normalizeStarState(economy.stars[tKey] ?? {}, now);
+          const ticked = tickStarEconomy(targetStar, now);
+          const capacity = SHIP_CATALOG[2].transport; // 500
+
+          const cargo: ResourceStore = {
+            ore: Math.min(ticked.store.ore, capacity),
+            food: Math.min(ticked.store.food, capacity),
+            energy: Math.min(ticked.store.energy, capacity),
+          };
+          // Deduct from target star
+          ticked.store.ore -= cargo.ore;
+          ticked.store.food -= cargo.food;
+          ticked.store.energy -= cargo.energy;
+          economy.stars[tKey] = ticked;
+          await saveEconomyProfile(store, username, economy);
+
+          // Start return leg with cargo
+          const speed = SHIP_CATALOG[2].speed;
+          const transitMs = Math.round((BASE_TRANSIT_SECONDS / speed) * 1000);
+          route.cargo = cargo;
+          route.leg = 'return';
+          route.departedAt = now;
+          route.arrivalAt = now + transitMs;
+          activeRoutes.push(route);
+          routesDirty = true;
+        } else {
+          // Return leg complete — deliver cargo to home star's economy
+          const economy = await loadEconomyProfile(store, username);
+          const hKey = starKey(route.homeStarIndex);
+          const homeStar = normalizeStarState(economy.stars[hKey] ?? {}, now);
+          const ticked = tickStarEconomy(homeStar, now);
+          ticked.store.ore = Math.min(ticked.cap, ticked.store.ore + route.cargo.ore);
+          ticked.store.food = Math.min(ticked.cap, ticked.store.food + route.cargo.food);
+          ticked.store.energy = Math.min(ticked.cap, ticked.store.energy + route.cargo.energy);
+          economy.stars[hKey] = ticked;
+          await saveEconomyProfile(store, username, economy);
+
+          // Start next outbound leg (empty cargo)
+          const speed = SHIP_CATALOG[2].speed;
+          const transitMs = Math.round((BASE_TRANSIT_SECONDS / speed) * 1000);
+          route.cargo = { ore: 0, food: 0, energy: 0 };
+          route.leg = 'outbound';
+          route.departedAt = now;
+          route.arrivalAt = now + transitMs;
+          activeRoutes.push(route);
+          routesDirty = true;
+        }
+      } else {
+        activeRoutes.push(route);
+      }
+    }
+  }
+
+  if (routesDirty) {
+    profile.freighterRoutes = activeRoutes;
+    await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
+  }
+
+  // Load discovered stars list to send to client
+  let discoveredStars: number[] = [];
+  try {
+    const dsRaw = await store.hGet(`profile:${username}`, 'discoveredStars');
+    if (dsRaw) discoveredStars = JSON.parse(dsRaw);
+  } catch { /* ignore */ }
+
+  return { stars: result, transits: pendingTransits, freighterRoutes: activeRoutes, discoveredStars };
 }
 
 /** Transfer ships from one star to another (creates in-transit record). */
@@ -785,6 +865,105 @@ export async function transferShips(
     from: { starIndex: fromStarIndex, ships: fromData.ships },
     transit,
   };
+}
+
+// ── Freighter Trade Routes ────────────────────────────────────────────────────
+
+const FREIGHTER_TYPE_ID: ShipTypeId = 2;
+
+/** Assign a freighter to a persistent trade route between two owned stars. */
+export async function assignFreighterRoute(
+  store: RedisGameStore,
+  username: string,
+  homeStarIndex: number,
+  targetStarIndex: number,
+  now = Date.now(),
+): Promise<FreighterRouteResponse> {
+  if (homeStarIndex === targetStarIndex) throw new Error('Cannot route to same star');
+
+  const raw = await store.hGet(`profile:${username}`, SHIPS_FIELD);
+  const profile = parseShipsProfile(raw);
+
+  const homeKey = starKey(homeStarIndex);
+  const homeData = normalizeStarShipData(profile.stars[homeKey]);
+  reconcileShipBuilding(homeData, now);
+
+  // Check player has a freighter at the home star
+  const freighterSlot = homeData.ships.find((s) => s.typeId === FREIGHTER_TYPE_ID);
+  if (!freighterSlot || freighterSlot.count < 1) {
+    throw new Error('No Freighter at this star');
+  }
+
+  // Remove one freighter from the home star fleet
+  freighterSlot.count -= 1;
+  homeData.ships = homeData.ships.filter((s) => s.count > 0);
+
+  // Calculate outbound transit time
+  const speed = SHIP_CATALOG[FREIGHTER_TYPE_ID].speed;
+  const transitMs = Math.round((BASE_TRANSIT_SECONDS / speed) * 1000);
+
+  const route: FreighterRoute = {
+    id: `fr_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    homeStarIndex,
+    targetStarIndex,
+    cargo: { ore: 0, food: 0, energy: 0 },
+    departedAt: now,
+    arrivalAt: now + transitMs,
+    leg: 'outbound',
+  };
+
+  profile.stars[homeKey] = homeData;
+  if (!profile.freighterRoutes) profile.freighterRoutes = [];
+  profile.freighterRoutes.push(route);
+  await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
+
+  return { ok: true, route };
+}
+
+/** Cancel a freighter trade route — return the freighter to the home star. */
+export async function cancelFreighterRoute(
+  store: RedisGameStore,
+  username: string,
+  routeId: string,
+  now = Date.now(),
+): Promise<{ ok: true }> {
+  const raw = await store.hGet(`profile:${username}`, SHIPS_FIELD);
+  const profile = parseShipsProfile(raw);
+
+  if (!profile.freighterRoutes) throw new Error('No freighter routes');
+  const idx = profile.freighterRoutes.findIndex((r) => r.id === routeId);
+  if (idx < 0) throw new Error('Route not found');
+
+  const route = profile.freighterRoutes[idx]!;
+  profile.freighterRoutes.splice(idx, 1);
+
+  // Return freighter to home star
+  const homeKey = starKey(route.homeStarIndex);
+  const homeData = normalizeStarShipData(profile.stars[homeKey]);
+  const slot = homeData.ships.find((s) => s.typeId === FREIGHTER_TYPE_ID);
+  if (slot) {
+    slot.count += 1;
+  } else {
+    homeData.ships.push({ typeId: FREIGHTER_TYPE_ID, count: 1 });
+  }
+
+  // If the freighter was returning with cargo, deliver it to home star
+  if (route.leg === 'return' && (route.cargo.ore > 0 || route.cargo.food > 0 || route.cargo.energy > 0)) {
+    const economy = await loadEconomyProfile(store, username);
+    const hKey = starKey(route.homeStarIndex);
+    const homeStar = normalizeStarState(economy.stars[hKey] ?? {}, now);
+    const ticked = tickStarEconomy(homeStar, now);
+    ticked.store.ore = Math.min(ticked.cap, ticked.store.ore + route.cargo.ore);
+    ticked.store.food = Math.min(ticked.cap, ticked.store.food + route.cargo.food);
+    ticked.store.energy = Math.min(ticked.cap, ticked.store.energy + route.cargo.energy);
+    economy.stars[hKey] = ticked;
+    await saveEconomyProfile(store, username, economy);
+  }
+
+  profile.stars[homeKey] = homeData;
+  await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
+
+  return { ok: true };
 }
 
 /**
@@ -952,6 +1131,11 @@ export async function colonizeStar(
   now = Date.now(),
 ): Promise<ColonizeResponse> {
   const registryKey = `stars:${postId}`;
+
+  // Trading stations cannot be colonized
+  if (isTradingStation(postId, starIndex)) {
+    throw new Error('Trading stations cannot be colonized');
+  }
 
   // Check if star is already claimed
   const existingOwner = await store.hGet(registryKey, `s:${starIndex}`);

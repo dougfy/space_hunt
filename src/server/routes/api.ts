@@ -15,6 +15,9 @@ import type {
   FleetAllResponse,
   FleetTransferRequest,
   FleetTransferResponse,
+  FreighterRouteRequest,
+  FreighterRouteCancelRequest,
+  FreighterRouteResponse,
   IncrementResponse,
   InitResponse,
   OkResponse,
@@ -28,6 +31,8 @@ import type {
   StarEconomyResponse,
   StarShipsResponse,
   ShotsResponse,
+  TradeRequest,
+  TradeStationInfoResponse,
   UpgradeShipRequest,
   UpgradeShipResponse,
 } from '../../shared/api';
@@ -49,12 +54,17 @@ import {
   loadProfile,
   saveProfile,
   transferShips,
+  assignFreighterRoute,
+  cancelFreighterRoute,
   updatePlayerStats,
   upgradeBuilding,
   upgradeShip,
   storePose,
   storeShots,
 } from '../core/game-service';
+import { getTradeStationInfo, executeTrade } from '../core/trading';
+import { isTradingStation } from '../../shared/trading';
+import type { ResourceType } from '../../shared/trading';
 
 type ErrorResponse = {
   status: 'error';
@@ -507,6 +517,39 @@ api.post('/fleet/transfer', async (c) => {
   }
 });
 
+/** Assign a freighter to a persistent trade route. */
+api.post('/fleet/freighter-route', async (c) => {
+  const body = await c.req.json<FreighterRouteRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!Number.isInteger(body.homeStarIndex) || body.homeStarIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'homeStarIndex must be >= 0' }, 400);
+  }
+  if (!Number.isInteger(body.targetStarIndex) || body.targetStarIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'targetStarIndex must be >= 0' }, 400);
+  }
+  try {
+    const response = await assignFreighterRoute(redis, body.username, body.homeStarIndex, body.targetStarIndex);
+    return c.json<FreighterRouteResponse>(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to assign freighter route';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+/** Cancel a freighter trade route. */
+api.delete('/fleet/freighter-route', async (c) => {
+  const body = await c.req.json<FreighterRouteCancelRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!body.routeId) return c.json<ErrorResponse>({ status: 'error', message: 'routeId required' }, 400);
+  try {
+    const response = await cancelFreighterRoute(redis, body.username, body.routeId);
+    return c.json(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to cancel route';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
 /** Colonize an unclaimed star — consumes Colony Ship, claims star, seeds economy. */
 api.post('/colonize', async (c) => {
   const body = await c.req.json<ColonizeRequest>();
@@ -628,4 +671,55 @@ api.get('/admin/player-stats', async (c) => {
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
   const response = await getAdminPlayerStats(redis, postId);
   return c.json<AdminPlayerStatsResponse>(response);
+});
+
+// ── Trading Stations ────────────────────────────────────────────────────────
+
+/** Get trade station info (stock & rates) for a given star. */
+api.get('/trade-station', async (c) => {
+  const postId = c.req.query('postId');
+  const starIndexStr = c.req.query('starIndex');
+  if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
+  if (!starIndexStr) return c.json<ErrorResponse>({ status: 'error', message: 'starIndex required' }, 400);
+  const starIndex = parseInt(starIndexStr, 10);
+  if (isNaN(starIndex) || starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'invalid starIndex' }, 400);
+  }
+  if (!isTradingStation(postId, starIndex)) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Not a trading station' }, 400);
+  }
+  const info = await getTradeStationInfo(redis, postId, starIndex);
+  return c.json<TradeStationInfoResponse>(info);
+});
+
+/** Execute a trade at a trading station. */
+api.post('/trade-station/trade', async (c) => {
+  const body = await c.req.json<TradeRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!body.starIndex && body.starIndex !== 0) return c.json<ErrorResponse>({ status: 'error', message: 'starIndex required' }, 400);
+  if (!body.giveType || !body.receiveType) return c.json<ErrorResponse>({ status: 'error', message: 'giveType and receiveType required' }, 400);
+  if (!body.giveAmount || body.giveAmount < 1) return c.json<ErrorResponse>({ status: 'error', message: 'giveAmount must be >= 1' }, 400);
+
+  const postId = context.postId;
+  if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'no postId in context' }, 500);
+
+  if (!isTradingStation(postId, body.starIndex)) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Not a trading station' }, 400);
+  }
+
+  try {
+    const result = await executeTrade(
+      redis,
+      postId,
+      body.username,
+      body.starIndex,
+      body.giveType as ResourceType,
+      body.receiveType as ResourceType,
+      body.giveAmount,
+    );
+    return c.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Trade failed';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
 });

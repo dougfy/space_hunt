@@ -179,7 +179,7 @@ export function generateSystem(star: GalaxyStar): SystemBody[] {
       // Constrain angle to upper half of screen (avoid bottom where UI panels sit)
       // World +Y = screen top, so angles in upper semicircle: -π/4 to 5π/4
       const fAngle = featRng.range(-Math.PI * 0.25, Math.PI * 1.25);
-      const fDist = featRng.range(1.2, 1.8);
+      const fDist = featRng.range(1.6, 2.2);
       const ft: FeatureType = 'station';
       const fName = `${prefix}${suffix} ${romanNumeral(1)} ${FEATURE_LABELS[ft] ?? ft}`;
       features.push({ name: fName, type: ft, angle: fAngle, dist: fDist });

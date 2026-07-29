@@ -4,7 +4,7 @@
 
 import versionJson from '../../version.json';
 
-type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded';
+type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded' | 'freighter_arrived' | 'freighter_unloading';
 
 // Cache-bust sound URLs with version so updated wavs are fetched fresh
 const V = versionJson.version;
@@ -28,6 +28,8 @@ const SOUND_FILES: Partial<Record<SoundId, string>> = {
   construction_complete_building: `/sounds/Construction%20complete%20building.wav?v=${V}`,
   begin_ship_upgrade: `/sounds/Begin%20ship%20upgrade.wav?v=${V}`,
   scout_range_exceeded: `/sounds/Scout%20range%20exceeded.wav?v=${V}`,
+  freighter_arrived: `/sounds/Freighter%20arrived%20at.wav?v=${V}`,
+  freighter_unloading: `/sounds/Freighter%20unloading%20cargo.wav?v=${V}`,
 };
 
 let _audioCtx: AudioContext | null = null;
