@@ -5,8 +5,11 @@ import { api } from './routes/api';
 import { forms } from './routes/forms';
 import { menu } from './routes/menu';
 import { triggers } from './routes/triggers';
+import { schedulerRoutes } from './routes/scheduler';
 import telemetryRoutes from './routes/telemetry';
 import comsRoutes from './routes/coms';
+import allianceRoutes from './routes/alliance';
+import botRoutes from './routes/bots';
 
 const app = new Hono();
 const internal = new Hono();
@@ -14,10 +17,13 @@ const internal = new Hono();
 internal.route('/menu', menu);
 internal.route('/form', forms);
 internal.route('/triggers', triggers);
+internal.route('/scheduler', schedulerRoutes);
 
 app.route('/api', api);
 app.route('/api/telemetry', telemetryRoutes);
 app.route('/api/coms', comsRoutes);
+app.route('/api/alliance', allianceRoutes);
+app.route('/api/bots', botRoutes);
 app.route('/internal', internal);
 
 serve({

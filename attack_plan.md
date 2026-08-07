@@ -4,7 +4,7 @@
 
 **Platform:** Devvit WebView (TypeScript/Canvas2D), current `spacehunt` codebase.
 
-**Last Updated:** 2026-07-28 (v1.1.31)
+**Last Updated:** 2026-08-04 (v1.1.120)
 
 ---
 
@@ -19,8 +19,8 @@
 | 5 | Ship name editing blocked by steering keys | ✅ Fixed (v0.0.257) | Mode flag added — keyboard input passes through when editing ship name. |
 | 6 | iPad sizing | ❌ Open | Layout/canvas not adapting properly to iPad screen dimensions. |
 | 7 | Pinch gesture conflicts with ship movement | ❌ Open | Pinch-to-zoom triggers ship movement instead of being handled as zoom. Need gesture disambiguation. |
-| 8 | Galaxy fuel vs system fuel | ❌ Open | Does galaxy view show fuel status? Should there be separate fuel pools for warp (galaxy) vs thruster (system/planet)? |
-| 9 | Extended discovery: belt items, planet items, multiple ores, Knowledge | ❌ Open | Items discoverable in belts and on planets. Multiple ore types. Knowledge = plans/blueprints that unlock build tree upgrades. |
+| 8 | Galaxy fuel vs system fuel | ❌ Open | **→ Feature 14 (Fuel as Commodity)** — fuel becomes real resource, Refinery building, ownership-gated dock. |
+| 9 | Extended discovery: belt items, planet items, multiple ores, Knowledge | ⚠️ Partial | Multi-color pods (6 types: refuel/dock/energy/ore/food/upgrade). Planet SCAN exploration (7 outcomes). Blueprint + anomaly finds. Full knowledge/multiple ore system still open. |
 | 10 | Entry into solar tier dumps into belt | ✅ Fixed | `restorePosition` now places ship at system edge (dist 20) instead of center (dist 3). |
 | 11 | Belt (Local tier) missing side controls | ✅ Done | Added `drawControlButtons` to Local tier render. |
 | 12 | Ship docked voice repeats on fleet/galaxy view switch | ✅ Fixed | Dock state now saved/restored across temporary galaxy jumps for fleet panel. |
@@ -32,6 +32,9 @@
 | 18 | Layout overlapping (fleet ships, feature labels, player names) | ✅ Fixed (v1.1.25) | Increased spacing constants across galaxy view. |
 | 19 | Trading station ⚖ icon visible before discovery | ✅ Fixed (v1.1.31) | Icon only shown after star is probed/visited. |
 | 20 | Probe arrival not updating star to probed state | ✅ Fixed (v1.1.29) | Server now returns discoveredStars in FleetAllResponse; client uses authoritative list. |
+| 21 | **REDDIT REVIEW: UGC reportability** | 🔴 Blocker | DMs stored in Redis are not reportable. Public comments use Reddit API (OK). DMs must either: (a) be posted as Reddit comments so Reddit's report system applies, or (b) add an in-app report mechanism that surfaces to moderators. |
+| 22 | **REDDIT REVIEW: Admin endpoint security** | 🔴 Blocker | All admin/debug endpoints (`/api/admin/*`, `/api/debug/*`, `/api/bots/*`, `/api/stars/reset`) have zero server-side auth. Client-side `ADMIN_USERS` list is not a valid security control. Must add server-side auth middleware. |
+| 23 | **Bot smooth presence (Level 2 patrol)** | ✅ Fixed | Server-side time-based drift in `listRoomPoses()`. Bot visible at all tiers (Galaxy patrol, System/Planet arrive-linger-depart). NavigationTier.Planet=3 fix. |
 
 ---
 
@@ -193,64 +196,71 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 
 ---
 
-## Feature 8 — Combat ❌ NOT STARTED
+## Feature 8 — Combat ⚠️ PARTIAL
 
 **What:** Ships attack enemy-owned stars and fleets. Combat uses the weapon effectiveness matrix. Outcome is deterministic on the server.
 
 ### Sub-features
-| # | Item | Detail |
-|---|---|---|
-| 8.1 | Attack command | `Deploy` command: ship/fleet targets enemy star or ship. |
-| 8.2 | Damage resolution | Server applies `weaponEffectiveness[attShipType][defShipType]` modifier, computes damage, updates HP. |
-| 8.3 | Destruction | Ship/fleet destroyed if HP reaches 0. Ownership transfer if star defense eliminated. |
-| 8.4 | Combat event | Event pushed to both players via mail/notification: attacker result, defender losses. |
-| 8.5 | Ground defense | Defense buildings (Starbase, Battle Station, Ground Defense) add passive defense values. |
-| 8.6 | Shields | Planetary Shields (`ActivateShield` command) provide temporary immunity. Duration from `ShieldTime` constant. |
-| 8.7 | Tests | Attack outcomes by ship-type matchup. Effectiveness matrix application. Shield blocks attack. Ownership transfer on elimination. |
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 8.1 | Attack command | ❌ | `Deploy` command: ship/fleet targets enemy star or ship. |
+| 8.2 | Damage resolution | ❌ | Server applies `weaponEffectiveness[attShipType][defShipType]` modifier, computes damage, updates HP. |
+| 8.3 | Destruction | ❌ | Ship/fleet destroyed if HP reaches 0. Ownership transfer if star defense eliminated. |
+| 8.4 | Combat event | ❌ | Event pushed to both players via mail/notification: attacker result, defender losses. |
+| 8.5 | Ground defense | ❌ | Defense buildings (Starbase, Battle Station, Ground Defense) add passive defense values. |
+| 8.6 | Shields | ✅ | `toggleShield` command activates planetary shield. Shield state stored per-star. |
+| 8.7 | Raid routes | ✅ | `assignRaidRoute` sends ships on automated attack runs with cargo looting and risk-of-destruction. |
+| 8.8 | Tests | ❌ | Attack outcomes by ship-type matchup. Effectiveness matrix application. Shield blocks attack. |
 
 ---
 
-## Feature 9 — Quests ❌ NOT STARTED
+## Feature 9 — Discovery & Exploration ⚠️ PARTIAL
 
-**What:** Linear tutorial/progression quest chain guiding players through core loops: build → mine → launch → discover → colonize.
+**What:** Multi-layered discovery system: colored pods in belt/splash, planet exploration via SCAN, and knowledge/blueprint progression.
 
-### Quest chain (from `game_catalog_v1`)
-| qid | Step |
-|---|---|
-| 0 | Accept quest |
-| 1 | Upgrade ore facility |
-| 2 | Upgrade food facility |
-| 3 | Build a dock |
-| 4 | Build a probe |
-| 5 | Move a ship |
-| 6 | Discover a star |
-| 7 | Complete |
+**Why:** Discovery creates the exploration incentive that balances against stay-at-home economy building. Players must physically visit planets to get one-shot rewards, creating a push/pull between exploring and producing.
 
 ### Sub-features
-| # | Item | Detail |
-|---|---|---|
-| 9.1 | Quest state | Player profile tracks `{ currentQuestId, state, progress }`. |
-| 9.2 | Event hooks | Building/ship/discovery actions check quest progress and call `UpdateQuest` on match. |
-| 9.3 | Rewards | Quest completion grants `gc_soft` or other rewards. |
-| 9.4 | Quest panel | Persistent HUD panel shows active quest step and progress. |
-| 9.5 | Tests | Each event type advances correct quest step. Completion detection. |
+
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 9.1 | Multi-color pods | ✅ | 6 pod types with weighted spawn: refuel (15%), dock (10%), energy (25%), ore (25%), food (20%), upgrade (5%). Colors: red, yellow, blue, orange, green, purple. |
+| 9.2 | Planet SCAN | ✅ | SCAN button in orbit bar triggers `POST /api/explore`. One roll per planet per player (global seed, deterministic). Result popup (4s fade). |
+| 9.3 | Discovery table | ✅ | 7 outcomes: nothing (35%), ore (18%), food (14%), energy (14%), artifact (10%), blueprint (6%), anomaly (3%). Resources credited to star economy. |
+| 9.4 | Redis persistence | ✅ | `explored:{username}:{starIndex}:{bodyIndex}` — prevents re-rolls. Cached result returned on revisit. |
+| 9.5 | Artifact collectibles | ❌ | Lore fragments tracked as collection. Achievement integration. |
+| 9.6 | Blueprint effects | ❌ | Ship unlock/discount from blueprint finds. Actual gameplay impact. |
+| 9.7 | Anomaly buffs | ❌ | Temporary speed/damage/production buffs from rare anomaly finds. |
+| 9.8 | Multiple ore types | ❌ | Differentiated resources beyond ore/food/energy. Rare materials for high-tier builds. |
+| 9.9 | Knowledge system | ❌ | Plans/blueprints that unlock build tree branches. Tech tree progression. |
+| 9.10 | Quest chain (legacy) | ❌ | Linear quest progression (build → mine → launch → discover → colonize). Replaced by contextual hints. |
+
+### Technical Notes
+
+- **Shared module:** `src/shared/exploration.ts` — `rollDiscovery(galaxySeed, starIndex, bodyIndex)` pure function.
+- **Pod generation:** `src/game/pods.ts` — weighted `pickPodKind()` using `POD_TYPES` from constants.
+- **Server endpoint:** `POST /api/explore` — checks Redis for prior exploration, rolls discovery, grants resources, persists.
+- **Determinism:** Same planet always gives same result for any player (global seed). Prevents "known loot spots" meta.
+- **Balance:** Discovery rewards are modest (100-300 resources) — supplements economy, doesn't replace it. Exploring is profitable but slower than dedicated production.
 
 ---
 
-## Feature 10 — Social: Mail and Alliances ❌ NOT STARTED
+## Feature 10 — Social: Mail and Alliances ⚠️ MOSTLY COMPLETE
 
 **What:** Player-to-player mail for coordination. Alliances for shared map visibility and combined attacks.
 
 ### Sub-features
-| # | Item | Detail |
-|---|---|---|
-| 10.1 | Mail schema | `{ mailId, sender, recipientId, title, body, type, isRead }`. |
-| 10.2 | SendMail command | Writes to recipient's mail store. |
-| 10.3 | Alliance creation | `CreateAlliance` command, leader role assigned. |
-| 10.4 | Join flow | Invitation sent via mail, `JoinAlliance` accepts. |
-| 10.5 | Alliance map visibility | Alliance members share fog-of-war on owned/discovered stars. |
-| 10.6 | Leaderboard | Ranked by stars owned, buildings built, ships active, net worth. |
-| 10.7 | Tests | Mail send/receive. Alliance create/join/leave. Duplicate invite rejection. |
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 10.1 | Direct Messages | ✅ | Full DM system: send/receive/unread tracking via COMS panel (private tab). |
+| 10.2 | Public Comments | ✅ | Reddit comment threading: players post/reply on game thread from COMS panel (public tab). |
+| 10.3 | Alliance creation | ✅ | `POST /api/alliance/create` — alphanumeric name, manager role assigned. |
+| 10.4 | Join flow | ✅ | Invite via `POST /api/alliance/invite`, accept/decline via `/respond`. 24h invite expiry. |
+| 10.5 | Alliance chat | ✅ | Real-time alliance chat via sorted set in Redis. COMS panel (alliance tab). |
+| 10.6 | Alliance map visibility | ✅ | `loadAllFleet` merges all alliance members' discovered/enhanced stars into response. |
+| 10.7 | Leaderboard | ✅ | Power-ranked leaderboard (stars×100 + ships×10 + buildings×25 + playtime). BOARD tab in COMS panel. |
+| 10.8 | Alliance kick/leave | ✅ | Manager can kick members. Members can leave. Alliance deleted when empty. |
+| 10.9 | Tests | ❌ | No dedicated alliance/DM test coverage. |
 
 ---
 
@@ -261,58 +271,254 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 | **P1** | 1 Resources, 2 Buildings | ✅ Complete | Stars produce resources. Players can build and upgrade. |
 | **P2** | 3 Ship Building, 4 Colonization | ✅ Complete | Players build ships and expand to new stars. |
 | **P3** | 5 Trade Routes + Trading Stations, 6 Movement | ✅ Complete | Freighter routes, trading stations, inter-star economy. |
-| **P4** | 7 Currency, 8 Combat | ❌ Not started | Economy rewards and conflict. |
-| **P5** | 9 Quests, 10 Social | ❌ Not started | Onboarding, retention, alliances. |
-| **P6** | 11 Sharing | ❌ Not started | Organic virality via Reddit-native sharing. |
+| **P4** | 7 Currency, 8 Combat | ⚠️ Partial | 8: Shields + raid routes done. 7: Not started. |
+| **P5** | 9 Discovery, 10 Social | ⚠️ Partial | 10: DMs, alliances, chat, shared map done. 9: Pods + SCAN done, blueprints/anomaly effects pending. |
+| **P6** | 11 Sharing | ⚠️ Partial | Achievements, fleet POST, weekly leaderboard, public COMS done. |
+| **P7** | 12 Help System | ❌ Planned | 5-layer progressive disclosure: idle hints, tab pulse, panel overlays, milestones, build path. Strategy documented in BUILD_TREE.md. |
+| **P8** | 13 Automated Player | ✅ Phase 1–4 | FSM (DORMANT/ECONOMY/SHIPYARD/EXPLORE/ROAM/COLONIZE), scheduler cron, smooth presence (server drift), leaderboard exclusion, admin debug, fly-by. |
 
 ---
 
-## Feature 11 — Sharing ❌ NOT STARTED
+## Feature 11 — Sharing ⚠️ PARTIAL
 
 **What:** Voluntary share buttons let players post game moments to the subreddit as formatted comments or image cards, driving organic discovery.
 
 **Why:** Reddit apps grow through subreddit engagement. Every share is a mini-ad that shows the game is active and interesting. Players sharing accomplishments creates social proof and FOMO.
 
-### Design Approach
-
-**Mechanism:** Each share action calls a server endpoint that creates a **Reddit comment** on a pinned "Activity Feed" post (or the game post itself) using the Devvit `reddit.submitComment()` API. The comment contains formatted text + optional inline image (generated server-side as an SVG→PNG card). The player sees a confirmation toast.
-
-**Alternative:** If comment posting isn't viable (rate limits, permissions), fall back to **clipboard copy** of formatted text that players can paste wherever they want.
-
-### Share Types
-
-| # | Share Type | Trigger Location | Content |
-|---|---|---|---|
-| 11.1 | Station | Dock panel (BUILD tab) | "🏗️ {username} upgraded {starName} Station to Level {N}! ({ore}/{food}/{energy} production)" |
-| 11.2 | Fleet | Fleet panel | "🚀 {username}'s fleet: {shipList} — {totalShips} ships across {starCount} systems" |
-| 11.3 | Mission Result | Fleet panel (transit arrival) | "📡 {username}'s {shipName} arrived at {starName}! ({discoveryLevel})" |
-| 11.4 | Discovered System | Galaxy view (star info card) | "🌟 {username} discovered {starName} — {spectralType} with {planetCount} planets and {beltCount} asteroid belts" |
-| 11.5 | Leaderboard | Weekly auto-post or manual | "🏆 Week {N} Rankings: 1. {user} ({score}) 2. {user} ({score}) ..." |
-
 ### Sub-features
 
-| # | Item | Detail |
-|---|---|---|
-| 11.1 | Share button UI | Small share icon (⤴) on each shareable panel. Canvas-rendered, hit-tested. Subtle — not intrusive. |
-| 11.2 | Share API endpoint | `POST /api/share` — accepts `{ username, shareType, payload }`. Server formats the message and posts via Devvit API. Rate-limited: 1 share per type per 5 minutes per user. |
-| 11.3 | Devvit comment posting | Server uses `context.reddit.submitComment()` on the game post (or a designated activity post). Formatted with markdown + flair. |
-| 11.4 | Fallback: clipboard | If Devvit comment API unavailable or rate-limited, copy formatted text to clipboard with toast "Copied! Paste in comments." |
-| 11.5 | Share cooldown | Redis key `share:{username}:{type}` with TTL = 300s. Prevents spam. Client shows cooldown timer on button. |
-| 11.6 | Activity feed post | On app install, create a pinned "Activity Feed" post where all shares go as comments. Keeps the game post clean. |
-| 11.7 | Leaderboard automation | Scheduled job (Devvit scheduler) runs weekly, computes rankings from player stats, posts leaderboard comment. |
-| 11.8 | Share card image (stretch) | Server-side SVG template rendered to PNG — shows station/fleet/star as a visual card embedded in the comment. |
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 11.1 | Achievement auto-posts | ✅ | `achievements.ts` posts Reddit comments on milestones (first colony, colony 3/5/10, first ship, frigate/battleship/dreadnought upgrade, dock tier 2/3, first transfer). Redis-tracked, fires once per player. |
+| 11.2 | Fleet share button | ✅ | Green "POST" button on fleet panel. `POST /api/share/fleet` posts formatted fleet summary as Reddit comment. 5-min cooldown (Redis TTL). Client shows "..." while on cooldown. |
+| 11.3 | Weekly leaderboard | ✅ | Devvit scheduler cron job (`0 12 * * 1` = Mondays noon UTC). Posts top-10 markdown table as comment. Power score: stars×100 + ships×10 + buildings×25 + playtime/720. |
+| 11.4 | Public COMS | ✅ | Players can post/reply on game thread directly from COMS panel (public tab). Full Reddit comment threading with depth display. |
+| 11.5 | Share cooldown | ✅ | Server-side Redis TTL (300s per type per user). Client-side visual feedback. |
+| 11.6 | Station share | ❌ | Share button on BUILD panel for upgrade announcements. |
+| 11.7 | Discovery share | ❌ | Share button on galaxy view for star discovery cards. |
+| 11.8 | Activity feed post | ❌ | Separate pinned post for activity (currently posts to game post). |
+| 11.9 | Share card image (stretch) | ❌ | Server-side SVG→PNG visual cards. |
 
 ### Technical Notes
 
-- **Devvit API access:** The server runs inside Devvit's context and has access to `context.reddit` for comment posting. The WebView client cannot call Reddit APIs directly — must go through the server.
+- **Devvit API access:** The server runs inside Devvit's context and has access to `reddit.submitComment()` for comment posting. The WebView client cannot call Reddit APIs directly — must go through the server.
 - **Rate limiting:** Both client-side (disable button + timer) and server-side (Redis TTL check) to prevent abuse.
 - **Message formatting:** Use Reddit markdown in comments. Ship names from `SHIP_CATALOG`, star names from galaxy seed, building levels from economy profile.
-- **Privacy:** All shares are opt-in. No automatic posting. Player must click the share button deliberately.
-- **Spam prevention:** Max 1 share per type per 5 min. Max 10 total shares per hour per user. Server enforces both.
+- **Privacy:** All shares are opt-in. No automatic posting (except achievements on milestones). Player must click the share button deliberately.
+- **Spam prevention:** 1 share per type per 5 min. Server enforces via Redis TTL.
+- **Scheduler:** `devvit.json` `scheduler.tasks.weekly-leaderboard` with cron. Active postId stored in Redis (`app:active_post_id`) for scheduler access without post context.
 
-### Implementation Priority
+---
 
-Start with **11.4 Discovered System** (simplest — just star data, no complex aggregation) and **11.2 Fleet** (already have the data in fleet panel). Station and Mission follow naturally. Leaderboard is a separate scheduled job.
+## Feature 13 — Automated Player (NPC Bot) ⚠️ PARTIAL
+
+**What:** A server-driven NPC that plays the game alongside real players. Builds economy, explores stars, visits player systems, colonizes, and eventually responds in COMS. Runs on the Devvit scheduler, dormant when no players are online.
+
+**Why:** Early-stage games feel empty. A visible NPC ship moving through systems, claiming stars, and occasionally chatting creates the illusion of a living world. It also serves as a demonstration of game mechanics (new players see the bot doing things and learn by observation).
+
+### Design Constraints
+
+| Constraint | Reason |
+|-----------|--------|
+| **No leaderboard** | Bot shouldn't compete with real players for rank |
+| **Activity-gated** | Only runs when at least 1 real player has `lastSeen` within 5 min |
+| **Rate-limited** | Max 1 FSM step per scheduler tick (every 2–5 min cron) |
+| **Uses real game APIs** | Calls same `buyBuilding`, `buyShip`, `colonizeStar` etc. — no cheating |
+| **No alliances** | Won't create, join, or accept alliance invites |
+| **Single bot initially** | One NPC named `VALCORDIA_PROBE` (or similar) — expandable later |
+| **Deterministic progression** | Follows the optimal build path from BUILD_TREE.md |
+
+### Finite State Machine
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                    DORMANT                                   │
+│ (no players online — scheduler ticks but does nothing)      │
+└────────────┬───────────────────────────────────────────────┘
+             │ any player lastSeen < 5min
+             ▼
+┌────────────────────────────────────────────────────────────┐
+│                   ECONOMY                                    │
+│ Build next building in priority order:                       │
+│   Mine→Solar→Station2→Dock1→WH1→Dock2→Dock3                │
+│ Waits for resources to accumulate (elapsed-time production) │
+│ One upgrade per tick                                        │
+└────────────┬───────────────────────────────────────────────┘
+             │ Dock ≥ 1 (has Scout capability)
+             ▼
+┌────────────────────────────────────────────────────────────┐
+│                   SHIPYARD                                   │
+│ Build ships in priority order:                              │
+│   Probe → Scout → Destroyer → Frigate (based on Dock level)│
+│ One ship per tick (only if resources available)             │
+└────────────┬───────────────────────────────────────────────┘
+             │ has Scout or better
+             ▼
+┌────────────────────────────────────────────────────────────┐
+│                   EXPLORE                                    │
+│ Send probes to undiscovered stars (deterministic selection) │
+│ Mark stars as discovered in bot's profile                   │
+│ One probe per tick                                         │
+└────────────┬───────────────────────────────────────────────┘
+             │ has discovered stars + non-probe ship
+             ▼
+┌────────────────────────────────────────────────────────────┐
+│                   ROAM                                       │
+│ Move bot's "presence" to a discovered star                  │
+│ Appear in player star systems (ghost pose updates)          │
+│ Enter planet tier briefly, then leave                       │
+│ Creates visible activity for real players                   │
+│ One system visit per tick (stays 1–3 ticks then leaves)    │
+└────────────┬───────────────────────────────────────────────┘
+             │ Dock ≥ 3 + players have Colony Ships
+             ▼
+┌────────────────────────────────────────────────────────────┐
+│                   COLONIZE                                   │
+│ Build Colony Ship → send to unclaimed discovered star       │
+│ Claim one star per ~30 min (rate-limited)                  │
+│ Max 3 colonies (won't dominate the galaxy)                  │
+└────────────┬───────────────────────────────────────────────┘
+             │ players know bot's name (chatted or seen)
+             ▼
+┌────────────────────────────────────────────────────────────┐
+│                   CHATTER                                    │
+│ Responds to COMS mentions with canned phrases              │
+│ Occasionally posts public comments ("Passing through...")   │
+│ Never initiates DMs, never joins alliances                  │
+│ Max 1 message per 15 min                                   │
+└────────────────────────────────────────────────────────────┘
+```
+
+**State transitions are one-way progression** — once the bot reaches ROAM, it continues building/exploring in parallel (each tick picks the highest-priority action that's ready).
+
+### Data Model
+
+```typescript
+interface AutoBotState {
+  fsm: 'dormant' | 'economy' | 'shipyard' | 'explore' | 'roam' | 'colonize' | 'chatter';
+  name: string;
+  homeStarIndex: number;
+  currentStarIndex: number;       // where the bot "is" right now
+  currentBodyIndex: number;       // -1 = system view, ≥0 = planet tier
+  roamTicksRemaining: number;     // how many ticks to stay at current star
+  lastTickMs: number;
+  buildQueue: string[];           // ordered build priority (next = [0])
+  shipQueue: string[];            // ordered ship priority
+  discoveredStars: number[];      // stars the bot has probed
+  colonizedStars: number[];       // stars the bot has claimed
+  chatCount: number;              // total messages sent (for rate limit)
+  lastChatMs: number;
+}
+```
+
+**Redis key:** `autobot:{name}` (single JSON blob)
+
+### Scheduler Integration
+
+**Cron:** `*/3 * * * *` (every 3 minutes)
+
+| Step | Action |
+|------|--------|
+| 1 | Read `autobot:{name}` state from Redis |
+| 2 | Check player activity: query all `profile:*` stats, find any `lastSeen > now - 300_000` |
+| 3 | If no active players → set `fsm = 'dormant'`, save, return |
+| 4 | Tick the economy (elapsed-time production on bot's stars) |
+| 5 | Run FSM step (one action per tick based on current state + priorities) |
+| 6 | Update pose in `poses:{postId}` (so bot appears as ghost to players) |
+| 7 | Save state back to Redis |
+
+### Leaderboard Exclusion
+
+Two options (implement both):
+1. **Bot flag in profile:** `profile:{botname}` → `isBot: true` field. Leaderboard query filters `isBot !== true`.
+2. **Name prefix convention:** Bot names start with `[NPC]` or similar. Weekly leaderboard formatter skips them.
+
+### Presence Simulation (Ghost)
+
+The bot writes to `poses:{postId}` with a fake sessionId:
+```typescript
+{
+  x: <computed position>,
+  y: <computed position>,
+  angle: <travel angle>,
+  username: 'VALCORDIA_PROBE',
+  shape: 'destroyer',   // upgrades as bot gets better ships
+  tier: NavigationTier.System,  // or Planet when visiting
+  starIndex: <current star>,
+  bodyIndex: <current body or -1>,
+  ts: Date.now(),
+}
+```
+
+Players see the bot ship moving through their star systems. The pose is updated each scheduler tick (every 3 min) with a new position, creating the appearance of slow transit.
+
+### COMS Simulation (Phase 2)
+
+- Bot scans public comments for its name or `@VALCORDIA_PROBE`
+- Responds with canned phrases from a pool:
+  - "Scanning sector... all clear."
+  - "Probe systems nominal."
+  - "Greetings, commander. Safe travels."
+  - "Sector mapped. Returning to patrol."
+- Max 1 reply per 15 min, max 5 per day
+- Never initiates conversations
+
+### Design Issues & Decisions
+
+| Issue | Decision | Rationale |
+|-------|----------|-----------|
+| How does bot get a home star? | Admin spawns it (claims a specific star index) | Same as `/seed-bots` but with real economy state |
+| Can players raid the bot? | Yes — bot has shield but won't retaliate actively | Creates PvE content |
+| Does bot use real resources? | Yes — elapsed-time production, real costs | Ensures bot can't outpace players |
+| What if bot's star is colonized by player first? | Bot picks another unclaimed star | Graceful fallback |
+| How fast should bot progress? | ~2x slower than optimal player (wait extra tick between builds) | Shouldn't be threatening |
+| Bot ship shape in ghost display? | Matches its best ship type | Visual progression |
+| Multiple bots later? | State model supports it (keyed by name) | Start with 1, scale if needed |
+| Scheduler vs client-piggyback tick? | Scheduler (cron) | Independent of any client being connected. Piggyback only for alliance bots (legacy). |
+
+### Implementation Phases
+
+| Phase | Scope | Status | Files |
+|:-----:|-------|:------:|-------|
+| 1 | FSM skeleton + DORMANT/ECONOMY states + scheduler cron + leaderboard filter + admin debug | ✅ Done | `autobot.ts`, `scheduler.ts`, `devvit.json`, `bots.ts`, `api.ts` |
+| 2 | SHIPYARD + EXPLORE states | ✅ Done | `autobot.ts` (uses `buyShip`, `transferShips`, `loadAllFleet`) |
+| 3 | ROAM state + ghost pose injection (basic) | ✅ Done | `autobot.ts` (dual-tier pose, roams to player-claimed stars) |
+| 3b | Smooth bot presence (Level 2 patrol) | ✅ Done | `autobot.ts`, `game-service.ts` — server-side drift in `listRoomPoses()`, future-padded timestamps |
+| 4 | COLONIZE state (rate-limited) | ✅ Done | `autobot.ts` — build/transit/claim sub-phases, max 3 colonies, 5-tick cooldown |
+| 5 | CHATTER state + COMS integration | ❌ | `autobot.ts`, public comment scanning |
+
+### Phase 3b — Smooth Bot Presence (Level 2 Patrol)
+
+**Problem:** Bot writes a pose every 3 min but poses expire after 8s. Bot is invisible 99.6% of the time.
+
+**Solution:** Bot writes a patrol plan (waypoints + timestamps) that covers the full 3-min interval. Client interpolates the bot's position along the path in real time.
+
+**Server changes:**
+1. `listRoomPoses()` — skip stale check for poses with `sessionId` starting with `bot:`
+2. `storePose()` — accept optional `patrol: [{x,y,t}...]` array in pose data
+3. `autobot.ts` — generate a 3-min circular patrol path each tick (8-10 waypoints)
+
+**Client changes:**
+1. `pollGhosts()` → detect patrol data on pose items
+2. Compute interpolated x/y/angle from waypoints + `Date.now()`
+3. Ship drifts smoothly along the path between polls
+
+**Test mode:**
+- Admin button "Bot Patrol" — forces bot into ROAM, injects pose at current star, returns pose data
+- Admin button "Bot Fast-Tick" — runs 5 ticks in 5s (1s apart), simulating 15 min of bot activity
+
+### Existing Code to Reuse
+
+| Function | Location | Bot Usage |
+|----------|----------|-----------|
+| `buyBuilding()` | `game-service.ts` | Economy state — build upgrades |
+| `buyShip()` | `game-service.ts` | Shipyard state — purchase ships |
+| `colonizeStar()` | `game-service.ts` | Colonize state — claim stars |
+| `claimHomeStar()` | `game-service.ts` | Initial setup — bot's first star |
+| `storePose()` | `game-service.ts` | Roam state — appear as ghost |
+| `tickStarEconomy()` | `game-service.ts` (internal) | Economy tick on bot's stars |
+| `getAdminPlayerStats()` | `game-service.ts` | Activity check (any player online?) |
+| `generateStarPositions()` | `shared/galaxy-positions.ts` | Pick undiscovered stars |
 
 ---
 
@@ -327,59 +533,526 @@ Start with **11.4 Discovered System** (simplest — just star data, no complex a
 
 ---
 
-## Feature 12 — Help System (Contextual Idle Hints)
+## Feature 15 — Voice Alerts & Sensor System ⚠️ NEEDS TESTING
 
-**What:** A tutorial/hint system that shows contextual guidance when the player is idle, teaching them what to do next based on their current state.
+**What:** Audio voice alerts triggered by game events — shield state changes, incoming threats, and communications.
+
+**Why:** Adds immersion and situational awareness without requiring players to watch the screen. Threat alerts inform defenders that their colony is under attack.
+
+### Shield Sounds (Client-side delay)
+
+| Sound | Trigger | Timing |
+|-------|---------|--------|
+| `shields_activated` | Player presses RAISE SHIELDS | Immediate (begin) |
+| `shields_up` | 3s charge animation completes | After delay (end) |
+| `shields_deactivated` | Player presses LOWER SHIELDS | Immediate (begin) |
+| `shields_down` | 3s discharge animation completes | After delay (end) |
+
+**Implementation:** Client-side 3s charge timer in renderer. Button shows progress bar (blue=raising, orange=lowering). Server call fires only after charge completes. Button disabled during charge.
+
+### Communication Sounds (Polling-based)
+
+| Sound | Trigger | Polling |
+|-------|---------|---------|
+| `new_comm` | DM unread count increases while comms panel closed | 30s unread poll |
+| `fleet_command` | New alliance chat message from another player | 5s chat poll (when tab open) |
+
+### Sensor Alerts (Server-push via Redis queue)
+
+| Sound | Trigger | Source |
+|-------|---------|--------|
+| `hostile_raider` | Enemy raider arrives at player's claimed star | `reconcileRaidRoutes` in game-service.ts |
+| `unidentified_ship` | Bot roams to player's claimed star | `executeRoamState` in autobot.ts |
+
+**Architecture:**
+- Redis key `sensor_alerts:{username}` — JSON array, max 10 alerts
+- `pushSensorAlert(store, owner, alert)` — server pushes on event
+- `GET /api/sensors?username=` — returns + clears pending alerts
+- Client polls every 30s, plays corresponding voice
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `src/game/audio.ts` | 8 new SoundId entries + SOUND_FILES mappings |
+| `src/game/renderer.ts` | Shield charge state, progress bar visual, delayed consume |
+| `src/game/index.ts` | Barrel exports for `getShieldCharging`, `clearShieldCharging` |
+| `src/client/game.ts` | Shield delay handler, DM/alliance sound triggers, sensor polling |
+| `src/server/core/sensor-alerts.ts` | NEW — pushSensorAlert / popSensorAlerts module |
+| `src/server/core/game-service.ts` | Raider arrival → pushSensorAlert, findStarOwner helper |
+| `src/server/core/autobot.ts` | Bot roam → pushSensorAlert to star owner |
+| `src/server/routes/api.ts` | `GET /api/sensors` endpoint |
+
+### Testing Required
+
+| # | Test Scenario | Actors | What to Verify |
+|:-:|---------------|--------|----------------|
+| 1 | **Shield raise/lower** | Player at owned star with shield building | Begin sound plays immediately, button shows charging progress, end sound plays after 3s, server state updates correctly |
+| 2 | **DM notification** | Player A sends DM to Player B (panel closed) | Player B hears `new_comm` on next unread poll cycle |
+| 3 | **Alliance chat notification** | Player A sends alliance message | Player B (in alliance, chat tab open) hears `fleet_command` |
+| 4 | **Raider arrival alert** | Player A dispatches raider to Player B's star | Player B hears `hostile_raider` when raid route reconciles (raider arrives) |
+| 5 | **Bot roam alert** | Bot roams to Player's claimed star | Player hears `unidentified_ship` on next sensor poll |
+| 6 | **No self-alert** | Player raids own star (edge case) | No sensor alert pushed |
+| 7 | **Alert cap** | 15+ alerts queued before player polls | Only newest 10 returned, no Redis bloat |
+| 8 | **Multiple alerts same poll** | Raider + bot arrive same cycle | Both sounds play (sequentially) |
+| 9 | **Shield button disabled during charge** | Double-tap shield button rapidly | Second tap ignored, no duplicate server calls |
+
+### Test Method
+
+- **Shields (test 1, 9):** Single player, build shield generator, toggle on/off, verify audio + visual timing
+- **Comms (tests 2, 3):** Two browser tabs (Player A + Player B), send DM/alliance msg, verify sound on recipient
+- **Raider (test 4, 6):** Player A with raider ship → dispatch to Player B's star, wait for transit time, verify Player B hears alert
+- **Bot (test 5):** Trigger bot tick via admin "Bot Fast-Tick" button, verify sensor alert appears in Player's `/api/sensors` response
+- **Edge cases (tests 7, 8):** Direct Redis manipulation or rapid bot ticks to queue multiple alerts
+
+---
+
+## Feature 12 — Help System ❌ PLANNED
+
+**What:** 5-layer progressive contextual disclosure system that teaches players without blocking gameplay.
 
 **Why:** New players have no onboarding. The game is complex (multiple tiers, fleet management, economy, colonization). Players who don't know what to do next churn.
 
-### Design
+**Strategy:** Documented in `BUILD_TREE.md` → Player Help Strategy section.
 
-- **Trigger:** Player hasn't interacted for ~8 seconds.
-- **Placement:** Thin bar at bottom of screen, above orbit/dock bar.
-- **Behavior:** Fades in after idle timeout, fades out on any input.
-- **Dismissal:** Tapping anywhere or interacting with any control.
-- **Dedup:** Each hint shown once per session (tracked in a `Set<string>`).
-- **Expandable:** Small "?" icon on right; tap to expand full tip text.
+### Layers (Summary)
 
-### Contextual Hints
+| Layer | What | Status |
+|:-----:|------|:------:|
+| 1 | Idle hints — contextual text bar after 8s inactivity | ❌ |
+| 2 | Tab glow pulse — animate relevant panel tab | ❌ |
+| 3 | First-time panel overlays — brief description on first open | ❌ |
+| 4 | Milestone popups — celebrate key achievements | ❌ |
+| 5 | Build path indicator — "NEXT GOAL" with ETA in STATUS panel | ❌ |
 
-| # | State | Hint Text |
-|---|---|---|
-| 12.1 | Docked at home station, no ships built | "Tap BUILD to construct your first scout ship" |
-| 12.2 | Has scout, never visited another star | "Tap FLEET → send your scout to explore nearby stars" |
-| 12.3 | In galaxy view, no target set | "Tap a star to see info, then VISIT to fly there" |
-| 12.4 | At unowned star with colony ship | "Orbit the planet and tap COLONIZE to claim this star" |
-| 12.5 | Docked at owned station, low resources | "Build mines and solar arrays to generate resources" |
-| 12.6 | In system view, never entered a planet | "Fly close to a planet to enter orbit" |
-| 12.7 | Ship idle in transit view | "Your ship is en route. Tap another star to explore" |
-| 12.8 | Docked, full storage | "Build a warehouse to increase storage capacity" |
-| 12.9 | Has multiple stars, no transfers | "Use FLEET to transfer ships between your colonies" |
-| 12.10 | New player, splash screen | "Tap anywhere to begin your journey" |
+### Current State
 
-### Voice Prompt Locations (future audio cues)
+- **Journey system** (`journey.ts`): Minimal — pulses tabs after 5s idle, plays voice at 10s/30s. Only covers absolute first interaction. Completes on any action.
+- **Belt hint bar**: Static text at bottom.
+- **Voice prompts**: `status_docked`, `hey_there` audio assets exist.
 
-| # | Event | Prompt |
-|---|---|---|
-| V.1 | Leave dock | "Undocking. Safe travels, pilot." |
-| V.2 | Dock established | "Docking complete. Station online." |
-| V.3 | Colonize success | "Colony established. Star claimed." |
-| V.4 | Ship build complete | "Construction complete. Ship ready." |
-| V.5 | Enter new star system | "Entering [star name] system." |
-| V.6 | Low fuel warning | "Fuel reserves critical." |
-| V.7 | Under attack | "Shields taking fire." |
-| V.8 | Fleet arrival | "Ship has arrived at destination." |
-| V.9 | First discovery | "New system detected." |
-| V.10 | Exit to galaxy | "Leaving system. Engaging warp." |
+### Architecture
 
-### Implementation Priority
+```
+src/game/hints.ts       — state machine, idle timer, hint selection (to create)
+src/game/journey.ts     — existing, extend with milestone tracking
+src/game/renderer.ts    — drawHintBar(), drawTabPulse(), drawMilestonePopup()
+src/game/game-loop.ts   — updateHints(dt), idle detection
+```
 
-Start with **12.1–12.4** (early game flow). Add idle timer + hint bar renderer. Voice prompts are a separate pass (requires audio asset creation).
+### Key Rules
 
-### Onboarding — Side Panel Pulse
+1. Never block gameplay — overlay-only, always dismissible
+2. One hint at a time — no stacking, highest priority wins
+3. Respect returning players — skip hints for actions already completed
+4. Progressive — don't mention FLEET before player has ships
+5. Max 10 words per hint
+6. All client-side session state (no server calls)
 
-For brand-new players (no ships built, first session), pulse/brighten the right-side tab buttons (STATUS, BUILD, SHIPS, FLEET) with a slow glow animation to draw attention. The pulse fades once the player taps any tab. Implementation:
-- Track `hasEverOpenedPanel` in session state (starts false).
-- While false, apply a sine-wave alpha boost (0.4→1.0) on the tab button borders/text.
-- On first tab tap, set flag true, stop pulsing permanently for that session.
-- Optionally pulse only the most relevant tab (e.g. BUILD when docked with no ships).
+### Player Rank System
+
+Players earn titles by completing journey milestones. Rank is the visible reward for progression.
+
+| Rank | Title | Requirement |
+|:----:|-------|-------------|
+| 0 | Cadet | Claim home star |
+| 1 | Ensign | Station level 2 |
+| 2 | Lieutenant | First ship built |
+| 3 | Commander | 3 stars discovered |
+| 4 | Captain | Second colony |
+| 5 | Commodore | 10+ ships |
+| 6 | Admiral | 3+ colonies, 20+ building levels |
+| 7 | Fleet Admiral | 5+ colonies, 50+ ships, all buildings lv3+ |
+
+**Implementation:** Pure client-side function — computed from existing profile data (economy, ships, claims). Displayed in STATUS panel, COMS prefix, leaderboard. Rank-up triggers Layer 4 milestone popup. Full details in `BUILD_TREE.md` → Player Rank System.
+
+### Alternative: Tutorial via Fleet Command Comms
+
+Instead of (or in addition to) passive hint overlays, the help system could deliver tutorial guidance as **messages from Fleet Command** in the COMS panel. This leverages the existing `fleet_command` voice + message infrastructure.
+
+**Concept:**
+- Server pushes tutorial messages to a special "FLEET COMMAND" sender based on player progression milestones
+- Messages feel diegetic: "Commander, your station requires an upgrade before we can dispatch ships. Prioritize Station Level 2."
+- Player reads them in COMS like any other message — no new UI surface needed
+- Progression-triggered: first dock, first ship, first colony, etc.
+
+**Task Board consideration:** A visible task/quest board could be added but risks making the game feel like a checklist rather than an open sandbox. May reduce exploration fun factor. If implemented, keep it minimal — max 1-2 active objectives, no XP bars, no completion percentages. The fleet command message approach preserves the discovery-driven feel while still guiding lost players.
+
+### Investigation: YouTube Video as Visual Comm
+
+**Question:** Can a prerecorded YouTube video be embedded and played as a "visual communication" within the game's COMS panel or as a modal overlay?
+
+**Context:** This would allow rich tutorial content, lore cinematics, or fleet command briefings to play as in-game video transmissions. YouTube hosting = free CDN, no storage cost, easy to update content without redeploy.
+
+**To investigate:**
+- Can Devvit WebView embed an iframe with YouTube player? (CSP restrictions, sandboxing)
+- Does Reddit's app review allow third-party embeds (YouTube specifically)?
+- Performance impact of iframe + canvas game running simultaneously
+- Fallback if blocked: static image + voice audio (current system) or animated sprite sequence
+- UX: video plays in a "viewscreen" overlay styled as an in-universe comm transmission
+
+### Investigation: Second Skin Framework (Incremental Visual Testing)
+
+**Question:** Can we put a skin/theme framework in place and swap **only a single element** (e.g., starbases) from raster/procedural to icon/SVG graphics — to visually test what the change looks like before committing to a full reskin?
+
+**Answer: YES — low complexity, the architecture already supports it.**
+
+The renderer already isolates visual elements into distinct draw functions. The key extraction point is `drawFeatureIcon()` (renderer.ts line 1799) — a single function (~200 lines) that draws ALL station/mine/colony/relay/refinery icons via a switch statement. Every caller passes the same signature: `(ctx, x, y, type, size, level?)`. Replacing this one function with an image/SVG renderer requires **zero changes to callers**.
+
+**Effort estimate:** ~2-3 hours for the single-element proof-of-concept (station only).
+
+### Proof-of-Concept Plan: Starbase Icon Skin
+
+**Phase 1: Framework scaffold** (30 min)
+```typescript
+// src/game/skin.ts
+export type DrawFeatureFn = (
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number,
+  type: FeatureType, size: number, level?: number
+) => void;
+
+export interface RenderSkin {
+  drawFeatureIcon: DrawFeatureFn;
+  // Future: drawShip, drawStarburst, drawGhostShip, etc.
+}
+```
+
+**Phase 2: Extract default skin** (30 min)
+- Move current `drawFeatureIcon` body into `src/game/skins/procedural.ts`
+- Export as `proceduralSkin: RenderSkin`
+- Original `drawFeatureIcon` becomes a thin delegate: `activeSkin.drawFeatureIcon(ctx, x, y, type, size, level)`
+
+**Phase 3: Create icon skin for stations** (1 hour)
+- Add PNG/SVG sprites for station lv1-3, lv4-5, lv6+ to `public/sprites/`
+- `src/game/skins/icon.ts` — preloads station images, draws with `ctx.drawImage()`
+- Falls back to procedural for non-station types: `{ ...proceduralSkin, drawFeatureIcon: drawFeatureIconWithStationSprites }`
+
+**Phase 4: Toggle** (15 min)
+- localStorage `'skin'` key: `'procedural'` (default) | `'icon'`
+- Admin button or scanner-style toggle to switch live
+- No redeploy needed — just refresh
+
+### Multiple Skins & Variant Support
+
+The framework should support **multiple named skins** and **per-element visual variants within a skin** (player choice).
+
+**Use cases:**
+1. **Full skins** — player picks an overall art style: `procedural` (current wireframe), `pixel`, `cartoon`, `sci-fi`
+2. **Element variants** — within a skin, player upgrades or unlocks alternate visuals for the same building level: e.g., "military starbase" vs "trade hub" at station lv5
+
+**Data model:**
+```typescript
+// Skin registry — each skin provides draw functions for all elements
+type SkinId = 'procedural' | 'pixel' | 'cartoon' | 'scifi';
+
+interface RenderSkin {
+  id: SkinId;
+  label: string;
+  drawFeatureIcon: DrawFeatureFn;
+  drawShip: DrawShipFn;
+  // ... per-element functions
+}
+
+// Variant system — per-element visual choices within a skin
+// Player can pick variant for each element type independently
+type VariantId = string; // e.g., 'military', 'trade', 'research'
+
+interface SkinVariants {
+  station?: VariantId;  // player's chosen station visual
+  mine?: VariantId;
+  colony?: VariantId;
+}
+
+// Variant registry per skin
+interface VariantOption {
+  id: VariantId;
+  label: string;           // "Military Outpost", "Trade Hub"
+  preview: string;         // sprite path for selection UI
+  unlockCondition?: string; // e.g., "station_lv5" or "achievement_x"
+}
+
+// Each skin declares available variants per element
+const SKIN_VARIANTS: Record<SkinId, Record<string, VariantOption[]>> = {
+  scifi: {
+    station: [
+      { id: 'military', label: 'Military Outpost', preview: '/sprites/scifi/station-military.png' },
+      { id: 'trade', label: 'Trade Hub', preview: '/sprites/scifi/station-trade.png' },
+      { id: 'research', label: 'Research Station', preview: '/sprites/scifi/station-research.png' },
+    ],
+  },
+  // ...
+};
+```
+
+**Storage:**
+- `localStorage 'skin'` — active skin ID
+- `localStorage 'skin_variants'` — JSON of `SkinVariants` per skin
+- Future: server-side if variants become purchasable/unlockable
+
+**Selection UI:**
+- Settings/admin panel: dropdown for skin selection
+- Per-element: long-press or settings sub-panel to pick variant
+- Preview thumbnails in selection grid (3x3 or horizontal scroll)
+
+**Key constraint:** Skins are **purely visual** — no gameplay impact. A cartoon starbase has identical stats to a sci-fi starbase. Variants are cosmetic choices only.
+
+### Why It's Clean
+
+| Aspect | Current State | Required Change |
+|--------|--------------|-----------------|
+| `drawFeatureIcon` callers | 3 call sites (system view, planet view, legend) | None — signature stays same |
+| `drawShip` callers | 4 call sites | None (future Phase 2) |
+| State/logic coupling | Zero — these are pure draw functions | None |
+| Performance | Procedural = many canvas calls | Image/SVG = single drawImage (faster) |
+
+### Swappable Elements (Future Phases)
+
+| Element | Current | Function | Lines | Extraction Effort |
+|---------|---------|----------|:-----:|:-----------------:|
+| **Stations** (POC) | Procedural lines | `drawFeatureIcon` (type='station') | ~60 | Low |
+| Mines | Procedural lines | `drawFeatureIcon` (type='mine') | ~70 | Low |
+| Colonies | Procedural lines | `drawFeatureIcon` (type='colony') | ~50 | Low |
+| Ships (player) | Polyline shapes | `drawShip` | ~50 | Medium (camera math) |
+| Ghost ships | Same as ships | `drawGhostShip` | ~20 | Low |
+| Stars (galaxy) | `drawStarburst` | Separate function | ~80 | Medium |
+| Planets | Inline in drawSystemView | Embedded | ~40 | Medium (extract first) |
+
+### Key Decision
+
+Start with `drawFeatureIcon` station type ONLY. This proves the pattern works visually at all three zoom levels (galaxy map icon doesn't exist, system view small icon, planet view large icon). If it looks good, expand to other feature types. If it doesn't, delete the icon skin file — zero impact on the base game.
+
+---
+
+## 🔴 Reddit App Review — Blockers (2026-08-04)
+
+Reddit review flagged two issues blocking publication:
+
+### Issue 1: User-Generated Content Reportability
+
+**Problem:** DMs are stored in Redis sorted sets (`dm:{postId}:{userA}:{userB}`) with no report mechanism. Reddit requires all UGC to be reportable with actionable attribution.
+
+**Current state:**
+- **Public comments**: Already use Reddit API (`reddit.submitComment()`), so Reddit's built-in report/moderation applies. ✅
+- **DMs**: Redis-only, no moderation visibility, no report button. ❌
+
+**Fix options (pick one):**
+
+| Option | Approach | Effort | Tradeoff |
+|--------|----------|--------|----------|
+| A | **Remove DMs entirely** | Low | Loses social feature. Simplest to pass review. |
+| B | **Add in-app report button** for DMs | Medium | DM report writes to a mod-visible Redis list or creates a Reddit modmail/comment. Need UI for report button + mod review. |
+| C | **Convert DMs to Reddit comments** | High | Post DMs as Reddit comments (private thread or wiki). Gains Reddit's native moderation. Adds latency, loses real-time feel. |
+
+**Recommended: Option B** — Add a report button on DM messages. When tapped, store report in `reports:{postId}` Redis sorted set with `{reporter, reportedUser, messageBody, timestamp}`. Surface reports in admin panel. Include a `POST /api/coms/dm/report` endpoint.
+
+### Issue 2: Admin Endpoint Security
+
+**Problem:** All admin/debug endpoints are callable by any user. Auth is client-side only (`ADMIN_USERS` array in `game.ts`).
+
+**Vulnerable endpoints:**
+- `POST /api/stars/reset` — wipes all star claims
+- `POST /api/admin/reset-all` — full game reset
+- `GET /api/admin/player-stats` — dumps all player data
+- `POST /api/debug/complete-builds` — instant build completion
+- `POST /api/debug/spawn-enemy` — spawns test enemy
+- `POST /api/debug/reset-fleet` — wipes ships
+- `POST /api/bots/*` — all bot management (spawn, tick, reset, despawn)
+- `GET /api/debug/profile-raw` — dumps raw Redis profile data
+
+**Fix plan — Server-side admin middleware:**
+
+```typescript
+// src/server/middleware/admin-auth.ts
+const ADMIN_USERNAMES = ['WeirdAd4511']; // single source of truth
+
+async function requireAdmin(c: Context, next: Next) {
+  const authedUser = await reddit.getCurrentUsername();
+  if (!authedUser || !ADMIN_USERNAMES.includes(authedUser)) {
+    return c.json({ error: 'Unauthorized' }, 403);
+  }
+  return next();
+}
+```
+
+**Apply to routes:**
+1. Create `requireAdmin` middleware using `reddit.getCurrentUsername()` (Devvit-authenticated, not spoofable)
+2. Apply to all `/api/admin/*`, `/api/debug/*`, `/api/bots/*`, `/api/stars/reset` routes
+3. Keep client-side `ADMIN_USERS` for UI visibility only (showing/hiding admin panel)
+4. Remove `admin: true` trust from `/api/debug/complete-builds` body
+
+**Key insight:** Devvit provides `reddit.getCurrentUsername()` server-side — this is the authenticated Reddit identity, not client-supplied. This is the correct auth source.
+
+**Additional hardening:**
+- All game API routes currently trust `body.username` from the client. While not flagged in review, this allows player impersonation. Future: validate `body.username === reddit.getCurrentUsername()` on sensitive endpoints (buy, transfer, colonize).
+
+---
+
+## Feature 14 — Fuel as a Commodity ❌ NOT STARTED
+
+**What:** Fuel becomes a real tracked resource (stored per-star, consumed by ships, produced by Refineries). Players cannot refuel or dock at opponent-owned facilities. Ships consume fuel units to move between stars and maneuver in-tier.
+
+**Why:** Currently fuel is a free infinite resource — docking at ANY station resets it to 100%, and movement between stars has no fuel cost. This removes all logistical challenge from exploration and colonization. Making fuel a real commodity creates:
+- **Supply chain gameplay** — players must plan fuel production and distribution
+- **Territorial denial** — enemy-controlled space becomes genuinely hostile (no free refueling)
+- **Economic depth** — fuel refineries become strategically valuable buildings
+- **Risk/reward** — exploring distant stars requires fuel reserves or refinery colonies along the route
+
+### Current State (What Exists)
+
+| System | Current Behavior | Problem |
+|--------|-----------------|---------|
+| In-tier fuel (`fuelPercent`) | 0–100%, drains when thrusting, refilled at ANY station | No ownership check, infinite refill |
+| Pod collection (belt/planet) | 6 pod types, "refuel" type adds ~15% fuel | Works fine — keep as-is |
+| Galaxy movement | Tap star → instant arrival (or transit for fleet) | Player ship has no fuel cost for warp |
+| Station docking | `targetLabel === 'Station'` → `fuelPercent = FUEL_MAX` | Refuels at opponent stations too |
+| HP heal at dock | Same condition resets HP | Should also be player-owned only |
+| Economy resources | Ore, Food, Energy | No "fuel" resource type |
+| Refinery feature | Visual planet feature, "produces energy" | Perfect candidate to repurpose for fuel |
+
+### Design — Fuel as 4th Resource
+
+#### Resource Model
+
+```typescript
+interface ResourceStore {
+  ore: number;
+  food: number;
+  energy: number;
+  fuel: number;        // NEW — 4th commodity
+}
+```
+
+#### Fuel Units & Consumption
+
+| Activity | Fuel Cost | Notes |
+|----------|-----------|-------|
+| In-tier thrust (belt/planet) | ~0.5 units/sec | Same feel as current `FUEL_DRAIN_PER_SECOND` |
+| Galaxy warp (star-to-star) | 5–15 units (distance-based) | `Math.ceil(dist / 10)` |
+| System entry/exit | 2 units | Minor cost for tier transition |
+| Docking at own station | -100% (full refuel from star's fuel reserve) | Deducts from star economy |
+| Docking at opponent station | BLOCKED — cannot dock | "HOSTILE — Access Denied" |
+| Pod collection (belt) | +10–20 units | Same as current, just in units now |
+
+**Ship fuel capacity** (replaces fuelPercent 0–100):
+
+| Ship Type | Fuel Tank (units) |
+|-----------|------------------|
+| Scout | 100 |
+| Destroyer | 150 |
+| Frigate | 200 |
+| Battleship | 300 |
+| Command Cruiser | 400 |
+| Dreadnought | 500 |
+| Colony Ship | 250 |
+| Freighter | 200 |
+| Probe | ∞ (automated, no fuel) |
+
+#### Fuel Production — Refinery Building
+
+```
+Refinery (new building type)
+  Prerequisite: Station lv2 + Mine lv1
+  Max Level: 3
+  Cost: { ore: 300, food: 100, energy: 200 } (lv1)
+  Build time: 300s (lv1), 600s (lv2), 900s (lv3)
+  Production: 2 fuel/min (lv1), 5 fuel/min (lv2), 10 fuel/min (lv3)
+  Conversion: 1 ore + 1 energy → 2 fuel (continuous)
+```
+
+Fuel is produced by converting ore + energy (both consumed). This creates meaningful resource trade-offs — you can't max all resources at once.
+
+#### Dock Ownership Check
+
+```typescript
+// Current (broken):
+if (dock.targetLabel === 'Station') {
+  gameState.fuelPercent = FUEL_MAX;
+  gameState.shooting.hp = PLAYER_MAX_HP;
+}
+
+// Fixed:
+if (dock.targetLabel === 'Station' && isPlayerOwnedStar(starIndex)) {
+  refuelFromStarReserve(starIndex);  // deducts from star's fuel store
+  gameState.shooting.hp = PLAYER_MAX_HP;
+} else if (dock.targetLabel === 'Station' && !isPlayerOwnedStar(starIndex)) {
+  // Cannot dock — reject approach, show "HOSTILE — Access Denied"
+  // OR: allow dock but NO refuel/repair (can still colonize if unclaimed)
+}
+```
+
+**Decision needed:** Block docking entirely at enemy stations, or allow docking but deny refuel/repair?
+- **Option A: Block dock** — simplest, most punishing. Players can't even colonize enemy stars without first destroying their forces.
+- **Option B: Allow dock, deny services** — player can orbit/dock to colonize unclaimed stars or trade at neutral trading stations, but gets no fuel/HP. More nuanced.
+- **Recommendation: Option B** — allow docking at unclaimed/neutral stars (needed for colonization), block refuel/repair at enemy-owned stars only.
+
+### Files That Need Changes
+
+#### Shared (types & contracts)
+
+| File | Change |
+|------|--------|
+| `src/shared/api.ts` | Add `fuel` to `ResourceStore` type, `FuelTank` per ship type, `RefuelRequest/Response` |
+| `src/shared/ships.ts` | Add `fuelCapacity` field to `SHIP_CATALOG` entries |
+| `src/shared/buildings.ts` *(new or extend catalog)* | Add `refinery` building definition (prereqs, cost, levels) |
+
+#### Server (economy & game logic)
+
+| File | Change |
+|------|--------|
+| `src/server/core/game-service.ts` | Add `fuel` to `ResourceStore` handling, `tickStarEconomy` produces fuel via refinery conversion, `refuelShip()` deducts from star reserve |
+| `src/server/core/game-service.ts` | `colonizeStar()` seeds initial fuel (e.g. 200) |
+| `src/server/core/game-service.ts` | New `refuelAtStation()` — validates ownership, deducts fuel from star, returns fuel amount |
+| `src/server/routes/api.ts` | New `POST /api/refuel` endpoint (or integrate into existing dock/sync flow) |
+| `src/server/routes/api.ts` | Modify `POST /api/fleet/transfer` — validate source star has enough fuel for warp cost |
+| `src/server/core/autobot.ts` | Add refinery to `DEFAULT_BUILD_QUEUE`, bot manages fuel reserve |
+
+#### Client (game engine)
+
+| File | Change |
+|------|--------|
+| `src/game/game-loop.ts` | Replace `fuelPercent` (0–100) with `fuelUnits` / `fuelCapacity`. Dock refuel checks ownership. |
+| `src/game/game-loop.ts` | Tier transition (galaxy warp) deducts fuel units. Block if insufficient. |
+| `src/game/game-loop.ts` | Dock approach: check star ownership before allowing services |
+| `src/game/renderer.ts` | HUD: show fuel as `FUEL: 85/100` (units/capacity) instead of percentage bar |
+| `src/game/renderer.ts` | Dock panel: show "HOSTILE" or "NO FUEL SERVICE" for enemy stations |
+| `src/game/renderer.ts` | BUILD panel: add Refinery building tile |
+| `src/game/renderer.ts` | STATUS panel: show fuel production rate alongside ore/food/energy |
+| `src/game/constants.ts` | Add `FUEL_WARP_COST_PER_UNIT_DIST`, `FUEL_TIER_TRANSITION_COST`, per-ship fuel capacities |
+| `src/game/types.ts` | Update `GameState.fuelPercent` → `fuelUnits: number`, add `fuelCapacity: number` |
+| `src/game/pods.ts` | "refuel" pod now grants fixed fuel units (e.g. 15) instead of percentage |
+| `src/game/dock.ts` | Ownership check before initiating dock approach |
+
+#### Planet Features (visual)
+
+| File | Change |
+|------|--------|
+| `src/game/galaxy.ts` | Refinery feature placement on planets (already in `FeatureType`) |
+| `src/game/constants.ts` | Rename "Refinery Station" → "Fuel Refinery" in `FEATURE_NAMES` |
+| `src/game/economy-catalog.ts` | Change refinery from `produces: ['energy']` to `produces: ['fuel']` |
+
+### Migration Plan (Existing Players)
+
+1. All existing stars get `fuel: 500` initial reserve on first economy tick after update
+2. Existing `fuelPercent` maps to `fuelUnits = fuelPercent * (shipFuelCapacity / 100)`
+3. Refinery building starts at level 0 (locked) for all existing stars — players must build it
+4. Existing trading stations add fuel to their stock (tradeable commodity)
+
+### Implementation Phases
+
+| Phase | Scope | Effort |
+|:-----:|-------|:------:|
+| 14a | **Ownership check** — block refuel/repair at enemy stations (quick win, no new resource) | Small |
+| 14b | **Fuel resource** — add `fuel` to ResourceStore, refinery building, production tick | Medium |
+| 14c | **Ship fuel capacity** — replace fuelPercent with units, per-ship tanks | Medium |
+| 14d | **Warp fuel cost** — galaxy travel consumes fuel, insufficient fuel blocks warp | Small |
+| 14e | **Trading** — add fuel to trading station stock, enable fuel trades | Small |
+| 14f | **Bot integration** — autobot builds refinery, manages fuel | Small |
+
+### UX Considerations
+
+- **Low fuel warning** stays (already exists) — threshold adapts to unit system
+- **Stranded players** — if fuel hits 0, ship can still drift (no thrust) at 10% speed. Emergency beacon pod spawns nearby after 30s of zero fuel (prevents softlock)
+- **New player protection** — home star seeds with 500 fuel + refinery auto-builds if dock ≥ 2
+- **Visual** — fuel pods in belt stay the same (red glow), just grant units instead of percentage
+- **Galaxy HUD** — show fuel bar in warp confirm dialog: "WARP TO PROXIMA (cost: 8 fuel, have: 65/100)"

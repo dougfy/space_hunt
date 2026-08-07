@@ -54,6 +54,30 @@ export const LOW_FUEL_THRESHOLD = 25;
 export const LOW_FUEL_WARNING_THRESHOLD = 25;
 export const LOW_FUEL_BLINK_PERIOD = 0.4;
 
+// ── Pod Types (multi-color discovery system) ────────────────────────────────
+export type { PodKind } from '../shared/exploration';
+import type { PodKind } from '../shared/exploration';
+
+export interface PodTypeEntry {
+  kind: PodKind;
+  color: string;
+  weight: number;       // relative spawn weight
+  fuelBonus: number;    // fuel added on collect (0 = none)
+  label: string;        // short HUD label
+}
+
+/** Pod type catalog — weights sum to 100 for easy percentage reasoning */
+export const POD_TYPES: PodTypeEntry[] = [
+  { kind: 'refuel',  color: '#FF5A3D', weight: 15, fuelBonus: 100, label: 'REFUEL' },
+  { kind: 'dock',    color: '#FFD24A', weight: 10, fuelBonus: 15,  label: 'DOCK' },
+  { kind: 'energy',  color: '#66CCFF', weight: 25, fuelBonus: 5,   label: 'ENERGY' },
+  { kind: 'ore',     color: '#FF9933', weight: 25, fuelBonus: 5,   label: 'ORE' },
+  { kind: 'food',    color: '#66FF66', weight: 20, fuelBonus: 5,   label: 'FOOD' },
+  { kind: 'upgrade', color: '#CC66FF', weight: 5,  fuelBonus: 0,   label: 'UPGRADE' },
+];
+
+export const POD_TOTAL_WEIGHT = POD_TYPES.reduce((s, t) => s + t.weight, 0);
+
 export const SHIP_IMPACT_BUFFER = 0.12;
 
 // Colors (CSS rgba strings)

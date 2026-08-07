@@ -13,11 +13,13 @@ import {
 } from '../core/game-service';
 import type { RedisGameStore } from '../core/game-service';
 
-function createFakeStore(seed?: Record<string, Record<string, string>>): RedisGameStore & { data: Record<string, Record<string, string>> } {
+function createFakeStore(seed?: Record<string, Record<string, string>>): RedisGameStore & { data: Record<string, Record<string, string>>; kv: Record<string, string> } {
   const data: Record<string, Record<string, string>> = seed ? structuredClone(seed) : {};
+  const kv: Record<string, string> = {};
 
   return {
     data,
+    kv,
     async hSet(key, values) {
       data[key] = { ...(data[key] ?? {}), ...values };
     },
@@ -33,6 +35,12 @@ function createFakeStore(seed?: Record<string, Record<string, string>>): RedisGa
       for (const field of fields) {
         delete bucket[field];
       }
+    },
+    async get(key) {
+      return kv[key];
+    },
+    async set(key, value) {
+      kv[key] = value;
     },
   };
 }

@@ -30,7 +30,7 @@ describe('shared building rules', () => {
 
     expect(getBuildingCost('station', 4)).toEqual({ ore: 780, food: 780, energy: 780 });
     expect(getBuildingCost('mine', 3)).toEqual({ ore: 780, food: 360, energy: 540 });
-    expect(computeResourceRatesFromBuildings(buildings)).toEqual({ ore: 147, food: 84, energy: 105 });
+    expect(computeResourceRatesFromBuildings(buildings)).toEqual({ ore: 148, food: 85, energy: 106 });
     expect(computeResourceCapFromBuildings(buildings)).toBe(2400);
   });
 

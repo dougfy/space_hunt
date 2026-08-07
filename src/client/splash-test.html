@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Splash Load Test</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        font-family: monospace;
+        color: #4fffb0;
+      }
+      h1 { font-size: 24px; margin-bottom: 12px; }
+      #timer { font-size: 48px; font-weight: bold; }
+      p { font-size: 14px; color: rgba(79, 255, 176, 0.6); margin-top: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>VALCORDIA SPACE</h1>
+    <div id="timer">...</div>
+    <p>Splash-only load test — no game code loaded</p>
+    <p id="info"></p>
+    <script>
+      const t0 = performance.timing.navigationStart || performance.timeOrigin;
+      const now = Date.now();
+      const loadMs = now - t0;
+      document.getElementById('timer').textContent = loadMs + ' ms';
+      document.getElementById('info').textContent =
+        'navigationStart→now: ' + loadMs + 'ms | ' +
+        'DOMContentLoaded will fire next';
+
+      window.addEventListener('DOMContentLoaded', () => {
+        const dcl = Date.now() - t0;
+        document.getElementById('info').textContent += '\nDOMContentLoaded: ' + dcl + 'ms';
+      });
+      window.addEventListener('load', () => {
+        const full = Date.now() - t0;
+        document.getElementById('info').textContent += '\nFull load: ' + full + 'ms';
+        document.getElementById('timer').textContent = full + ' ms';
+      });
+    </script>
+  </body>
+</html>

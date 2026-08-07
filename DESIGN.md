@@ -252,3 +252,101 @@ The player entering from inside sees their ship at the **bottom** of screen. Goi
 - Crossing through → ship reaches `localY > +7.5` (outward edge) → exits outside belt ✓
 
 The screen rendering is irrelevant to the logic. If we want the visual to show "inward = bottom, outward = top", we can optionally negate Y in the Local tier renderer only, but this is cosmetic.
+
+## NPC Bot Presence System (Autobot)
+
+### Overview
+
+The game features an automated NPC ship ("VALCORDIA_PROBE") that patrols all navigation tiers, making the galaxy feel inhabited even when no other players are online. The bot appears as a normal ghost ship — indistinguishable from other players except by name.
+
+### Architecture
+
+```
+Cron (*/3 * * * *)
+  └─ autobot.ts: injectGhostPose()
+       ├─ Stores galaxy pose  (bot:VALCORDIA_PROBE:galaxy)
+       ├─ Stores system pose  (bot:VALCORDIA_PROBE:star)
+       └─ Stores planet pose  (bot:VALCORDIA_PROBE:planet)
+
+Client pollGhosts() every 1s
+  └─ GET /api/room-poses?tier=T&starIndex=S&bodyIndex=B
+       └─ game-service.ts: listRoomPoses()
+            └─ Detects bot: prefix → applies real-time drift
+```
+
+### Pose Storage
+
+Bot poses are stored in the same Redis hash as player poses: `poses:{postId}`. Each session ID maps to a `StoredPose` JSON:
+
+```typescript
+interface StoredPose {
+  x: number; y: number; angle: number;
+  username: string;      // "VALCORDIA_PROBE"
+  sessionId: string;     // "bot:VALCORDIA_PROBE:galaxy" | ":star" | ":planet"
+  shape: string;         // "scout"
+  tier: number;          // 0=Galaxy, 1=System, 3=Planet
+  starIndex: number;     // which star the bot is visiting
+  bodyIndex: number;     // which body (planet) for tier 3
+}
+```
+
+**Tier values** (from `NavigationTier` enum):
+| Value | Tier | Purpose |
+|-------|------|---------|
+| 0 | Galaxy | Star-to-star patrol |
+| 1 | System | Arrive/linger/depart at solar system |
+| 2 | Local | Belt tier (bot does not visit) |
+| 3 | Planet | Arrive/linger/depart at planet surface |
+
+### TTL & Future-Padding
+
+The cron runs every 3 minutes. Poses use `POSE_STALE_MS = 8000` (8 seconds) for staleness detection. To survive between cron runs, bot poses are stored with a future timestamp:
+
+```
+futureTs = Date.now() + CRON_INTERVAL_MS   // 3.5 minutes ahead
+```
+
+This ensures the pose appears fresh for the entire cron interval plus a 30-second buffer.
+
+### Server-Side Drift (Real-Time Movement)
+
+Static poses would make the bot appear frozen. Instead, `listRoomPoses()` detects `bot:` session IDs and applies time-based drift:
+
+**Galaxy tier (tier 0) — Patrol cycle (60s):**
+1. **0–25s**: Ease out from current star toward a destination star
+2. **25–35s**: Pause near destination
+3. **35–60s**: Return toward origin star
+4. Destination star rotates each cycle (cycles through galaxy stars)
+
+**System & Planet tiers (tiers 1 & 3) — Arrive/linger/depart cycle (45s):**
+1. **0–12s**: Arrive from edge toward center (eased)
+2. **12–25s**: Linger near center with small random drift (LINGER_RADIUS)
+3. **25–37s**: Depart from center toward edge
+4. **37–45s**: Gone (pose removed from results — `items.pop()`)
+
+Coordinate scaling adapts per tier:
+- System (tier 1): CENTER=20, EDGE=18, LINGER_RADIUS=3 (40×40 space)
+- Planet (tier 3): CENTER=0, EDGE=2.5, LINGER_RADIUS=0.8 (~6×6 space)
+
+### Autobot FSM
+
+The bot's behavior is managed by a finite state machine in `autobot.ts`:
+
+```
+dormant → economy → shipyard → explore → roam
+```
+
+The FSM determines which star and body the bot visits. `injectGhostPose()` reads the current FSM state to determine star/body targets.
+
+### Admin Controls
+
+Admin-only endpoints in `src/server/routes/bots.ts`:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /autobot/tick` | Force a bot FSM tick |
+| `GET /autobot/state` | View current bot FSM state |
+| `POST /autobot/reset` | Reset bot to initial state |
+| `POST /autobot/flyby` | Inject bot pose at current player's location |
+
+The **Bot Fly-By** button in the admin panel injects a bot pose at the player's current star/body/tier, useful for testing ghost ship visibility at any tier.

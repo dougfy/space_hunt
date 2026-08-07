@@ -459,7 +459,7 @@ export function drawHUD(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
   ctx.fillText(
-    'Click/drag: set target  •  Right-click: clear  •  Zoom close to discover asteroids  •  Red docks refuel to 100%',
+    'Click/drag: set target  •  Right-click: clear  •  Zoom close to discover asteroids  •  Colored pods = different resources',
     screenW / 2,
     screenH - 6,
   );
@@ -903,6 +903,59 @@ export function hitTestGalaxyZoomButtons(r: Renderer, screenX: number, screenY: 
   return null;
 }
 
+// ── Admin Skin Toggle Button ────────────────────────────────────────────────
+
+function toggleSkin(): void {
+  if (getActiveSkinId() === 'procedural') {
+    preloadRasterSprites();
+    setActiveSkin(rasterSkin);
+  } else {
+    setActiveSkin(proceduralSkin);
+  }
+}
+
+const SKIN_BTN_W = 60;
+const SKIN_BTN_H = 24;
+
+function getSkinBtnPos(r: Renderer) {
+  const dpr = window.devicePixelRatio || 1;
+  const screenH = r.height / dpr;
+  return { x: 10, y: screenH - 100 }; // above zoom buttons, left edge
+}
+
+export function drawSkinToggleButton(r: Renderer): void {
+  if (!_isAdmin) return;
+  const { ctx } = r;
+  const pos = getSkinBtnPos(r);
+  const label = getActiveSkinId() === 'procedural' ? 'WIRE' : 'RASTER';
+  ctx.save();
+  ctx.beginPath();
+  roundedRect(ctx, pos.x, pos.y, SKIN_BTN_W, SKIN_BTN_H, 4);
+  ctx.fillStyle = 'rgba(80, 20, 120, 0.85)';
+  ctx.fill();
+  roundedRect(ctx, pos.x, pos.y, SKIN_BTN_W, SKIN_BTN_H, 4);
+  ctx.strokeStyle = '#c090ff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = '#c090ff';
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, pos.x + SKIN_BTN_W / 2, pos.y + SKIN_BTN_H / 2);
+  ctx.restore();
+}
+
+export function hitTestSkinToggle(r: Renderer, screenX: number, screenY: number): boolean {
+  if (!_isAdmin) return false;
+  const pos = getSkinBtnPos(r);
+  if (screenX >= pos.x && screenX <= pos.x + SKIN_BTN_W &&
+      screenY >= pos.y && screenY <= pos.y + SKIN_BTN_H) {
+    toggleSkin();
+    return true;
+  }
+  return false;
+}
+
 /** Check if a screen tap hit the fire button. */
 export function isFireButtonHit(
   r: Renderer,
@@ -926,8 +979,11 @@ import { generateSystem } from './galaxy';
 import { buildGalaxyViewModel, getGalaxyStarTone } from './galaxy-view-model';
 import { getEnabledResources, getFeatureResourceIds as _getFeatureResourceIds, getFeatureResourceNames } from './economy-catalog';
 import { BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, FEATURE_LABELS, STAR_NAMES } from './constants';
-import type { ComsMessage } from '../shared/api';
+// ComsMessage type removed — DM system replaces old reddit-comment-based coms
 import { isTradingStation } from '../shared/trading';
+import { getActiveDrawFeatureIcon, getActiveSkinId, setActiveSkin } from './skin';
+import { proceduralSkin } from './skins/procedural';
+import { rasterSkin, preloadRasterSprites, getPlanetSprite } from './skins/raster';
 
 // ── Monochrome green palette (sci-fi terminal) ─────────────────────────────
 const G_BRIGHT = '#4fffb0';        // primary bright green
@@ -1544,6 +1600,10 @@ export function drawGalaxyView(
       if (_transferMode.shipTypeId === 11 || _transferMode.shipTypeId === 12) {
         if (s.star.discoveryLevel !== 'none' && s.star.owner !== 'foreign') continue;
       }
+      // Raider (15): only foreign-owned stars (claimed by other players)
+      if (_transferMode.shipTypeId === 15) {
+        if (s.star.owner !== 'foreign') continue;
+      }
       _validTransferTargets.add(s.star.index);
       ctx.save();
       ctx.strokeStyle = `rgba(79, 255, 176, ${0.2 + pulse * 0.3})`;
@@ -1576,9 +1636,12 @@ export function drawGalaxyView(
     ctx.textBaseline = 'middle';
     ctx.fillStyle = G_BRIGHT;
     const isFreighter = _transferMode!.shipTypeId === 2;
+    const isRaider = _transferMode!.shipTypeId === 15;
     const bannerText = isFreighter
       ? `ASSIGN TRADE ROUTE — TAP PICKUP STAR`
-      : `SENDING ${shipName.toUpperCase()} — TAP DESTINATION STAR`;
+      : isRaider
+        ? `RAID TARGET — TAP ENEMY STAR`
+        : `SENDING ${shipName.toUpperCase()} — TAP DESTINATION STAR`;
     ctx.fillText(bannerText, screenW / 2, screenH - bannerH / 2 - 2);
 
     // Cancel button
@@ -1665,8 +1728,8 @@ export function drawGalaxyView(
         statusText = 'OWNED';
         statusColor = 'rgba(120, 200, 255, 0.9)'; // blue
       } else if (star.owner === 'foreign') {
-        statusText = 'HOSTILE';
-        statusColor = 'rgba(255, 100, 100, 0.9)'; // red
+        statusText = star.claimedBy ? `CLAIMED: ${star.claimedBy}` : 'CLAIMED';
+        statusColor = 'rgba(255, 180, 80, 0.9)'; // orange
       } else if (star.discoveryLevel === 'visited') {
         statusText = 'VISITED';
         statusColor = 'rgba(79, 255, 176, 0.9)'; // green
@@ -1688,7 +1751,7 @@ export function drawGalaxyView(
       // Planet / belt count — only show if probed or visited
       const isExplored = star.index === galaxy.homeStarIndex || star.discoveryLevel === 'probed' || star.discoveryLevel === 'visited';
       if (isExplored) {
-        const sysBodies = generateSystem(star);
+        const sysBodies = generateSystem(star, _postId);
         const planetCount = sysBodies.filter(b => b.type === 'planet').length;
         const beltCount = sysBodies.filter(b => b.type === 'belt').length;
         const bodyParts: string[] = [];
@@ -1790,387 +1853,7 @@ function roundedRect(
 
 /** Draw a small icon for a planet feature */
 function drawFeatureIcon(ctx: CanvasRenderingContext2D, x: number, y: number, type: FeatureType, size: number, level?: number) {
-  ctx.save();
-  ctx.strokeStyle = G_BRIGHT;
-  ctx.fillStyle = G_BRIGHT;
-  ctx.lineWidth = 1.0;
-  const s = size;
-  const lv = level ?? 1;
-
-  switch (type) {
-    case 'mine':
-    case 'mine_l2': {
-      if (lv <= 2) {
-        // Pickaxe / headframe tower
-        ctx.beginPath();
-        ctx.moveTo(x, y + s); ctx.lineTo(x, y - s);
-        ctx.moveTo(x - s * 0.7, y + s); ctx.lineTo(x, y - s);
-        ctx.moveTo(x + s * 0.7, y + s); ctx.lineTo(x, y - s);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x, y - s, s * 0.2, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(x - s * 0.8, y + s); ctx.lineTo(x + s * 0.8, y + s);
-        ctx.stroke();
-      } else if (lv <= 5) {
-        // Twin-braced tower with cross braces + secondary shaft
-        ctx.beginPath();
-        ctx.moveTo(x, y + s); ctx.lineTo(x, y - s);
-        ctx.moveTo(x - s * 0.7, y + s); ctx.lineTo(x, y - s);
-        ctx.moveTo(x + s * 0.7, y + s); ctx.lineTo(x, y - s);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(x - s * 0.35, y + s * 0.2); ctx.lineTo(x + s * 0.35, y + s * 0.2);
-        ctx.moveTo(x - s * 0.2, y - s * 0.3); ctx.lineTo(x + s * 0.2, y - s * 0.3);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x, y - s, s * 0.15, 0, Math.PI * 2);
-        ctx.stroke();
-        // Secondary tower
-        ctx.beginPath();
-        ctx.moveTo(x + s * 0.8, y + s); ctx.lineTo(x + s * 0.8, y - s * 0.3);
-        ctx.moveTo(x + s * 0.5, y + s); ctx.lineTo(x + s * 0.8, y - s * 0.3);
-        ctx.moveTo(x + s * 1.1, y + s); ctx.lineTo(x + s * 0.8, y - s * 0.3);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(x - s, y + s); ctx.lineTo(x + s * 1.2, y + s);
-        ctx.stroke();
-      } else {
-        // Massive core bore rig — full industrial complex
-        ctx.beginPath();
-        ctx.moveTo(x, y + s); ctx.lineTo(x, y - s);
-        ctx.moveTo(x - s * 0.7, y + s); ctx.lineTo(x, y - s);
-        ctx.moveTo(x + s * 0.7, y + s); ctx.lineTo(x, y - s);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(x - s * 0.35, y + s * 0.3); ctx.lineTo(x + s * 0.35, y + s * 0.3);
-        ctx.moveTo(x - s * 0.2, y - s * 0.2); ctx.lineTo(x + s * 0.2, y - s * 0.2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x, y - s, s * 0.15, 0, Math.PI * 2);
-        ctx.stroke();
-        // Drill arms extending outward
-        ctx.beginPath();
-        ctx.moveTo(x - s * 0.5, y - s * 0.3); ctx.lineTo(x - s * 1.2, y - s * 0.8);
-        ctx.moveTo(x + s * 0.5, y - s * 0.3); ctx.lineTo(x + s * 1.2, y - s * 0.8);
-        ctx.stroke();
-        // Sub-shafts
-        ctx.beginPath();
-        ctx.moveTo(x - s * 0.3, y + s); ctx.lineTo(x - s * 0.3, y + s * 0.4);
-        ctx.moveTo(x + s * 0.3, y + s); ctx.lineTo(x + s * 0.3, y + s * 0.4);
-        ctx.moveTo(x - s * 0.3, y + s * 0.4); ctx.lineTo(x + s * 0.3, y + s * 0.4);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(x - s * 1.1, y + s); ctx.lineTo(x + s * 1.1, y + s);
-        ctx.stroke();
-      }
-      break;
-    }
-
-    case 'relay':
-      ctx.beginPath();
-      ctx.moveTo(x, y + s);
-      ctx.lineTo(x, y - s * 0.3);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(x, y - s * 0.3, s * 0.7, -Math.PI * 0.8, -Math.PI * 0.2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(x, y - s * 0.3);
-      ctx.lineTo(x + s * 0.8, y - s);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(x + s * 0.8, y - s, s * 0.25, 0, Math.PI * 2);
-      ctx.stroke();
-      break;
-
-    case 'refinery':
-      ctx.strokeRect(x - s, y - s * 0.3, s * 2, s * 1.3);
-      ctx.beginPath();
-      ctx.moveTo(x - s * 0.5, y - s * 0.3); ctx.lineTo(x - s * 0.5, y - s);
-      ctx.moveTo(x, y - s * 0.3); ctx.lineTo(x, y - s * 0.8);
-      ctx.moveTo(x + s * 0.5, y - s * 0.3); ctx.lineTo(x + s * 0.5, y - s);
-      ctx.stroke();
-      break;
-
-    case 'station': {
-      if (lv <= 2) {
-        // Simple cross with docking ports
-        ctx.beginPath();
-        ctx.moveTo(x - s, y); ctx.lineTo(x + s, y);
-        ctx.moveTo(x, y - s); ctx.lineTo(x, y + s);
-        ctx.stroke();
-        const portOffsets: Array<[number, number]> = [[-1, 0], [1, 0], [0, -1], [0, 1]];
-        for (const [dx, dy] of portOffsets) {
-          ctx.beginPath();
-          ctx.arc(x + dx * s, y + dy * s, s * 0.25, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-      } else if (lv <= 5) {
-        // Central hub with rectangular docking modules
-        ctx.beginPath();
-        ctx.arc(x, y, s * 0.25, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.rect(x - s * 0.4, y - s * 0.4, s * 0.8, s * 0.8);
-        ctx.stroke();
-        // 4 truss arms with module boxes
-        ctx.beginPath();
-        ctx.moveTo(x - s * 0.4, y); ctx.lineTo(x - s, y);
-        ctx.moveTo(x + s * 0.4, y); ctx.lineTo(x + s, y);
-        ctx.moveTo(x, y - s * 0.4); ctx.lineTo(x, y - s);
-        ctx.moveTo(x, y + s * 0.4); ctx.lineTo(x, y + s);
-        ctx.stroke();
-        // Module rectangles at ends
-        ctx.beginPath();
-        ctx.rect(x - s * 1.2, y - s * 0.25, s * 0.3, s * 0.5);
-        ctx.rect(x + s * 0.9, y - s * 0.25, s * 0.3, s * 0.5);
-        ctx.rect(x - s * 0.25, y - s * 1.2, s * 0.5, s * 0.3);
-        ctx.rect(x - s * 0.25, y + s * 0.9, s * 0.5, s * 0.3);
-        ctx.stroke();
-      } else {
-        // Capital command nexus — concentric rings with radial arms
-        ctx.beginPath();
-        ctx.arc(x, y, s * 0.2, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x, y, s * 0.55, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x, y, s * 0.9, 0, Math.PI * 2);
-        ctx.stroke();
-        // 8 radial arms
-        for (let i = 0; i < 8; i++) {
-          const a = (i / 8) * Math.PI * 2;
-          ctx.beginPath();
-          ctx.moveTo(x + Math.cos(a) * s * 0.2, y + Math.sin(a) * s * 0.2);
-          ctx.lineTo(x + Math.cos(a) * s * 0.9, y + Math.sin(a) * s * 0.9);
-          ctx.stroke();
-        }
-        // Module boxes at cardinal points
-        const cardinals = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
-        for (const a of cardinals) {
-          const mx = x + Math.cos(a) * s;
-          const my = y + Math.sin(a) * s;
-          ctx.beginPath();
-          ctx.rect(mx - s * 0.15, my - s * 0.15, s * 0.3, s * 0.3);
-          ctx.stroke();
-        }
-      }
-      break;
-    }
-
-    case 'outpost':
-      ctx.beginPath();
-      ctx.moveTo(x - s * 0.7, y + s * 0.6);
-      ctx.lineTo(x + s * 0.7, y + s * 0.6);
-      ctx.lineTo(x + s * 0.7, y - s * 0.2);
-      ctx.lineTo(x, y - s);
-      ctx.lineTo(x - s * 0.7, y - s * 0.2);
-      ctx.closePath();
-      ctx.stroke();
-      break;
-
-    case 'colony': {
-      if (lv <= 2) {
-        // Small dome with windows
-        ctx.beginPath();
-        ctx.arc(x, y, s * 0.8, Math.PI, 0);
-        ctx.lineTo(x + s * 0.8, y + s * 0.4);
-        ctx.lineTo(x - s * 0.8, y + s * 0.4);
-        ctx.closePath();
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x - s * 0.3, y - s * 0.1, 1.5, 0, Math.PI * 2);
-        ctx.arc(x + s * 0.3, y - s * 0.1, 1.5, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (lv <= 5) {
-        // Main dome plus annex dome
-        ctx.beginPath();
-        ctx.arc(x - s * 0.2, y, s * 0.7, Math.PI, 0);
-        ctx.lineTo(x + s * 0.5, y + s * 0.4);
-        ctx.lineTo(x - s * 0.9, y + s * 0.4);
-        ctx.closePath();
-        ctx.stroke();
-        // Annex dome
-        ctx.beginPath();
-        ctx.arc(x + s * 0.7, y + s * 0.1, s * 0.4, Math.PI, 0);
-        ctx.lineTo(x + s * 1.1, y + s * 0.4);
-        ctx.lineTo(x + s * 0.3, y + s * 0.4);
-        ctx.closePath();
-        ctx.stroke();
-        // Corridor connection
-        ctx.beginPath();
-        ctx.moveTo(x + s * 0.3, y + s * 0.2); ctx.lineTo(x + s * 0.5, y + s * 0.2);
-        ctx.moveTo(x + s * 0.3, y + s * 0.35); ctx.lineTo(x + s * 0.5, y + s * 0.35);
-        ctx.stroke();
-        // Base
-        ctx.beginPath();
-        ctx.moveTo(x - s * 1.0, y + s * 0.4); ctx.lineTo(x + s * 1.2, y + s * 0.4);
-        ctx.stroke();
-      } else {
-        // Arcology — dome plus tower with multiple levels
-        ctx.beginPath();
-        ctx.arc(x - s * 0.3, y + s * 0.1, s * 0.55, Math.PI, 0);
-        ctx.lineTo(x + s * 0.25, y + s * 0.5);
-        ctx.lineTo(x - s * 0.85, y + s * 0.5);
-        ctx.closePath();
-        ctx.stroke();
-        // Tower
-        ctx.beginPath();
-        ctx.rect(x + s * 0.4, y - s * 0.8, s * 0.5, s * 1.3);
-        ctx.stroke();
-        // Tower floor lines
-        for (let i = 0; i < 4; i++) {
-          const ty = y - s * 0.5 + i * s * 0.35;
-          ctx.beginPath();
-          ctx.moveTo(x + s * 0.4, ty); ctx.lineTo(x + s * 0.9, ty);
-          ctx.stroke();
-        }
-        // Base platform
-        ctx.beginPath();
-        ctx.moveTo(x - s * 1.0, y + s * 0.5); ctx.lineTo(x + s * 1.1, y + s * 0.5);
-        ctx.stroke();
-      }
-      break;
-    }
-
-    case 'solar_array':
-    case 'solar_array_l2': {
-      if (lv <= 2) {
-        // Two-wing panel array
-        ctx.beginPath();
-        ctx.rect(x - s * 0.25, y - s * 0.25, s * 0.5, s * 0.5);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x, y, s * 0.12, 0, Math.PI * 2);
-        ctx.stroke();
-        // Horizontal truss
-        ctx.beginPath();
-        ctx.moveTo(x - s * 0.25, y); ctx.lineTo(x - s * 0.9, y);
-        ctx.moveTo(x + s * 0.25, y); ctx.lineTo(x + s * 0.9, y);
-        ctx.stroke();
-        // Left panel
-        ctx.beginPath();
-        ctx.rect(x - s * 0.9, y - s * 0.45, s * 0.65, s * 0.9);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(x - s * 0.58, y - s * 0.45); ctx.lineTo(x - s * 0.58, y + s * 0.45);
-        ctx.stroke();
-        // Right panel
-        ctx.beginPath();
-        ctx.rect(x + s * 0.25, y - s * 0.45, s * 0.65, s * 0.9);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(x + s * 0.58, y - s * 0.45); ctx.lineTo(x + s * 0.58, y + s * 0.45);
-        ctx.stroke();
-      } else if (lv <= 5) {
-        // Four-wing panel array with grid subdivisions
-        ctx.beginPath();
-        ctx.rect(x - s * 0.25, y - s * 0.25, s * 0.5, s * 0.5);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x, y, s * 0.12, 0, Math.PI * 2);
-        ctx.stroke();
-        // 4 truss arms
-        ctx.beginPath();
-        ctx.moveTo(x - s * 0.25, y); ctx.lineTo(x - s * 0.9, y);
-        ctx.moveTo(x + s * 0.25, y); ctx.lineTo(x + s * 0.9, y);
-        ctx.moveTo(x, y - s * 0.25); ctx.lineTo(x, y - s * 0.9);
-        ctx.moveTo(x, y + s * 0.25); ctx.lineTo(x, y + s * 0.9);
-        ctx.stroke();
-        // 4 panel rectangles with grid
-        const panels: Array<[number, number, number, number]> = [
-          [x - s * 0.9, y - s * 0.4, s * 0.65, s * 0.8],
-          [x + s * 0.25, y - s * 0.4, s * 0.65, s * 0.8],
-          [x - s * 0.4, y - s * 0.9, s * 0.8, s * 0.65],
-          [x - s * 0.4, y + s * 0.25, s * 0.8, s * 0.65],
-        ];
-        for (const [px, py, pw, ph] of panels) {
-          ctx.beginPath();
-          ctx.rect(px, py, pw, ph);
-          ctx.stroke();
-        }
-      } else {
-        // Collector ring — hub with halo ring and radial panels
-        ctx.beginPath();
-        ctx.arc(x, y, s * 0.2, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x, y, s * 0.7, 0, Math.PI * 2);
-        ctx.stroke();
-        // Panels at cardinal + diagonal points on ring
-        for (let i = 0; i < 8; i++) {
-          const a = (i / 8) * Math.PI * 2;
-          const px = x + Math.cos(a) * s * 0.7;
-          const py = y + Math.sin(a) * s * 0.7;
-          ctx.beginPath();
-          ctx.rect(px - s * 0.12, py - s * 0.12, s * 0.24, s * 0.24);
-          ctx.stroke();
-        }
-        // Truss lines from hub to ring
-        ctx.beginPath();
-        ctx.moveTo(x - s * 0.2, y); ctx.lineTo(x - s * 0.7, y);
-        ctx.moveTo(x + s * 0.2, y); ctx.lineTo(x + s * 0.7, y);
-        ctx.moveTo(x, y - s * 0.2); ctx.lineTo(x, y - s * 0.7);
-        ctx.moveTo(x, y + s * 0.2); ctx.lineTo(x, y + s * 0.7);
-        ctx.stroke();
-      }
-      break;
-    }
-    case 'warehouse': {
-      // Crate/box icon
-      ctx.beginPath();
-      ctx.rect(x - s * 0.7, y - s * 0.5, s * 1.4, s * 1.0);
-      ctx.stroke();
-      // Horizontal divider
-      ctx.beginPath();
-      ctx.moveTo(x - s * 0.7, y); ctx.lineTo(x + s * 0.7, y);
-      ctx.stroke();
-      // Vertical divider
-      ctx.beginPath();
-      ctx.moveTo(x, y - s * 0.5); ctx.lineTo(x, y + s * 0.5);
-      ctx.stroke();
-      if (lv >= 3) {
-        // Stacked second crate
-        ctx.beginPath();
-        ctx.rect(x - s * 0.5, y - s * 0.9, s * 1.0, s * 0.4);
-        ctx.stroke();
-      }
-      break;
-    }
-    case 'dock': {
-      // Dock gantry / shipyard frame
-      ctx.beginPath();
-      // Main frame
-      ctx.rect(x - s * 0.8, y - s * 0.6, s * 1.6, s * 1.2);
-      ctx.stroke();
-      // Inner bay opening
-      ctx.beginPath();
-      ctx.rect(x - s * 0.5, y - s * 0.3, s * 1.0, s * 0.6);
-      ctx.stroke();
-      // Gantry arms
-      ctx.beginPath();
-      ctx.moveTo(x - s * 0.8, y - s * 0.6); ctx.lineTo(x - s * 1.1, y - s * 1.0);
-      ctx.moveTo(x + s * 0.8, y - s * 0.6); ctx.lineTo(x + s * 1.1, y - s * 1.0);
-      ctx.stroke();
-      if (lv >= 3) {
-        // Second bay
-        ctx.beginPath();
-        ctx.rect(x - s * 0.5, y + s * 0.4, s * 1.0, s * 0.5);
-        ctx.stroke();
-      }
-      if (lv >= 5) {
-        // Third bay / massive structure
-        ctx.beginPath();
-        ctx.rect(x - s * 0.5, y - s * 1.0, s * 1.0, s * 0.4);
-        ctx.stroke();
-      }
-      break;
-    }
-  }
-  ctx.restore();
+  getActiveDrawFeatureIcon()(ctx, x, y, type, size, level);
 }
 
 export function drawSystemView(
@@ -2584,7 +2267,7 @@ export function drawPlanetDebugBounds(
   ctx.font = '7px monospace';
   ctx.fillStyle = 'rgba(255, 200, 50, 0.8)';
   ctx.textAlign = 'center';
-  ctx.fillText('DOCK', planetSc.x, planetSc.y - planetDockPx - 3);
+  ctx.fillText('ORBIT', planetSc.x, planetSc.y - planetDockPx - 3);
 
   // Feature dock radii
   for (const feat of features) {
@@ -2656,12 +2339,14 @@ function getEffectiveFeatures(body: SystemBody, starIndex: number): PlanetFeatur
   const builtExtensions: PlanetFeature[] = [];
   const rng = createRng(body.seed + 12345);
 
-  const extensionTypes: Array<{ key: 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock'; featureType: FeatureType; label: string }> = [
+  const extensionTypes: Array<{ key: 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon'; featureType: FeatureType; label: string }> = [
     { key: 'mine', featureType: 'mine', label: 'Mine' },
     { key: 'solar', featureType: 'solar_array', label: 'Solar Array' },
     { key: 'hab', featureType: 'colony', label: 'Hab' },
     { key: 'warehouse', featureType: 'warehouse', label: 'Warehouse' },
     { key: 'dock', featureType: 'dock', label: 'Space Dock' },
+    { key: 'shield', featureType: 'shield', label: 'Shield Gen' },
+    { key: 'cannon', featureType: 'cannon', label: 'Ion Cannon' },
   ];
 
   // Space extensions evenly around orbit, offset from station
@@ -2675,7 +2360,7 @@ function getEffectiveFeatures(body: SystemBody, starIndex: number): PlanetFeatur
     const dist = updatedStation.dist + rng.range(-0.2, 0.3);
 
     const building = serverEcon.buildings[ext.key];
-    if (building && building.level > 0 && building.status === 'ACTIVE') {
+    if (building && building.level > 0 && (building.status === 'ACTIVE' || building.status === 'UPGRADING')) {
       builtExtensions.push({
         name: `${body.name} ${ext.label} LV${building.level}`,
         type: ext.featureType,
@@ -2733,48 +2418,56 @@ export function drawPlanetView(
   ctx.restore();
 
   // ── 2. Planet body ──
-  ctx.save();
-  // Dark fill
-  ctx.beginPath();
-  ctx.arc(sc.x, sc.y, planetRadPx, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(0, 20, 10, 0.85)';
-  ctx.fill();
-
-  // Surface bands
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(sc.x, sc.y, planetRadPx, 0, Math.PI * 2);
-  ctx.clip();
-  const bandRng = createRng(body.seed + 99);
-  const bandCount = bandRng.rangeInt(3, 6);
-  ctx.strokeStyle = G_MED;
-  ctx.lineWidth = 1.0;
-  for (let b = 0; b < bandCount; b++) {
-    const by = sc.y - planetRadPx + (b + 1) * (planetRadPx * 2) / (bandCount + 1);
-    const bw = Math.sqrt(Math.max(0, planetRadPx * planetRadPx - (by - sc.y) * (by - sc.y)));
+  const planetImg = getActiveSkinId() === 'raster' ? getPlanetSprite(body.seed) : null;
+  if (planetImg) {
+    // Raster planet sprite
+    const drawSize = planetRadPx * 2.4;
+    ctx.drawImage(planetImg, sc.x - drawSize / 2, sc.y - drawSize / 2, drawSize, drawSize);
+  } else {
+    // Procedural planet
+    ctx.save();
+    // Dark fill
     ctx.beginPath();
-    ctx.moveTo(sc.x - bw * 0.9, by);
-    ctx.quadraticCurveTo(sc.x, by + bandRng.range(-2, 2), sc.x + bw * 0.9, by);
-    ctx.stroke();
-  }
-  ctx.restore();
+    ctx.arc(sc.x, sc.y, planetRadPx, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0, 20, 10, 0.85)';
+    ctx.fill();
 
-  // Planet outline
-  ctx.beginPath();
-  ctx.arc(sc.x, sc.y, planetRadPx, 0, Math.PI * 2);
-  ctx.strokeStyle = G_BRIGHT;
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // Planetary ring (for some planets)
-  if (body.seed % 5 === 0) {
+    // Surface bands
+    ctx.save();
     ctx.beginPath();
-    ctx.ellipse(sc.x, sc.y, planetRadPx * 1.8, planetRadPx * 0.35, -0.2, 0, Math.PI * 2);
+    ctx.arc(sc.x, sc.y, planetRadPx, 0, Math.PI * 2);
+    ctx.clip();
+    const bandRng = createRng(body.seed + 99);
+    const bandCount = bandRng.rangeInt(3, 6);
     ctx.strokeStyle = G_MED;
-    ctx.lineWidth = 0.8;
+    ctx.lineWidth = 1.0;
+    for (let b = 0; b < bandCount; b++) {
+      const by = sc.y - planetRadPx + (b + 1) * (planetRadPx * 2) / (bandCount + 1);
+      const bw = Math.sqrt(Math.max(0, planetRadPx * planetRadPx - (by - sc.y) * (by - sc.y)));
+      ctx.beginPath();
+      ctx.moveTo(sc.x - bw * 0.9, by);
+      ctx.quadraticCurveTo(sc.x, by + bandRng.range(-2, 2), sc.x + bw * 0.9, by);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Planet outline
+    ctx.beginPath();
+    ctx.arc(sc.x, sc.y, planetRadPx, 0, Math.PI * 2);
+    ctx.strokeStyle = G_BRIGHT;
+    ctx.lineWidth = 1.5;
     ctx.stroke();
+
+    // Planetary ring (for some planets)
+    if (body.seed % 5 === 0) {
+      ctx.beginPath();
+      ctx.ellipse(sc.x, sc.y, planetRadPx * 1.8, planetRadPx * 0.35, -0.2, 0, Math.PI * 2);
+      ctx.strokeStyle = G_MED;
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+    }
+    ctx.restore();
   }
-  ctx.restore();
 
   // ── 3. Planet name above ──
   ctx.save();
@@ -2824,6 +2517,20 @@ export function drawPlanetView(
       // Feature icon
       drawFeatureIcon(ctx, fx, fy, feat.type, 10, feat.level);
 
+      // Shield ring around station when shields raised
+      if (feat.type === 'station' && _serverEconomyByStarIndex.get(galaxy.currentStarIndex)?.shieldRaised) {
+        ctx.save();
+        const pulse = 0.5 + 0.3 * Math.sin(performance.now() * 0.003);
+        ctx.strokeStyle = `rgba(100, 200, 255, ${pulse})`;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.arc(fx, fy, 18, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+
       // Feature name and type label
       ctx.save();
       const leftSide = feat.angle > Math.PI / 2 && feat.angle < Math.PI * 1.5;
@@ -2854,19 +2561,45 @@ export function drawPlanetView(
   ctx.fillStyle = G_MED;
   ctx.fillText(`${starName.toUpperCase()} SYSTEM`, 14, 30);
 
+  // Ownership indicator
+  const isHome = galaxy.currentStarIndex === galaxy.homeStarIndex;
+  const ownerLabel = isHome ? '\u2302 HOME STAR'
+    : star?.owner === 'player' ? '\u2605 CLAIMED'
+    : star?.owner === 'foreign' ? '\u2716 FOREIGN'
+    : '\u25CB UNCLAIMED';
+  const ownerColor = isHome ? '#ffd700'
+    : star?.owner === 'player' ? G_BRIGHT
+    : star?.owner === 'foreign' ? '#ff6666'
+    : G_DIM;
+  ctx.font = 'bold 9px monospace';
+  ctx.fillStyle = ownerColor;
+  ctx.fillText(ownerLabel, 14, 44);
+
   ctx.font = 'bold 9px monospace';
   ctx.fillStyle = 'rgba(79, 255, 176, 0.85)';
   const resources = getEnabledResources();
   const resourceLine = resources.length > 0
     ? resources.map((resource) => resource.shortName).join('  ')
     : 'NONE';
-  ctx.fillText(`TYPE: TERRESTRIAL`, 14, 50);
-  ctx.fillText(`FEATURES: ${effectiveFeatures.length}`, 14, 62);
-  ctx.fillText(`RESOURCES: ${resourceLine}`, 14, 74);
+  ctx.fillText(`TYPE: TERRESTRIAL`, 14, 60);
+  ctx.fillText(`FEATURES: ${effectiveFeatures.length}`, 14, 72);
+  ctx.fillText(`RESOURCES: ${resourceLine}`, 14, 84);
+
+  // Richness per resource
+  const econ = _serverEconomyByStarIndex.get(galaxy.currentStarIndex);
+  if (econ?.richness) {
+    const richLine = resources.length > 0
+      ? resources.map((res) => {
+          const val = res.id === 'ore' ? econ.richness!.ore : res.id === 'food' ? econ.richness!.food : econ.richness!.energy;
+          return `${val}/10`;
+        }).join('  ')
+      : '';
+    ctx.fillText(`RICHNESS:  ${richLine}`, 14, 96);
+  }
 
   // Blank-line separation between planet info and ship status.
-  ctx.fillText(`SHIP FUEL: ${Math.round(fuelPercent)}%`, 14, 98);
-  ctx.fillText(`SHIP SHIELDS: ${Math.round(shieldPercent)}%`, 14, 110);
+  ctx.fillText(`SHIP FUEL: ${Math.round(fuelPercent)}%`, 14, 120);
+  ctx.fillText(`SHIP SHIELDS: ${Math.round(shieldPercent)}%`, 14, 132);
   ctx.restore();
 
   // ── 7. Feature legend (bottom-left) ──
@@ -2921,6 +2654,7 @@ const PANEL_TABS: PanelTab[] = [
   { title: 'SHIPS',  icon: '\u{1F680}', requiresDock: true }, // 🚀
   { title: 'FLEET',  icon: '\u2694' },        // ⚔
   { title: 'COMS',   icon: '\u{1F4E1}' },    // 📡
+  { title: 'TRADE',  icon: '\u2696', requiresDock: true },  // ⚖
 ];
 
 function buildMockPlanetStatusRows(
@@ -2933,22 +2667,9 @@ function buildMockPlanetStatusRows(
   void fuelPercent;
   void shieldPercent;
 
-  // Trading station info
+  // Show trading station label in status
   if (_postId && isTradingStation(_postId, starIndex)) {
     rows.push('⚖ TRADING STATION');
-    if (_tradeStationInfo && _tradeStationInfo.starIndex === starIndex) {
-      rows.push(`STOCK O:${Math.floor(_tradeStationInfo.stock.ore)} F:${Math.floor(_tradeStationInfo.stock.food)} E:${Math.floor(_tradeStationInfo.stock.energy)}`);
-      rows.push('RATES (give:receive)');
-      rows.push(`Ore→Food  ${_tradeStationInfo.rates.ore_food.toFixed(2)}`);
-      rows.push(`Ore→Enrg  ${_tradeStationInfo.rates.ore_energy.toFixed(2)}`);
-      rows.push(`Food→Ore  ${_tradeStationInfo.rates.food_ore.toFixed(2)}`);
-      rows.push(`Food→Enrg ${_tradeStationInfo.rates.food_energy.toFixed(2)}`);
-      rows.push(`Enrg→Ore  ${_tradeStationInfo.rates.energy_ore.toFixed(2)}`);
-      rows.push(`Enrg→Food ${_tradeStationInfo.rates.energy_food.toFixed(2)}`);
-    } else {
-      rows.push('Loading rates...');
-    }
-    return rows;
   }
 
   rows.push(`ORBIT: ${docked ? 'established' : 'approaching'}`);
@@ -2961,14 +2682,22 @@ function buildMockPlanetStatusRows(
       const id = resource.id;
       const amount = id === 'ore' ? serverEcon.store.ore : id === 'food' ? serverEcon.store.food : serverEcon.store.energy;
       const rate = id === 'ore' ? serverEcon.rates.ore : id === 'food' ? serverEcon.rates.food : serverEcon.rates.energy;
-      rows.push(`${resource.shortName}: ${Math.floor(amount)}/${serverEcon.cap} (+${rate}/m)`);
+      const rich = serverEcon.richness ? (id === 'ore' ? serverEcon.richness.ore : id === 'food' ? serverEcon.richness.food : serverEcon.richness.energy) : 0;
+      const richLabel = rich > 0 ? ` [${rich}]` : '';
+      rows.push(`${resource.shortName}: ${Math.floor(amount)}/${serverEcon.cap} (+${rate}/m)${richLabel}`);
+    }
+    // Defense score
+    if (serverEcon.defenseScore && serverEcon.defenseScore.total > 0) {
+      rows.push('');
+      rows.push(`DEF: ${serverEcon.defenseScore.total} (S:${serverEcon.defenseScore.shield} C:${serverEcon.defenseScore.cannon})`);
+      rows.push(`SHIELDS: ${serverEcon.shieldRaised ? 'RAISED' : 'LOWERED'}`);
     }
   }
 
   return rows;
 }
 
-// -1 = all closed, 0..4 = which panel is open
+// -1 = all closed, 0..5 = which panel is open
 let _openPanel = -1;
 
 // Layout constants
@@ -2979,7 +2708,7 @@ const ROW_H = 14;
 const PANEL_PAD = 10;
 
 // Per-tab panel widths
-const PANEL_WIDTHS: number[] = [180, 280, 260, 220, 220]; // STATUS, BUILD, SHIPS, FLEET, COMS
+const PANEL_WIDTHS: number[] = [180, 280, 260, 220, 220, 200]; // STATUS, BUILD, SHIPS, FLEET, COMS, TRADE
 
 function getEffectivePanelW(tabIndex: number, screenW: number): number {
   const base = PANEL_WIDTHS[tabIndex] ?? 180;
@@ -3060,12 +2789,14 @@ export function hitTestPlanetPanels(
       // Handle interactive clicks inside BUILD / SHIPS / FLEET tabs
       if (_openPanel === 1) {
         hitTestBuildPanel(sx, sy);
-      } else if (_openPanel === 0) {
+      } else if (_openPanel === 5) {
         hitTestTradeButtons(sx, sy);
       } else if (_openPanel === 2) {
         hitTestShipsPanel(sx, sy);
       } else if (_openPanel === 3) {
         hitTestFleetPanel(sx, sy);
+      } else if (_openPanel === 4) {
+        hitTestComsPanel(sx, sy);
       }
       return -2; // inside panel body — consume click
     }
@@ -3112,24 +2843,179 @@ let _panelsTier: 'galaxy' | 'system' | 'local' | 'planet' = 'planet';
 let _panelsShipShape: string = 'scout';
 let _panelsOwned = false; // whether player owns the current star
 let _isAdmin = false; // whether current player is an admin
+let _completeCharges = 0; // auto-complete charges from yellow pods
 
 // ── Coms state ──────────────────────────────────────────────────────────────
-let _comsMessages: ComsMessage[] = [];
 let _comsUnreadCount = 0;
-let _comsLoading = false;
-// eslint-disable-next-line prefer-const
-let _comsScrollOffset = 0; // scroll offset for message list (0 = bottom)
 
-/** Update coms messages from server. */
-export function setComsMessages(messages: ComsMessage[]): void {
-  _comsMessages = messages;
-  _comsLoading = false;
+// ── DM state ────────────────────────────────────────────────────────────────
+import type { DirectMessage, PublicComment, Alliance, AllianceInvite, AllianceChatMessage } from '../shared/api';
+let _knownPlayerNames: string[] = [];
+let _dmPeer: string | null = null;       // currently open DM conversation
+let _dmMessages: DirectMessage[] = [];
+let _dmUnreadFrom: string[] = [];         // usernames with unread DMs
+let _dmLoading = false;
+let _pendingDMSend: { to: string; text: string } | null = null;
+let _dmInputRequested: string | null = null;  // peer name when input overlay should show
+let _dmReportPending: { messageId: string; from: string; body: string } | null = null; // message to report
+let _dmReportButtons: { x: number; y: number; w: number; h: number; msg: DirectMessage }[] = [];
+let _dmReportConfirmUntil = 0; // timestamp when "Reported ✓" flash expires
+
+// ── Public COMS state ───────────────────────────────────────────────────────
+type ComsTab = 'private' | 'public' | 'alliance' | 'board';
+let _comsTab: ComsTab = 'public';
+let _publicComments: PublicComment[] = [];
+let _publicLoading = false;
+let _pendingPublicPost: { text: string; parentId?: string } | null = null;
+let _publicInputRequested: { parentId?: string; recipient?: string } | null = null; // signals overlay should show for public post
+let _publicPage = 0; // current page of public comments
+const PUBLIC_PAGE_SIZE = 4; // messages per page
+let _publicRecipient: string | null = null; // selected "TO:" player for public posts
+
+// ── Alliance state ──────────────────────────────────────────────────────────
+type AllianceView = 'none' | 'home' | 'chat' | 'invites' | 'invite';
+let _allianceView: AllianceView = 'none';
+let _allianceInfo: Alliance | null = null;
+let _allianceInvites: AllianceInvite[] = [];
+let _allianceChat: AllianceChatMessage[] = [];
+let _allianceChatPage = 0;
+const ALLIANCE_CHAT_PAGE_SIZE = 5;
+let _username: string | null = null; // current player username for alliance manager checks
+const _allianceInvitedPlayers: Set<string> = new Set(); // track recently invited players for UI feedback
+let _pendingAllianceAction: {
+  type: 'create' | 'chat' | 'invite' | 'respond' | 'leave' | 'kick' | 'join' | 'reject';
+  name?: string;
+  text?: string;
+  target?: string;
+  allianceId?: string;
+  accept?: boolean;
+} | null = null;
+let _allianceInputRequested: { type: 'create' | 'chat' } | null = null;
+
+// ── Leaderboard state ───────────────────────────────────────────────────────
+import type { LeaderboardEntry } from '../shared/api';
+let _leaderboardData: LeaderboardEntry[] = [];
+let _leaderboardSeedButton: { x: number; y: number; w: number; h: number } | null = null;
+let _pendingSeedBots = false;
+
+// ── Fleet Share ─────────────────────────────────────────────────────────────
+let _pendingFleetShare = false;
+let _fleetShareButton: { x: number; y: number; w: number; h: number } | null = null;
+let _fleetShareCooldownUntil = 0;
+
+export function consumePendingFleetShare(): boolean {
+  if (_pendingFleetShare) { _pendingFleetShare = false; return true; }
+  return false;
 }
 
-/** Set loading state for coms panel. */
-export function setComsLoading(loading: boolean): void {
-  _comsLoading = loading;
+export function setFleetShareCooldown(durationMs: number): void {
+  _fleetShareCooldownUntil = Date.now() + durationMs;
 }
+
+export function setLeaderboardData(data: LeaderboardEntry[]): void {
+  _leaderboardData = data;
+}
+
+export function consumePendingSeedBots(): boolean {
+  if (_pendingSeedBots) { _pendingSeedBots = false; return true; }
+  return false;
+}
+
+export function setKnownPlayers(names: string[]): void {
+  _knownPlayerNames = names;
+}
+
+export function setDMPeer(peer: string | null): void {
+  _dmPeer = peer;
+  _dmMessages = [];
+  _dmLoading = !!peer;
+}
+
+export function getDMPeer(): string | null {
+  return _dmPeer;
+}
+
+export function setDMMessages(messages: DirectMessage[]): void {
+  _dmMessages = messages;
+  _dmLoading = false;
+}
+
+export function setDMUnread(unreadFrom: string[]): void {
+  _dmUnreadFrom = unreadFrom;
+}
+
+export function consumePendingDMSend(): { to: string; text: string } | null {
+  const send = _pendingDMSend;
+  _pendingDMSend = null;
+  return send;
+}
+
+/** Check if the DM input overlay should be shown. Returns peer name or null. */
+export function consumeDMInputRequest(): string | null {
+  const peer = _dmInputRequested;
+  _dmInputRequested = null;
+  return peer;
+}
+
+/** Submit DM text from the HTML input overlay. */
+export function submitDMInput(text: string): void {
+  if (_dmPeer && text.trim()) {
+    _pendingDMSend = { to: _dmPeer, text: text.trim() };
+  }
+}
+
+/** Consume a pending DM report (user tapped ⚑ on a message). */
+export function consumePendingDMReport(): { messageId: string; from: string; body: string } | null {
+  const report = _dmReportPending;
+  _dmReportPending = null;
+  return report;
+}
+
+/** Show "Reported ✓" confirmation flash in DM panel. */
+export function showDMReportConfirm(): void {
+  _dmReportConfirmUntil = Date.now() + 3000; // 3 seconds
+}
+
+// ── Public COMS exports ─────────────────────────────────────────────────────
+
+export function getComsTab(): ComsTab { return _comsTab; }
+
+export function setPublicComments(comments: PublicComment[]): void {
+  _publicComments = comments;
+  _publicLoading = false;
+}
+
+export function setPublicLoading(loading: boolean): void {
+  _publicLoading = loading;
+}
+
+export function consumePendingPublicPost(): { text: string; parentId?: string } | null {
+  const post = _pendingPublicPost;
+  _pendingPublicPost = null;
+  return post;
+}
+
+/** Check if the public post input overlay should show. Returns target or null. */
+export function consumePublicInputRequest(): { parentId?: string; recipient?: string } | null {
+  const req = _publicInputRequested;
+  _publicInputRequested = null;
+  return req;
+}
+
+/** Submit public post text from the HTML input overlay. */
+export function submitPublicPost(text: string, parentId?: string, recipient?: string): void {
+  if (text.trim()) {
+    // Prefix with u/recipient mention if specified
+    const prefix = recipient ? `u/${recipient} ` : '';
+    const fullText = prefix + text.trim();
+    const post: { text: string; parentId?: string } = { text: fullText };
+    if (parentId) post.parentId = parentId;
+    _pendingPublicPost = post;
+  }
+}
+
+/** Get the current public recipient selection. */
+export function getPublicRecipient(): string | null { return _publicRecipient === '__ALL__' ? null : _publicRecipient; }
 
 /** Update unread badge count. */
 export function setComsUnread(count: number): void {
@@ -3149,14 +3035,96 @@ export function isComsPanelOpen(): boolean {
 /** Set admin flag (gates debug features like COMPLETE button). */
 export function setIsAdmin(v: boolean): void { _isAdmin = v; }
 
+// ── Alliance exports ────────────────────────────────────────────────────────
+
+export function setAllianceInfo(info: Alliance | null): void {
+  _allianceInfo = info;
+  if (info) {
+    if (_allianceView === 'none') _allianceView = 'home';
+  } else {
+    _allianceView = 'none';
+  }
+}
+
+export function setAllianceInvites(invites: AllianceInvite[]): void {
+  _allianceInvites = invites;
+}
+
+export function setAllianceChat(messages: AllianceChatMessage[]): void {
+  _allianceChat = messages;
+}
+
+export function getAllianceView(): AllianceView { return _allianceView; }
+
+export function consumeAllianceAction(): typeof _pendingAllianceAction {
+  const action = _pendingAllianceAction;
+  _pendingAllianceAction = null;
+  return action;
+}
+
+const SHOW_BOT_TEST_UI = false; // flip to true to show bot test buttons
+
+let _pendingBotTest = false;
+let _pendingBotAdminTest = false;
+let _pendingBotCheck = false;
+let _botTestLog: string | null = null;
+let _pendingBotCopy = false;
+
+export function consumePendingBotTest(): boolean {
+  const v = _pendingBotTest;
+  _pendingBotTest = false;
+  return v;
+}
+
+export function consumePendingBotAdminTest(): boolean {
+  const v = _pendingBotAdminTest;
+  _pendingBotAdminTest = false;
+  return v;
+}
+
+export function consumePendingBotCheck(): boolean {
+  const v = _pendingBotCheck;
+  _pendingBotCheck = false;
+  return v;
+}
+
+export function setBotTestLog(log: string): void {
+  _botTestLog = log;
+}
+
+export function consumePendingBotCopy(): string | null {
+  if (!_pendingBotCopy || !_botTestLog) return null;
+  _pendingBotCopy = false;
+  return _botTestLog;
+}
+
+export function consumeAllianceInputRequest(): { type: 'create' | 'chat' } | null {
+  const req = _allianceInputRequested;
+  _allianceInputRequested = null;
+  return req;
+}
+
+export function submitAllianceInput(type: 'create' | 'chat', text: string): void {
+  if (!text.trim()) return;
+  if (type === 'create') {
+    _pendingAllianceAction = { type: 'create', name: text.trim() };
+  } else {
+    _pendingAllianceAction = { type: 'chat', text: text.trim() };
+  }
+}
+
+export function setAllianceUsername(name: string): void {
+  _username = name;
+}
+
 /** Called before drawing to set panel context */
 export function setPanelContext(docked: boolean, starIndex: number | null, tier: 'galaxy' | 'system' | 'local' | 'planet' = 'planet', shipShape?: string, owned?: boolean): void {
   // Auto-close dock-required panels when undocking or leaving planet tier
   if (!docked && _panelsDocked && _openPanel >= 0 && PANEL_TABS[_openPanel]?.requiresDock) {
     _openPanel = -1;
   }
-  // Auto-close BUILD/SHIPS if we dock at an unowned star
-  if (owned === false && _openPanel >= 0 && PANEL_TABS[_openPanel]?.requiresDock) {
+  // Auto-close BUILD/SHIPS if we dock at an unowned star (but not TRADE tab at trading stations)
+  if (owned === false && _openPanel >= 0 && _openPanel !== 5 && PANEL_TABS[_openPanel]?.requiresDock) {
     _openPanel = -1;
   }
   _panelsDocked = docked;
@@ -3221,9 +3189,9 @@ function hitTestShipsPanel(sx: number, sy: number): void {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
       if (btn.enabled) {
         if (btn.isUpgrade && btn.upgradeFromTypeId != null) {
-          _pendingUpgradeShipRequest = { fromTypeId: btn.upgradeFromTypeId };
+          _pendingUpgradeShipRequest = { fromTypeId: btn.upgradeFromTypeId, ...(btn.useBlueprint ? { useBlueprint: true } : {}) };
         } else {
-          _pendingBuyShipRequest = { shipTypeId: btn.shipTypeId, quantity: 1 };
+          _pendingBuyShipRequest = { shipTypeId: btn.shipTypeId, quantity: 1, ...(btn.useBlueprint ? { useBlueprint: true } : {}) };
         }
         playSound('click');
       } else if (btn.disableReason) {
@@ -3268,6 +3236,15 @@ function hitTestFleetPanel(sx: number, sy: number): void {
       return;
     }
   }
+  // POST (share fleet) button
+  if (_fleetShareButton) {
+    const b = _fleetShareButton;
+    if (sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
+      _pendingFleetShare = true;
+      playSound('click');
+      return;
+    }
+  }
 }
 
 // Pending extension action from BUILD panel click
@@ -3295,7 +3272,16 @@ export function drawPlanetPanels(
     if (!tab || !rect) continue;
     const ty = rect.y;
     const isOpen = _openPanel === i;
-    const isDisabled = (tab.requiresDock && (!_panelsDocked || !_panelsOwned)) || (i === 3 && _panelsShipShape === 'scout');
+    const isAtTradingStation = _postId && _panelsStarIndex != null && !_panelsOwned && isTradingStation(_postId, _panelsStarIndex);
+    // TRADE tab (5): visible only at non-owned trading stations, requires dock
+    // BUILD/SHIPS (1,2): require dock + owned star
+    // FLEET (3): disabled for scouts
+    const isHidden = (i === 5 && !isAtTradingStation);
+    const isDisabled = isHidden
+      || (i === 5 && !_panelsDocked)
+      || (i !== 5 && tab.requiresDock && (!_panelsDocked || !_panelsOwned))
+      || (i === 3 && _panelsShipShape === 'scout');
+    if (isHidden) continue; // skip rendering this tab entirely
 
     // Journey pulse: brighten non-disabled tabs
     const pulseAlpha = getJourneyPulseAlpha();
@@ -3306,7 +3292,7 @@ export function drawPlanetPanels(
     roundedRect(ctx, tabX - 4, ty, TAB_W + 4, TAB_H, 4);
     ctx.fill();
 
-    ctx.strokeStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : hasPulse ? `rgba(79, 255, 176, ${0.4 + pulseAlpha * 0.6})` : G_DIM;
+    ctx.strokeStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : hasPulse ? `rgba(79, 255, 176, ${0.4 + pulseAlpha * 0.6})` : 'rgba(79, 255, 176, 0.45)';
     ctx.lineWidth = hasPulse ? 2.5 : 1.5;
     roundedRect(ctx, tabX - 4, ty, TAB_W + 4, TAB_H, 4);
     ctx.stroke();
@@ -3315,22 +3301,23 @@ export function drawPlanetPanels(
     ctx.font = '12px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : hasPulse ? `rgba(79, 255, 176, ${0.5 + pulseAlpha * 0.5})` : G_MED;
+    ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : hasPulse ? `rgba(79, 255, 176, ${0.5 + pulseAlpha * 0.5})` : G_BRIGHT;
     ctx.fillText(tab.icon, tabX + TAB_W / 2, ty + 16);
 
     // Vertical title text
     ctx.save();
     ctx.translate(tabX + TAB_W / 2, ty + TAB_H / 2 + 6);
     ctx.rotate(-Math.PI / 2);
-    ctx.font = 'bold 6px monospace';
+    ctx.font = 'bold 7px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : G_DIM;
+    ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : G_MED;
     ctx.fillText(tab.title, 0, 0);
     ctx.restore();
 
     // ── Unread badge on COMS tab ──
-    if (i === 4 && _comsUnreadCount > 0 && !isOpen) {
+    const totalUnread = _comsUnreadCount + _dmUnreadFrom.length;
+    if (i === 4 && totalUnread > 0 && !isOpen) {
       const badgeX = tabX + TAB_W - 6;
       const badgeY = ty + 4;
       ctx.fillStyle = '#FF5A3D';
@@ -3341,7 +3328,7 @@ export function drawPlanetPanels(
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#fff';
-      ctx.fillText(_comsUnreadCount > 9 ? '9+' : String(_comsUnreadCount), badgeX, badgeY);
+      ctx.fillText(totalUnread > 9 ? '9+' : String(totalUnread), badgeX, badgeY);
     }
 
     // ── Slide-out body (only when open and not disabled) ──
@@ -3357,6 +3344,13 @@ export function drawPlanetPanels(
         if (panelY < 4) panelY = 4;
       }
 
+      // Trade panel (index 5): anchor from bottom of tab so it grows upward
+      if (i === 5) {
+        const estimatedH = 42 + 6 * (16 + 3) + PANEL_PAD; // headerH + 6 buttons + padding
+        panelY = ty + TAB_H - estimatedH;
+        if (panelY < 4) panelY = 4;
+      }
+
       // Draw panel body based on tab index
       let bodyH: number;
       switch (i) {
@@ -3365,6 +3359,7 @@ export function drawPlanetPanels(
         case 2: bodyH = drawShipsPanelBody(ctx, panelX, panelY, panelW); break;
         case 3: bodyH = drawFleetPanelBody(ctx, panelX, panelY, panelW); break;
         case 4: bodyH = drawComsPanelBody(ctx, panelX, panelY, panelW); break;
+        case 5: bodyH = drawTradePanelBody(ctx, panelX, panelY, panelW); break;
         default: bodyH = TAB_H;
       }
       _lastPanelBodyH = bodyH;
@@ -3433,66 +3428,6 @@ function drawStatusPanelBody(
   x: number, y: number, w: number,
   statusRows: string[],
 ): number {
-  _tradeButtons = [];
-
-  // If at a trading station with info, render trade UI with buttons
-  if (_tradeStationInfo && _postId && _panelsStarIndex != null && isTradingStation(_postId, _panelsStarIndex) && _tradeStationInfo.starIndex === _panelsStarIndex) {
-    const trades: { give: 'ore' | 'food' | 'energy'; receive: 'ore' | 'food' | 'energy'; rateKey: keyof typeof _tradeStationInfo.rates }[] = [
-      { give: 'ore', receive: 'food', rateKey: 'ore_food' },
-      { give: 'ore', receive: 'energy', rateKey: 'ore_energy' },
-      { give: 'food', receive: 'ore', rateKey: 'food_ore' },
-      { give: 'food', receive: 'energy', rateKey: 'food_energy' },
-      { give: 'energy', receive: 'ore', rateKey: 'energy_ore' },
-      { give: 'energy', receive: 'food', rateKey: 'energy_food' },
-    ];
-    const btnH = 16;
-    const btnGap = 3;
-    const headerH = 42;
-    const bodyH = headerH + trades.length * (btnH + btnGap) + PANEL_PAD;
-    drawPanelFrame(ctx, x, y, w, bodyH, 'TRADE', '\u2696');
-
-    // Stock header
-    ctx.font = '7px monospace';
-    ctx.fillStyle = G_MED;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText(`STOCK O:${Math.floor(_tradeStationInfo.stock.ore)} F:${Math.floor(_tradeStationInfo.stock.food)} E:${Math.floor(_tradeStationInfo.stock.energy)}`, x + PANEL_PAD, y + 28);
-
-    // Trade buttons
-    for (let i = 0; i < trades.length; i++) {
-      const t = trades[i]!;
-      const rate = _tradeStationInfo.rates[t.rateKey];
-      const btnY = y + headerH + i * (btnH + btnGap);
-      const btnX = x + PANEL_PAD;
-      const btnW = w - PANEL_PAD * 2;
-
-      // Button background
-      ctx.fillStyle = 'rgba(0, 30, 20, 0.7)';
-      roundedRect(ctx, btnX, btnY, btnW, btnH, 3);
-      ctx.fill();
-      ctx.strokeStyle = G_DIM;
-      ctx.lineWidth = 0.5;
-      roundedRect(ctx, btnX, btnY, btnW, btnH, 3);
-      ctx.stroke();
-
-      // Label
-      const shortNames = { ore: 'ORE', food: 'FOOD', energy: 'ENRG' };
-      ctx.font = 'bold 7px monospace';
-      ctx.fillStyle = G_BRIGHT;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(`${shortNames[t.give]}→${shortNames[t.receive]}  @${rate.toFixed(2)}`, btnX + 6, btnY + btnH / 2);
-
-      // "TRADE 50" label on right
-      ctx.textAlign = 'right';
-      ctx.fillStyle = 'rgb(255, 215, 0)';
-      ctx.fillText('TRADE 50', btnX + btnW - 6, btnY + btnH / 2);
-
-      _tradeButtons.push({ x: btnX, y: btnY, w: btnW, h: btnH, giveType: t.give, receiveType: t.receive });
-    }
-    return bodyH;
-  }
-
   const bodyH = Math.max(TAB_H, statusRows.length * ROW_H + PANEL_PAD * 2 + 24);
   drawPanelFrame(ctx, x, y, w, bodyH, 'STATUS', '\u25B3');
 
@@ -3504,6 +3439,80 @@ function drawStatusPanelBody(
     const row = statusRows[r];
     if (!row) continue;
     ctx.fillText(row, x + PANEL_PAD, y + 28 + r * ROW_H);
+  }
+  return bodyH;
+}
+
+/** TRADE panel: trading station exchange buttons */
+function drawTradePanelBody(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  _tradeButtons = [];
+
+  if (!_tradeStationInfo || !_postId || _panelsStarIndex == null || _tradeStationInfo.starIndex !== _panelsStarIndex) {
+    const bodyH = TAB_H;
+    drawPanelFrame(ctx, x, y, w, bodyH, 'TRADE', '\u2696');
+    ctx.font = '8px monospace';
+    ctx.fillStyle = G_MED;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Loading rates...', x + w / 2, y + bodyH / 2 + 6);
+    return bodyH;
+  }
+
+  const trades: { give: 'ore' | 'food' | 'energy'; receive: 'ore' | 'food' | 'energy'; rateKey: keyof typeof _tradeStationInfo.rates }[] = [
+    { give: 'ore', receive: 'food', rateKey: 'ore_food' },
+    { give: 'ore', receive: 'energy', rateKey: 'ore_energy' },
+    { give: 'food', receive: 'ore', rateKey: 'food_ore' },
+    { give: 'food', receive: 'energy', rateKey: 'food_energy' },
+    { give: 'energy', receive: 'ore', rateKey: 'energy_ore' },
+    { give: 'energy', receive: 'food', rateKey: 'energy_food' },
+  ];
+  const btnH = 16;
+  const btnGap = 3;
+  const headerH = 42;
+  const bodyH = headerH + trades.length * (btnH + btnGap) + PANEL_PAD;
+  drawPanelFrame(ctx, x, y, w, bodyH, 'TRADE', '\u2696');
+
+  // Stock header
+  ctx.font = '7px monospace';
+  ctx.fillStyle = G_MED;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`STOCK O:${Math.floor(_tradeStationInfo.stock.ore)} F:${Math.floor(_tradeStationInfo.stock.food)} E:${Math.floor(_tradeStationInfo.stock.energy)}`, x + PANEL_PAD, y + 28);
+
+  // Trade buttons
+  for (let i = 0; i < trades.length; i++) {
+    const t = trades[i]!;
+    const rate = _tradeStationInfo.rates[t.rateKey];
+    const btnY = y + headerH + i * (btnH + btnGap);
+    const btnX = x + PANEL_PAD;
+    const btnW = w - PANEL_PAD * 2;
+
+    // Button background
+    ctx.fillStyle = 'rgba(0, 30, 20, 0.7)';
+    roundedRect(ctx, btnX, btnY, btnW, btnH, 3);
+    ctx.fill();
+    ctx.strokeStyle = G_DIM;
+    ctx.lineWidth = 0.5;
+    roundedRect(ctx, btnX, btnY, btnW, btnH, 3);
+    ctx.stroke();
+
+    // Label
+    const shortNames = { ore: 'ORE', food: 'FOOD', energy: 'ENRG' };
+    ctx.font = 'bold 7px monospace';
+    ctx.fillStyle = G_BRIGHT;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${shortNames[t.give]}\u2192${shortNames[t.receive]}  @${rate.toFixed(2)}`, btnX + 6, btnY + btnH / 2);
+
+    // "TRADE 50" label on right
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgb(255, 215, 0)';
+    ctx.fillText('TRADE 50', btnX + btnW - 6, btnY + btnH / 2);
+
+    _tradeButtons.push({ x: btnX, y: btnY, w: btnW, h: btnH, giveType: t.give, receiveType: t.receive });
   }
   return bodyH;
 }
@@ -3543,8 +3552,9 @@ function drawBuildPanelBody(
   const fleetState = starIndex != null ? _serverShipsByStarIndex.get(starIndex) : null;
   const buildingShip = fleetState?.building ?? null;
   const hasActiveShipBuild = buildingShip != null && buildingShip.completeAt > Date.now();
-  if (_isAdmin && (hasActiveBuild || hasActiveShipBuild)) {
-    const cbW = 54;
+  if ((_isAdmin || _completeCharges > 0) && (hasActiveBuild || hasActiveShipBuild)) {
+    const label = _isAdmin ? 'COMPLETE' : `COMPLETE (${_completeCharges})`;
+    const cbW = _isAdmin ? 54 : 70;
     const cbH = 12;
     const cbX = x + w - cbW - PANEL_PAD;
     const cbY = y + 26;
@@ -3560,14 +3570,14 @@ function drawBuildPanelBody(
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ffb84d';
-    ctx.fillText('COMPLETE', cbX + cbW / 2, cbY + cbH / 2);
+    ctx.fillText(label, cbX + cbW / 2, cbY + cbH / 2);
   } else {
     _completeButton = null;
   }
 
-  // Extension grid: 3 columns x 2 rows
+  // Extension grid: 4 columns x 2 rows
   const gridStartY = y + 44;
-  const cols = 3;
+  const cols = 4;
   const extBtnW = Math.floor((w - PANEL_PAD * 2 - (cols - 1) * extGap) / cols);
   const gridStartX = x + PANEL_PAD;
 
@@ -3678,8 +3688,8 @@ function drawShipsPanelBody(
     (s) => s.count > 0 && UPGRADE_PATH.includes(s.typeId as ShipTypeId),
   );
 
-  // Show Basic Probe (11), Colony Ship (8), Freighter (2); also show Scout (1) if player has no upgrade-path ship
-  const SHOWN_BUILD_IDS = hasUpgradePathShip ? [2, 11, 8] : [1, 2, 11, 8];
+  // Show Basic Probe (11), Colony Ship (8), Freighter (2) — Scout is always seeded as primary ship
+  const SHOWN_BUILD_IDS = hasUpgradePathShip ? [2, 11, 8] : [2, 11, 8];
   const availableShips = Object.values(SHIP_CATALOG).filter(
     (entry) => SHOWN_BUILD_IDS.includes(entry.id),
   );
@@ -3787,10 +3797,11 @@ function drawShipsPanelBody(
         ? serverEcon.store.ore >= ue.to.cost.ore && serverEcon.store.food >= ue.to.cost.food && serverEcon.store.energy >= ue.to.cost.energy
         : false;
       const isBuilding = buildingShip != null && buildingShip.completeAt > nowMs;
-      const enabled = !isBuilding && canAfford && !ue.dockLocked;
-      const disableReason = isBuilding ? 'already building' : ue.dockLocked ? 'dock level too low' : !canAfford ? 'insufficient resources' : undefined;
+      const blueprintOverride = _completeCharges > 0 && !isBuilding && (ue.dockLocked || !canAfford);
+      const enabled = !isBuilding && (canAfford && !ue.dockLocked || blueprintOverride);
+      const disableReason = isBuilding ? 'already building' : ue.dockLocked && !blueprintOverride ? 'dock level too low' : !canAfford && !blueprintOverride ? 'insufficient resources' : undefined;
 
-      _lastShipButtons.push({ x: bx, y: by, w: fullW, h: cellH, shipTypeId: ue.to.id, enabled, isUpgrade: true, upgradeFromTypeId: ue.from.id, disableReason });
+      _lastShipButtons.push({ x: bx, y: by, w: fullW, h: cellH, shipTypeId: ue.to.id, enabled, isUpgrade: true, upgradeFromTypeId: ue.from.id, disableReason, useBlueprint: blueprintOverride });
 
       roundedRect(ctx, bx, by, fullW, cellH, 3);
       ctx.fillStyle = isUpgradeBuild ? 'rgba(60, 50, 10, 0.5)' : enabled ? 'rgba(50, 40, 10, 0.4)' : 'rgba(30, 25, 10, 0.4)';
@@ -3882,16 +3893,17 @@ function drawShipsPanelBody(
       const canAfford = serverEcon
         ? serverEcon.store.ore >= entry.cost.ore && serverEcon.store.food >= entry.cost.food && serverEcon.store.energy >= entry.cost.energy
         : false;
-      const enabled = !isBuilding && !dockLocked && canAfford;
-      const disableReason = isBuilding ? 'already building' : dockLocked ? 'dock level too low' : !canAfford ? 'insufficient resources' : undefined;
+      const blueprintOverride = _completeCharges > 0 && !isBuilding && (dockLocked || !canAfford);
+      const enabled = !isBuilding && (!dockLocked && canAfford || blueprintOverride);
+      const disableReason = isBuilding ? 'already building' : dockLocked && !blueprintOverride ? 'dock level too low' : !canAfford && !blueprintOverride ? 'insufficient resources' : undefined;
 
-      _lastShipButtons.push({ x: bx, y: by, w: cellW, h: cellH, shipTypeId: entry.id, enabled, isUpgrade: false, disableReason });
+      _lastShipButtons.push({ x: bx, y: by, w: cellW, h: cellH, shipTypeId: entry.id, enabled, isUpgrade: false, disableReason, useBlueprint: blueprintOverride });
 
       roundedRect(ctx, bx, by, cellW, cellH, 3);
-      ctx.fillStyle = enabled ? 'rgba(20, 60, 80, 0.5)' : 'rgba(15, 25, 35, 0.5)';
+      ctx.fillStyle = blueprintOverride ? 'rgba(80, 50, 0, 0.5)' : enabled ? 'rgba(20, 60, 80, 0.5)' : 'rgba(15, 25, 35, 0.5)';
       ctx.fill();
       roundedRect(ctx, bx, by, cellW, cellH, 3);
-      ctx.strokeStyle = enabled ? G_BRIGHT : G_FAINT;
+      ctx.strokeStyle = blueprintOverride ? '#ffb84d' : enabled ? G_BRIGHT : G_FAINT;
       ctx.lineWidth = 1;
       ctx.stroke();
 
@@ -4009,6 +4021,10 @@ function drawFleetGalaxyView(
   if (fRoutes.length > 0) {
     lineCount += 1; // "TRADE ROUTES" header
     lineCount += fRoutes.length * 2; // two rows per route (route + cargo/status)
+  }
+  if (_serverRaidRoutes.length > 0) {
+    lineCount += 1; // "RAID ROUTES" header
+    lineCount += _serverRaidRoutes.length * 2;
   }
   if (entries.length === 0 && transits.length === 0 && fRoutes.length === 0) lineCount = 2;
   lineCount += 1; // total row
@@ -4149,11 +4165,69 @@ function drawFleetGalaxyView(
         cy += ROW_H;
       }
     }
+
+    // ── Raid Routes Section ──
+    if (_serverRaidRoutes.length > 0) {
+      ctx.fillStyle = '#f44'; // RED
+      ctx.fillText('\u2694\uFE0F RAID ROUTES', x + PANEL_PAD, cy);
+      cy += ROW_H;
+
+      const now = Date.now();
+      for (const route of _serverRaidRoutes) {
+        const homeName = STAR_NAMES[route.homeStarIndex % STAR_NAMES.length] ?? '?';
+        const targetName = STAR_NAMES[route.targetStarIndex % STAR_NAMES.length] ?? '?';
+        const remainMs = Math.max(0, route.arrivalAt - now);
+        const remainSec = Math.ceil(remainMs / 1000);
+        const mm = Math.floor(remainSec / 60);
+        const ss = remainSec % 60;
+        const timeStr = mm > 0 ? `${mm}m${ss.toString().padStart(2, '0')}s` : `${ss}s`;
+        const legLabel = route.leg === 'outbound' ? '\u2192 RAIDING' : '\u2190 LOOT';
+        const destroyPct = Math.round((1 - route.successChance) * 100);
+        const riskStr = destroyPct > 0 ? ` \u2620${destroyPct}%` : '';
+
+        ctx.fillStyle = '#f44';
+        ctx.fillText(`  ${homeName} \u2192 ${targetName}${riskStr}`, x + PANEL_PAD, cy);
+        cy += ROW_H;
+
+        const hasCargo = route.cargo.ore > 0 || route.cargo.food > 0 || route.cargo.energy > 0;
+        const cargoStr = hasCargo
+          ? ` [${Math.floor(route.cargo.ore)}o/${Math.floor(route.cargo.food)}f/${Math.floor(route.cargo.energy)}e]`
+          : '';
+        ctx.fillStyle = 'rgba(255, 68, 68, 0.6)';
+        ctx.font = '7px monospace';
+        ctx.fillText(`    ${legLabel} ${timeStr}${cargoStr}`, x + PANEL_PAD, cy);
+        ctx.font = '8px monospace';
+        cy += ROW_H;
+      }
+    }
   }
 
   // Total
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText(`TOTAL: ${totalSP} SP`, x + PANEL_PAD, cy);
+
+  // POST button (share fleet to comments)
+  _fleetShareButton = null;
+  if (entries.length > 0) {
+    const btnW = 28;
+    const btnH = 10;
+    const btnX = x + w - PANEL_PAD - btnW;
+    const btnY = cy;
+    const onCooldown = Date.now() < _fleetShareCooldownUntil;
+    ctx.strokeStyle = onCooldown ? 'rgba(100,100,100,0.5)' : '#4f4';
+    ctx.lineWidth = 0.5;
+    roundedRect(ctx, btnX, btnY, btnW, btnH, 2);
+    ctx.stroke();
+    ctx.fillStyle = onCooldown ? 'rgba(100,100,100,0.5)' : '#4f4';
+    ctx.font = '7px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(onCooldown ? '...' : 'POST', btnX + btnW / 2, btnY + 1.5);
+    ctx.textAlign = 'left';
+    ctx.font = '8px monospace';
+    if (!onCooldown) {
+      _fleetShareButton = { x: btnX, y: btnY, w: btnW, h: btnH };
+    }
+  }
 
   return bodyH;
 }
@@ -4242,74 +4316,1455 @@ export function drawTierHUD(
 
 // ── Coms Panel Body ─────────────────────────────────────────────────────────
 
+// Hit areas for DM contact buttons and back button
+interface ComsContactButton { name: string; x: number; y: number; w: number; h: number }
+let _comsContactButtons: ComsContactButton[] = [];
+let _comsBackButton: { x: number; y: number; w: number; h: number } | null = null;
+let _comsSendButton: { x: number; y: number; w: number; h: number } | null = null;
+let _comsTabButtons: { tab: ComsTab; x: number; y: number; w: number; h: number }[] = [];
+let _publicReplyButtons: { comment: PublicComment; x: number; y: number; w: number; h: number }[] = [];
+let _publicPostButton: { x: number; y: number; w: number; h: number } | null = null;
+
 function drawComsPanelBody(
   ctx: CanvasRenderingContext2D,
   x: number, y: number, w: number,
 ): number {
-  const maxVisibleMessages = 12;
-  const msgH = 28; // height per message (2 lines: author + body)
-  const inputH = 24;
+  _comsTabButtons = [];
+  _publicReplyButtons = [];
+  _publicPostButton = null;
+
+  // Draw tabs (PUBLIC / PRIVATE / ALLIANCE / BOARD)
+  const tabH = 16;
+  const tabs: { tab: ComsTab; label: string }[] = [
+    { tab: 'public', label: 'PUBLIC' },
+    { tab: 'private', label: 'DM' },
+    { tab: 'alliance', label: 'ALLY' },
+    { tab: 'board', label: 'BOARD' },
+  ];
+  const tabW = (w - 8) / tabs.length;
+  for (let i = 0; i < tabs.length; i++) {
+    const tx = x + 4 + i * tabW;
+    const ty = y;
+    const active = _comsTab === tabs[i]!.tab;
+    ctx.fillStyle = active ? 'rgba(0, 255, 128, 0.15)' : 'rgba(0, 0, 0, 0.3)';
+    ctx.fillRect(tx, ty, tabW, tabH);
+    ctx.strokeStyle = active ? G_BRIGHT : G_MED;
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(tx, ty, tabW, tabH);
+    ctx.font = `bold 7px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = active ? G_BRIGHT : G_MED;
+    ctx.fillText(tabs[i]!.label, tx + tabW / 2, ty + tabH / 2);
+    _comsTabButtons.push({ tab: tabs[i]!.tab, x: tx, y: ty, w: tabW, h: tabH });
+  }
+
+  const contentY = y + tabH + 2;
+
+  if (_comsTab === 'private') {
+    // If a DM conversation is open, show that
+    if (_dmPeer) {
+      return tabH + 2 + drawDMConversation(ctx, x, contentY, w);
+    }
+    // Otherwise show contacts list
+    return tabH + 2 + drawComsContacts(ctx, x, contentY, w);
+  } else if (_comsTab === 'alliance') {
+    return tabH + 2 + drawAllianceBody(ctx, x, contentY, w);
+  } else if (_comsTab === 'board') {
+    return tabH + 2 + drawLeaderboardBody(ctx, x, contentY, w);
+  } else {
+    // Public tab
+    if (_publicRecipient === null) {
+      return tabH + 2 + drawPublicContactList(ctx, x, contentY, w);
+    } else if (_publicRecipient === '__ALL__') {
+      return tabH + 2 + drawPublicComments(ctx, x, contentY, w);
+    } else {
+      return tabH + 2 + drawPublicPlayerView(ctx, x, contentY, w);
+    }
+  }
+}
+
+// ── Leaderboard Panel Drawing ──────────────────────────────────────────────
+
+function drawLeaderboardBody(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  const rowH = 14;
   const headerH = 28;
-  const msgs = _comsMessages;
-  const visibleCount = Math.min(msgs.length, maxVisibleMessages);
-  const bodyH = headerH + visibleCount * msgH + inputH + PANEL_PAD;
+  const players = _leaderboardData;
+  const rowCount = Math.max(players.length, 1);
+  const bodyH = headerH + rowCount * rowH + PANEL_PAD * 2 + 18; // +18 for seed button
 
-  drawPanelFrame(ctx, x, y, w, bodyH, 'COMMS', '\u{1F4E1}');
+  drawPanelFrame(ctx, x, y, w, bodyH, 'LEADERBOARD', '\u{1F3C6}');
 
-  if (msgs.length === 0) {
-    ctx.font = '8px monospace';
+  if (players.length === 0) {
+    ctx.font = '7px monospace';
     ctx.fillStyle = G_DIM;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(_comsLoading ? 'PROCESSING TRANSMISSIONS...' : 'NO TRANSMISSIONS', x + w / 2, y + bodyH / 2);
+    ctx.fillText('NO PLAYER DATA', x + w / 2, y + headerH + 14);
+    // Seed button
+    const btnW = 80;
+    const btnH = 14;
+    const btnX = x + (w - btnW) / 2;
+    const btnY = y + bodyH - PANEL_PAD - btnH;
+    ctx.fillStyle = 'rgba(128, 0, 255, 0.15)';
+    ctx.fillRect(btnX, btnY, btnW, btnH);
+    ctx.strokeStyle = '#a060ff';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(btnX, btnY, btnW, btnH);
+    ctx.font = 'bold 6px monospace';
+    ctx.fillStyle = '#c090ff';
+    ctx.fillText('SEED TEST DATA', btnX + btnW / 2, btnY + btnH / 2);
+    _leaderboardSeedButton = { x: btnX, y: btnY, w: btnW, h: btnH };
+    return bodyH;
+  }
+  _leaderboardSeedButton = null;
+
+  // Column header
+  const colX = {
+    rank: x + PANEL_PAD,
+    name: x + PANEL_PAD + 18,
+    stars: x + w - PANEL_PAD - 68,
+    ships: x + w - PANEL_PAD - 40,
+    power: x + w - PANEL_PAD,
+  };
+
+  ctx.font = 'bold 6px monospace';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = G_DIM;
+  const hdrY = y + headerH - 4;
+  ctx.textAlign = 'left';
+  ctx.fillText('#', colX.rank, hdrY);
+  ctx.fillText('PLAYER', colX.name, hdrY);
+  ctx.fillText('STAR', colX.stars, hdrY);
+  ctx.fillText('SHIP', colX.ships, hdrY);
+  ctx.textAlign = 'right';
+  ctx.fillText('PWR', colX.power, hdrY);
+
+  // Draw rows
+  for (let i = 0; i < players.length; i++) {
+    const entry = players[i]!;
+    const ry = y + headerH + i * rowH;
+    const isMe = _username !== null && entry.username.toLowerCase() === _username.toLowerCase();
+
+    // Highlight current player's row
+    if (isMe) {
+      ctx.fillStyle = 'rgba(0, 255, 128, 0.1)';
+      ctx.fillRect(x + 4, ry, w - 8, rowH - 1);
+    }
+
+    // Rank medal colors
+    const rankColor = entry.rank === 1 ? '#ffd700' : entry.rank === 2 ? '#c0c0c0' : entry.rank === 3 ? '#cd7f32' : G_MED;
+    ctx.font = 'bold 7px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = rankColor;
+    ctx.fillText(`${entry.rank}`, colX.rank, ry + rowH / 2);
+
+    // Player name (truncated)
+    ctx.font = isMe ? 'bold 7px monospace' : '7px monospace';
+    ctx.fillStyle = isMe ? '#0f0' : G_BRIGHT;
+    const maxNameW = colX.stars - colX.name - 4;
+    let displayName = entry.username;
+    while (ctx.measureText(displayName).width > maxNameW && displayName.length > 3) {
+      displayName = displayName.slice(0, -1);
+    }
+    if (displayName !== entry.username) displayName += '…';
+    ctx.fillText(displayName, colX.name, ry + rowH / 2);
+
+    // Stats columns
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_MED;
+    ctx.textAlign = 'left';
+    ctx.fillText(`${entry.starCount}`, colX.stars, ry + rowH / 2);
+    ctx.fillText(`${entry.totalShips}`, colX.ships, ry + rowH / 2);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = rankColor;
+    ctx.fillText(`${entry.power}`, colX.power, ry + rowH / 2);
+  }
+
+  // Seed button at bottom
+  const seedBtnW = 80;
+  const seedBtnH = 14;
+  const seedBtnX = x + (w - seedBtnW) / 2;
+  const seedBtnY = y + bodyH - PANEL_PAD - seedBtnH;
+  ctx.fillStyle = 'rgba(128, 0, 255, 0.15)';
+  ctx.fillRect(seedBtnX, seedBtnY, seedBtnW, seedBtnH);
+  ctx.strokeStyle = '#a060ff';
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(seedBtnX, seedBtnY, seedBtnW, seedBtnH);
+  ctx.font = 'bold 6px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#c090ff';
+  ctx.fillText('SEED TEST DATA', seedBtnX + seedBtnW / 2, seedBtnY + seedBtnH / 2);
+  _leaderboardSeedButton = { x: seedBtnX, y: seedBtnY, w: seedBtnW, h: seedBtnH };
+
+  return bodyH;
+}
+
+// ── Alliance Panel Drawing ──────────────────────────────────────────────────
+
+let _allianceButtons: { action: string; x: number; y: number; w: number; h: number }[] = [];
+let _allianceChatPageButtons: { dir: 'prev' | 'next'; x: number; y: number; w: number; h: number }[] = [];
+
+function drawAllianceBody(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  _allianceButtons = [];
+  _allianceChatPageButtons = [];
+  _comsBackButton = null;
+  _comsSendButton = null;
+  _comsContactButtons = [];
+  _publicPageButtons = [];
+  _publicPostButton = null;
+  _publicReplyButtons = [];
+
+  if (_allianceView === 'chat' && _allianceInfo) {
+    return drawAllianceChatView(ctx, x, y, w);
+  }
+  if (_allianceView === 'invites') {
+    return drawAllianceInvitesView(ctx, x, y, w);
+  }
+  if (_allianceView === 'invite' && _allianceInfo) {
+    return drawAllianceInvitePlayerView(ctx, x, y, w);
+  }
+  if (_allianceInfo) {
+    return drawAllianceHomeView(ctx, x, y, w);
+  }
+  return drawAllianceNoneView(ctx, x, y, w);
+}
+
+/** No alliance — show create + invites buttons */
+function drawAllianceNoneView(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  let cy = y + 4;
+  ctx.font = '8px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = G_DIM;
+  ctx.fillText('No Alliance', x + w / 2, cy + 6);
+  cy += 16;
+
+  // CREATE button
+  const btnW = w - 16;
+  const btnH = 18;
+  const bx = x + 8;
+  ctx.fillStyle = 'rgba(0, 255, 128, 0.15)';
+  ctx.fillRect(bx, cy, btnW, btnH);
+  ctx.strokeStyle = G_BRIGHT;
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(bx, cy, btnW, btnH);
+  ctx.font = 'bold 7px monospace';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText('CREATE ALLIANCE', x + w / 2, cy + btnH / 2 + 1);
+  _allianceButtons.push({ action: 'create', x: bx, y: cy, w: btnW, h: btnH });
+  cy += btnH + 6;
+
+  // INVITES button (show count)
+  if (_allianceInvites.length > 0) {
+    ctx.fillStyle = 'rgba(255, 200, 0, 0.15)';
+    ctx.fillRect(bx, cy, btnW, btnH);
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(bx, cy, btnW, btnH);
+    ctx.font = 'bold 7px monospace';
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillText(`INVITES (${_allianceInvites.length})`, x + w / 2, cy + btnH / 2 + 1);
+    _allianceButtons.push({ action: 'view_invites', x: bx, y: cy, w: btnW, h: btnH });
+    cy += btnH + 6;
+  }
+
+  // TEST BOTS button (admin only)
+  if (_isAdmin && SHOW_BOT_TEST_UI) {
+    ctx.fillStyle = 'rgba(200, 100, 255, 0.15)';
+    ctx.fillRect(bx, cy, btnW, btnH);
+    ctx.strokeStyle = '#cc66ff';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(bx, cy, btnW, btnH);
+    ctx.font = 'bold 7px monospace';
+    ctx.fillStyle = '#cc66ff';
+    ctx.fillText(_pendingBotTest ? 'RUNNING...' : 'TEST BOTS', x + w / 2, cy + btnH / 2 + 1);
+    _allianceButtons.push({ action: 'test_bots', x: bx, y: cy, w: btnW, h: btnH });
+    cy += btnH + 4;
+
+    // TEST ADMIN button
+    ctx.fillStyle = 'rgba(100, 200, 255, 0.15)';
+    ctx.fillRect(bx, cy, btnW, btnH);
+    ctx.strokeStyle = '#66ccff';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(bx, cy, btnW, btnH);
+    ctx.font = 'bold 7px monospace';
+    ctx.fillStyle = '#66ccff';
+    ctx.fillText('TEST ADMIN', x + w / 2, cy + btnH / 2 + 1);
+    _allianceButtons.push({ action: 'test_admin', x: bx, y: cy, w: btnW, h: btnH });
+    cy += btnH + 4;
+
+    // CHECK TEST button
+    ctx.fillStyle = 'rgba(0, 255, 200, 0.15)';
+    ctx.fillRect(bx, cy, btnW, btnH);
+    ctx.strokeStyle = '#00ffcc';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(bx, cy, btnW, btnH);
+    ctx.font = 'bold 7px monospace';
+    ctx.fillStyle = '#00ffcc';
+    ctx.fillText('CHECK TEST', x + w / 2, cy + btnH / 2 + 1);
+    _allianceButtons.push({ action: 'test_check', x: bx, y: cy, w: btnW, h: btnH });
+    cy += btnH + 4;
+
+    // COPY LOG button (only when log exists)
+    if (_botTestLog) {
+      ctx.fillStyle = 'rgba(255, 200, 0, 0.15)';
+      ctx.fillRect(bx, cy, btnW, btnH);
+      ctx.strokeStyle = '#ffcc00';
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(bx, cy, btnW, btnH);
+      ctx.font = 'bold 7px monospace';
+      ctx.fillStyle = '#ffcc00';
+      ctx.fillText('COPY BOT LOG', x + w / 2, cy + btnH / 2 + 1);
+      _allianceButtons.push({ action: 'copy_bot_log', x: bx, y: cy, w: btnW, h: btnH });
+      cy += btnH + 6;
+    } else {
+      cy += 2;
+    }
+  }
+
+  return cy - y;
+}
+
+/** Alliance home — name, members, buttons */
+function drawAllianceHomeView(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  const a = _allianceInfo!;
+  let cy = y + 2;
+
+  // Alliance name header
+  ctx.font = 'bold 8px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText(a.name.toUpperCase(), x + w / 2, cy + 7);
+  cy += 14;
+
+  ctx.font = '7px monospace';
+  ctx.fillStyle = G_DIM;
+  ctx.fillText(`${a.members.length}/10 members`, x + w / 2, cy + 5);
+  cy += 12;
+
+  // Member list
+  ctx.textAlign = 'left';
+  const memberH = 14;
+  const maxShow = 5;
+  const membersToShow = a.members.slice(0, maxShow);
+  for (const member of membersToShow) {
+    const isManager = member === a.manager;
+    ctx.font = '7px monospace';
+    ctx.fillStyle = isManager ? '#ffcc00' : G_MED;
+    const label = isManager ? `★ ${member} (MGR)` : `  ${member}`;
+    ctx.fillText(label, x + 6, cy + 9);
+
+    // Kick button (manager only, not self)
+    if (_allianceInfo && _username && _username === a.manager && member !== a.manager) {
+      const kickW = 20;
+      const kickX = x + w - kickW - 6;
+      ctx.fillStyle = 'rgba(255, 80, 80, 0.2)';
+      ctx.fillRect(kickX, cy + 1, kickW, memberH - 2);
+      ctx.strokeStyle = '#ff5050';
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(kickX, cy + 1, kickW, memberH - 2);
+      ctx.font = 'bold 6px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ff5050';
+      ctx.fillText('KICK', kickX + kickW / 2, cy + 9);
+      ctx.textAlign = 'left';
+      _allianceButtons.push({ action: `kick:${member}`, x: kickX, y: cy + 1, w: kickW, h: memberH - 2 });
+    }
+    cy += memberH;
+  }
+  if (a.members.length > maxShow) {
+    ctx.font = '6px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.fillText(`  +${a.members.length - maxShow} more`, x + 6, cy + 6);
+    cy += 10;
+  }
+
+  cy += 4;
+  ctx.textAlign = 'center';
+
+  // Action buttons
+  const btnW = w - 16;
+  const btnH = 16;
+  const bx = x + 8;
+
+  // CHAT button
+  ctx.fillStyle = 'rgba(0, 255, 128, 0.15)';
+  ctx.fillRect(bx, cy, btnW, btnH);
+  ctx.strokeStyle = G_BRIGHT;
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(bx, cy, btnW, btnH);
+  ctx.font = 'bold 7px monospace';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText('ALLIANCE CHAT', x + w / 2, cy + btnH / 2 + 1);
+  _allianceButtons.push({ action: 'chat', x: bx, y: cy, w: btnW, h: btnH });
+  cy += btnH + 4;
+
+  // INVITE button (manager only)
+  if (_username && _username === a.manager) {
+    ctx.fillStyle = 'rgba(100, 200, 255, 0.15)';
+    ctx.fillRect(bx, cy, btnW, btnH);
+    ctx.strokeStyle = '#66ccff';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(bx, cy, btnW, btnH);
+    ctx.font = 'bold 7px monospace';
+    ctx.fillStyle = '#66ccff';
+    ctx.fillText('INVITE PLAYER', x + w / 2, cy + btnH / 2 + 1);
+    _allianceButtons.push({ action: 'invite_view', x: bx, y: cy, w: btnW, h: btnH });
+    cy += btnH + 4;
+  }
+
+  // LEAVE button
+  ctx.fillStyle = 'rgba(255, 80, 80, 0.1)';
+  ctx.fillRect(bx, cy, btnW, btnH);
+  ctx.strokeStyle = '#ff5050';
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(bx, cy, btnW, btnH);
+  ctx.font = 'bold 7px monospace';
+  ctx.fillStyle = '#ff5050';
+  ctx.fillText('LEAVE ALLIANCE', x + w / 2, cy + btnH / 2 + 1);
+  _allianceButtons.push({ action: 'leave', x: bx, y: cy, w: btnW, h: btnH });
+  cy += btnH + 4;
+
+  // Admin test buttons (visible while in alliance)
+  if (_isAdmin && SHOW_BOT_TEST_UI) {
+    ctx.fillStyle = 'rgba(0, 255, 200, 0.15)';
+    ctx.fillRect(bx, cy, btnW, btnH);
+    ctx.strokeStyle = '#00ffcc';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(bx, cy, btnW, btnH);
+    ctx.font = 'bold 7px monospace';
+    ctx.fillStyle = '#00ffcc';
+    ctx.fillText('CHECK TEST', x + w / 2, cy + btnH / 2 + 1);
+    _allianceButtons.push({ action: 'test_check', x: bx, y: cy, w: btnW, h: btnH });
+    cy += btnH + 4;
+
+    if (_botTestLog) {
+      ctx.fillStyle = 'rgba(255, 200, 0, 0.15)';
+      ctx.fillRect(bx, cy, btnW, btnH);
+      ctx.strokeStyle = '#ffcc00';
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(bx, cy, btnW, btnH);
+      ctx.font = 'bold 7px monospace';
+      ctx.fillStyle = '#ffcc00';
+      ctx.fillText('COPY BOT LOG', x + w / 2, cy + btnH / 2 + 1);
+      _allianceButtons.push({ action: 'copy_bot_log', x: bx, y: cy, w: btnW, h: btnH });
+      cy += btnH + 4;
+    }
+  }
+
+  return cy - y;
+}
+
+/** Alliance chat view */
+function drawAllianceChatView(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  let cy = y + 2;
+
+  // BACK button
+  const backW = 30;
+  const backH = 12;
+  ctx.fillStyle = 'rgba(0, 255, 128, 0.15)';
+  ctx.fillRect(x + 4, cy, backW, backH);
+  ctx.strokeStyle = G_BRIGHT;
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(x + 4, cy, backW, backH);
+  ctx.font = 'bold 6px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText('BACK', x + 4 + backW / 2, cy + backH / 2 + 1);
+  _comsBackButton = { x: x + 4, y: cy, w: backW, h: backH };
+
+  // Header
+  ctx.font = 'bold 7px monospace';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText(_allianceInfo!.name.toUpperCase(), x + w / 2, cy + 7);
+  cy += backH + 4;
+
+  // Messages
+  const msgs = _allianceChat;
+  if (msgs.length === 0) {
+    ctx.font = '7px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = G_DIM;
+    ctx.fillText('No messages yet', x + w / 2, cy + 8);
+    cy += 16;
+  } else {
+    const totalPages = Math.max(1, Math.ceil(msgs.length / ALLIANCE_CHAT_PAGE_SIZE));
+    if (_allianceChatPage >= totalPages) _allianceChatPage = totalPages - 1;
+    if (_allianceChatPage < 0) _allianceChatPage = 0;
+
+    const startIdx = _allianceChatPage * ALLIANCE_CHAT_PAGE_SIZE;
+    const pageItems = msgs.slice(startIdx, startIdx + ALLIANCE_CHAT_PAGE_SIZE);
+
+    ctx.textAlign = 'left';
+    for (const msg of pageItems) {
+      const isSystem = msg.from === '__system__';
+      if (isSystem) {
+        ctx.font = 'italic 6px monospace';
+        ctx.fillStyle = '#ffcc00';
+        ctx.fillText(`  ${msg.text}`, x + 4, cy + 7);
+        cy += 12;
+      } else {
+        ctx.font = 'bold 6px monospace';
+        ctx.fillStyle = G_BRIGHT;
+        ctx.fillText(msg.from, x + 4, cy + 7);
+        cy += 9;
+        ctx.font = '6px monospace';
+        ctx.fillStyle = G_MED;
+        // Wrap long text
+        const maxChars = Math.floor((w - 12) / 4);
+        const body = msg.text.length > maxChars ? msg.text.slice(0, maxChars - 2) + '..' : msg.text;
+        ctx.fillText(body, x + 8, cy + 6);
+        cy += 10;
+      }
+    }
+
+    // Pagination
+    if (totalPages > 1) {
+      ctx.textAlign = 'center';
+      ctx.font = '6px monospace';
+      ctx.fillStyle = G_DIM;
+      ctx.fillText(`${_allianceChatPage + 1}/${totalPages}`, x + w / 2, cy + 6);
+
+      if (_allianceChatPage > 0) {
+        const pbx = x + 4;
+        ctx.fillStyle = 'rgba(0,255,128,0.15)';
+        ctx.fillRect(pbx, cy, 24, 10);
+        ctx.strokeStyle = G_BRIGHT;
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(pbx, cy, 24, 10);
+        ctx.font = 'bold 6px monospace';
+        ctx.fillStyle = G_BRIGHT;
+        ctx.fillText('PREV', pbx + 12, cy + 6);
+        _allianceChatPageButtons.push({ dir: 'prev', x: pbx, y: cy, w: 24, h: 10 });
+      }
+      if (_allianceChatPage < totalPages - 1) {
+        const nbx = x + w - 28;
+        ctx.fillStyle = 'rgba(0,255,128,0.15)';
+        ctx.fillRect(nbx, cy, 24, 10);
+        ctx.strokeStyle = G_BRIGHT;
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(nbx, cy, 24, 10);
+        ctx.font = 'bold 6px monospace';
+        ctx.fillStyle = G_BRIGHT;
+        ctx.fillText('NEXT', nbx + 12, cy + 6);
+        _allianceChatPageButtons.push({ dir: 'next', x: nbx, y: cy, w: 24, h: 10 });
+      }
+      cy += 14;
+    }
+  }
+
+  // SEND button
+  const btnW = w - 16;
+  const btnH = 16;
+  const bx = x + 8;
+  ctx.fillStyle = 'rgba(0, 255, 128, 0.15)';
+  ctx.fillRect(bx, cy, btnW, btnH);
+  ctx.strokeStyle = G_BRIGHT;
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(bx, cy, btnW, btnH);
+  ctx.font = 'bold 7px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText('SEND MESSAGE', x + w / 2, cy + btnH / 2 + 1);
+  _allianceButtons.push({ action: 'send_chat', x: bx, y: cy, w: btnW, h: btnH });
+  cy += btnH + 4;
+
+  return cy - y;
+}
+
+/** Invites list view */
+function drawAllianceInvitesView(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  let cy = y + 2;
+
+  // BACK button
+  const backW = 30;
+  const backH = 12;
+  ctx.fillStyle = 'rgba(0, 255, 128, 0.15)';
+  ctx.fillRect(x + 4, cy, backW, backH);
+  ctx.strokeStyle = G_BRIGHT;
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(x + 4, cy, backW, backH);
+  ctx.font = 'bold 6px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText('BACK', x + 4 + backW / 2, cy + backH / 2 + 1);
+  _comsBackButton = { x: x + 4, y: cy, w: backW, h: backH };
+
+  ctx.font = 'bold 7px monospace';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText('PENDING INVITES', x + w / 2, cy + 7);
+  cy += backH + 4;
+
+  if (_allianceInvites.length === 0) {
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.fillText('No invites', x + w / 2, cy + 8);
+    return cy - y + 16;
+  }
+
+  ctx.textAlign = 'left';
+  for (const inv of _allianceInvites) {
+    // Alliance name + invited by
+    ctx.font = 'bold 7px monospace';
+    ctx.fillStyle = G_MED;
+    ctx.fillText(inv.allianceName, x + 6, cy + 8);
+    ctx.font = '6px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.fillText(`from ${inv.invitedBy}`, x + 6, cy + 17);
+
+    // JOIN / REJECT buttons
+    const btnH = 12;
+    const joinW = 22;
+    const rejectW = 28;
+    const joinX = x + w - joinW - rejectW - 10;
+    const rejectX = x + w - rejectW - 4;
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(0,255,128,0.15)';
+    ctx.fillRect(joinX, cy + 2, joinW, btnH);
+    ctx.strokeStyle = G_BRIGHT;
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(joinX, cy + 2, joinW, btnH);
+    ctx.font = 'bold 6px monospace';
+    ctx.fillStyle = G_BRIGHT;
+    ctx.fillText('JOIN', joinX + joinW / 2, cy + 2 + btnH / 2 + 1);
+    _allianceButtons.push({ action: `join:${inv.allianceId}`, x: joinX, y: cy + 2, w: joinW, h: btnH });
+
+    ctx.fillStyle = 'rgba(255,80,80,0.15)';
+    ctx.fillRect(rejectX, cy + 2, rejectW, btnH);
+    ctx.strokeStyle = '#ff5050';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(rejectX, cy + 2, rejectW, btnH);
+    ctx.font = 'bold 6px monospace';
+    ctx.fillStyle = '#ff5050';
+    ctx.fillText('REJECT', rejectX + rejectW / 2, cy + 2 + btnH / 2 + 1);
+    _allianceButtons.push({ action: `reject:${inv.allianceId}`, x: rejectX, y: cy + 2, w: rejectW, h: btnH });
+
+    ctx.textAlign = 'left';
+    cy += 24;
+  }
+
+  return cy - y;
+}
+
+/** Invite player picker view */
+function drawAllianceInvitePlayerView(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  let cy = y + 2;
+
+  // BACK button
+  const backW = 30;
+  const backH = 12;
+  ctx.fillStyle = 'rgba(0, 255, 128, 0.15)';
+  ctx.fillRect(x + 4, cy, backW, backH);
+  ctx.strokeStyle = G_BRIGHT;
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(x + 4, cy, backW, backH);
+  ctx.font = 'bold 6px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText('BACK', x + 4 + backW / 2, cy + backH / 2 + 1);
+  _comsBackButton = { x: x + 4, y: cy, w: backW, h: backH };
+
+  ctx.font = 'bold 7px monospace';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText('INVITE PLAYER', x + w / 2, cy + 7);
+  cy += backH + 4;
+
+  // Show known players not in alliance
+  const members = new Set(_allianceInfo!.members.map(m => m.toLowerCase()));
+  const candidates = _knownPlayerNames.filter(n => !members.has(n.toLowerCase()));
+
+  if (candidates.length === 0) {
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.fillText('No players to invite', x + w / 2, cy + 8);
+    return cy - y + 16;
+  }
+
+  ctx.textAlign = 'left';
+  const rowH = 16;
+  for (const player of candidates.slice(0, 6)) {
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_MED;
+    ctx.fillText(player, x + 6, cy + 10);
+
+    // INVITE button (or SENT indicator)
+    const invW = 30;
+    const invX = x + w - invW - 6;
+    ctx.textAlign = 'center';
+    if (_allianceInvitedPlayers.has(player)) {
+      ctx.fillStyle = 'rgba(100,200,255,0.05)';
+      ctx.fillRect(invX, cy + 1, invW, rowH - 2);
+      ctx.font = 'bold 6px monospace';
+      ctx.fillStyle = G_DIM;
+      ctx.fillText('SENT', invX + invW / 2, cy + 9);
+    } else {
+      ctx.fillStyle = 'rgba(100,200,255,0.15)';
+      ctx.fillRect(invX, cy + 1, invW, rowH - 2);
+      ctx.strokeStyle = '#66ccff';
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(invX, cy + 1, invW, rowH - 2);
+      ctx.font = 'bold 6px monospace';
+      ctx.fillStyle = '#66ccff';
+      ctx.fillText('INVITE', invX + invW / 2, cy + 9);
+      _allianceButtons.push({ action: `invite:${player}`, x: invX, y: cy + 1, w: invW, h: rowH - 2 });
+    }
+    ctx.textAlign = 'left';
+    cy += rowH;
+  }
+
+  return cy - y;
+}
+
+function drawComsContacts(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  _comsContactButtons = [];
+  _comsBackButton = null;
+  _comsSendButton = null;
+  _allianceButtons = [];
+  _allianceChatPageButtons = [];
+
+  const headerH = 28;
+  const contactH = 22;
+  const players = _knownPlayerNames;
+  const contactCount = players.length;
+  const bodyH = headerH + Math.max(contactCount, 1) * contactH + PANEL_PAD * 2;
+
+  drawPanelFrame(ctx, x, y, w, bodyH, 'COMMS', '\u{1F4E1}');
+
+  if (contactCount === 0) {
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('NO CONTACTS DISCOVERED', x + w / 2, y + headerH + 20);
+    ctx.font = '6px monospace';
+    ctx.fillText('Use Enhanced Probes or visit', x + w / 2, y + headerH + 34);
+    ctx.fillText('foreign stars to discover players', x + w / 2, y + headerH + 44);
     return bodyH;
   }
 
-  // Show most recent messages (scroll from bottom)
-  const startIdx = Math.max(0, msgs.length - maxVisibleMessages - _comsScrollOffset);
-  const endIdx = Math.min(msgs.length, startIdx + maxVisibleMessages);
+  // Draw contact list
+  for (let i = 0; i < contactCount; i++) {
+    const player = players[i]!;
+    const cy = y + headerH + i * contactH;
+    const hasUnread = _dmUnreadFrom.some(u => u.toLowerCase() === player.toLowerCase());
 
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(x + 4, y + headerH, w - 8, visibleCount * msgH);
-  ctx.clip();
+    // Contact row background on hover/unread
+    if (hasUnread) {
+      ctx.fillStyle = 'rgba(0, 255, 128, 0.08)';
+      ctx.fillRect(x + 4, cy, w - 8, contactH - 2);
+    }
 
-  for (let i = startIdx; i < endIdx; i++) {
-    const msg = msgs[i];
-    if (!msg) continue;
-    const rowIdx = i - startIdx;
-    const my = y + headerH + rowIdx * msgH;
-    const indent = Math.min(msg.depth || 0, 3) * 8; // indent nested replies, max 3 levels
+    // Unread indicator
+    if (hasUnread) {
+      ctx.fillStyle = '#0f0';
+      ctx.beginPath();
+      ctx.arc(x + PANEL_PAD + 4, cy + contactH / 2, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
-    // Author line
-    ctx.font = 'bold 7px monospace';
+    // Player name
+    ctx.font = 'bold 8px monospace';
     ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = msg.isApp ? '#FFD24A' : G_BRIGHT;
-    const timeStr = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const prefix = indent > 0 ? '\u21B3 ' : '';
-    ctx.fillText(`${prefix}${msg.author}  ${timeStr}`, x + PANEL_PAD + indent, my + 2);
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = hasUnread ? G_BRIGHT : G_MED;
+    ctx.fillText(player, x + PANEL_PAD + (hasUnread ? 12 : 2), cy + contactH / 2);
 
-    // Body line (truncate to fit)
-    ctx.font = '7px monospace';
-    ctx.fillStyle = msg.isApp ? 'rgba(255, 210, 74, 0.7)' : G_MED;
-    const maxChars = Math.floor((w - PANEL_PAD * 2 - indent) / 4.2);
-    const bodyText = msg.body.length > maxChars ? msg.body.slice(0, maxChars - 1) + '\u2026' : msg.body;
-    ctx.fillText(bodyText, x + PANEL_PAD + indent, my + 14);
-  }
-
-  ctx.restore();
-
-  // Scroll hint if more messages
-  if (msgs.length > maxVisibleMessages) {
-    ctx.font = '6px monospace';
+    // Message icon
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'right';
     ctx.fillStyle = G_DIM;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(`\u25B2 ${msgs.length - maxVisibleMessages} more`, x + w / 2, y + headerH - 8);
+    ctx.fillText('\u{1F4AC}', x + w - PANEL_PAD, cy + contactH / 2);
+
+    // Store hit area
+    _comsContactButtons.push({
+      name: player,
+      x: x + 4, y: cy, w: w - 8, h: contactH - 2,
+    });
   }
 
   return bodyH;
+}
+
+function drawDMConversation(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  _comsContactButtons = [];
+  _allianceButtons = [];
+  _allianceChatPageButtons = [];
+  const headerH = 28;
+  const maxMsgs = 5;
+  const msgH = 24;
+  const inputH = 20;
+  const visibleCount = Math.min(_dmMessages.length, maxMsgs);
+  const bodyH = headerH + Math.max(visibleCount, 2) * msgH + inputH + PANEL_PAD * 2;
+
+  drawPanelFrame(ctx, x, y, w, bodyH, `DM: ${_dmPeer}`, '\u{1F4AC}');
+
+  // Back button
+  const backW = 30;
+  const backH = 14;
+  const backX = x + w - backW - PANEL_PAD;
+  const backY = y + 6;
+  ctx.fillStyle = 'rgba(0, 255, 128, 0.15)';
+  ctx.fillRect(backX, backY, backW, backH);
+  ctx.strokeStyle = G_DIM;
+  ctx.strokeRect(backX, backY, backW, backH);
+  ctx.font = 'bold 7px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = G_MED;
+  ctx.fillText('BACK', backX + backW / 2, backY + backH / 2);
+  _comsBackButton = { x: backX, y: backY, w: backW, h: backH };
+
+  if (_dmLoading) {
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('LOADING...', x + w / 2, y + bodyH / 2);
+    return bodyH;
+  }
+
+  if (_dmMessages.length === 0) {
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('No messages yet', x + w / 2, y + headerH + 20);
+    ctx.font = '6px monospace';
+    ctx.fillText('Tap SEND to start a conversation', x + w / 2, y + headerH + 34);
+  } else {
+    // Show most recent messages
+    const startIdx = Math.max(0, _dmMessages.length - maxMsgs);
+    _dmReportButtons = [];
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x + 4, y + headerH, w - 8, visibleCount * msgH);
+    ctx.clip();
+    for (let i = startIdx; i < _dmMessages.length; i++) {
+      const msg = _dmMessages[i]!;
+      const rowIdx = i - startIdx;
+      const my = y + headerH + rowIdx * msgH;
+      const isMe = msg.from.toLowerCase() !== _dmPeer!.toLowerCase();
+      const isSystem = msg.body.startsWith('[ALLIANCE]');
+
+      // Author + time
+      ctx.font = 'bold 6px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = isSystem ? '#fc0' : isMe ? '#4af' : G_BRIGHT;
+      const timeStr = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const label = isSystem ? '\u2694\uFE0F ALLIANCE' : isMe ? 'YOU' : msg.from;
+      ctx.fillText(`${label}  ${timeStr}`, x + PANEL_PAD, my + 2);
+
+      // Report flag for peer messages (not your own, not system)
+      if (!isMe && !isSystem) {
+        const flagW = 14;
+        const flagH = 10;
+        const flagX = x + w - PANEL_PAD - flagW;
+        const flagY = my + 1;
+        ctx.fillStyle = 'rgba(255, 80, 80, 0.15)';
+        ctx.fillRect(flagX, flagY, flagW, flagH);
+        ctx.font = '7px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'rgba(255, 80, 80, 0.6)';
+        ctx.fillText('\u2691', flagX + flagW / 2, flagY + flagH / 2);
+        _dmReportButtons.push({ x: flagX, y: flagY, w: flagW, h: flagH, msg });
+      }
+
+      // Message body
+      ctx.font = '7px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = isSystem ? 'rgba(255, 204, 0, 0.8)' : isMe ? 'rgba(68, 170, 255, 0.7)' : G_MED;
+      const maxChars = Math.floor((w - PANEL_PAD * 2) / 4.2);
+      const displayBody = isSystem ? msg.body.slice(11) : msg.body;
+      const bodyText = displayBody.length > maxChars ? displayBody.slice(0, maxChars - 1) + '\u2026' : displayBody;
+      ctx.fillText(bodyText, x + PANEL_PAD, my + 12);
+    }
+    ctx.restore();
+  }
+
+  // Send button at bottom
+  const sendY = y + bodyH - inputH - PANEL_PAD;
+  const sendW = w - PANEL_PAD * 2;
+  const sendH = inputH;
+  const sendX = x + PANEL_PAD;
+  ctx.fillStyle = 'rgba(0, 255, 128, 0.12)';
+  ctx.fillRect(sendX, sendY, sendW, sendH);
+  ctx.strokeStyle = G_MED;
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(sendX, sendY, sendW, sendH);
+  ctx.font = 'bold 8px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = G_BRIGHT;
+  ctx.fillText('\u{1F4E8} SEND MESSAGE', sendX + sendW / 2, sendY + sendH / 2);
+  _comsSendButton = { x: sendX, y: sendY, w: sendW, h: sendH };
+
+  // Report confirmation flash
+  const reportRemaining = _dmReportConfirmUntil - Date.now();
+  if (reportRemaining > 0) {
+    const alpha = Math.min(reportRemaining / 1000, 1.0);
+    ctx.fillStyle = `rgba(0, 200, 100, ${0.15 * alpha})`;
+    ctx.fillRect(x + 4, y + headerH, w - 8, 16);
+    ctx.font = 'bold 7px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = `rgba(100, 255, 150, ${alpha})`;
+    ctx.fillText('\u2713 REPORT SUBMITTED TO MODERATORS', x + w / 2, y + headerH + 8);
+  }
+
+  return bodyH;
+}
+
+// ── Public Contact List (landing page for PUBLIC tab) ───────────────────────
+
+let _publicPageButtons: { dir: 'prev' | 'next'; x: number; y: number; w: number; h: number }[] = [];
+
+function drawPublicContactList(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  _comsContactButtons = [];
+  _comsBackButton = null;
+  _comsSendButton = null;
+  _allianceButtons = [];
+  _allianceChatPageButtons = [];
+
+  const headerH = 28;
+  const contactH = 22;
+  const players = _knownPlayerNames;
+  // +1 for "ALL" row
+  const totalRows = players.length + 1;
+  const bodyH = headerH + Math.max(totalRows, 2) * contactH + PANEL_PAD * 2;
+
+  drawPanelFrame(ctx, x, y, w, bodyH, 'PUBLIC THREAD', '\u{1F310}');
+
+  // "ALL" row — view all public messages
+  const allY = y + headerH;
+  ctx.fillStyle = 'rgba(255, 136, 0, 0.06)';
+  ctx.fillRect(x + 4, allY, w - 8, contactH - 2);
+  ctx.font = 'bold 8px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#f80';
+  ctx.fillText('\u{1F310} ALL (Public Thread)', x + PANEL_PAD + 2, allY + contactH / 2);
+  _comsContactButtons.push({ name: '__PUBLIC_ALL__', x: x + 4, y: allY, w: w - 8, h: contactH - 2 });
+
+  if (players.length === 0) {
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('No other players discovered yet', x + w / 2, allY + contactH + 20);
+    return bodyH;
+  }
+
+  // Draw player rows
+  for (let i = 0; i < players.length; i++) {
+    const player = players[i]!;
+    const cy = y + headerH + (i + 1) * contactH;
+
+    ctx.fillStyle = 'rgba(255, 136, 0, 0.03)';
+    ctx.fillRect(x + 4, cy, w - 8, contactH - 2);
+
+    ctx.font = 'bold 8px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = G_MED;
+    ctx.fillText(player, x + PANEL_PAD + 2, cy + contactH / 2);
+
+    // Icon
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = G_DIM;
+    ctx.fillText('\u{1F4E2}', x + w - PANEL_PAD, cy + contactH / 2);
+
+    _comsContactButtons.push({ name: `__PUBLIC_TO__${player}`, x: x + 4, y: cy, w: w - 8, h: contactH - 2 });
+  }
+
+  return bodyH;
+}
+
+// ── Public Player View (conversation-style for a specific player) ───────────
+
+function drawPublicPlayerView(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  _comsContactButtons = [];
+  _comsBackButton = null;
+  _comsSendButton = null;
+  _publicReplyButtons = [];
+  _publicPostButton = null;
+  _publicPageButtons = [];
+
+  const player = _publicRecipient!;
+  const headerH = 28;
+  const msgH = 24;
+  const sendBtnH = 20;
+  // Filter messages involving this player (from them, or mentioning u/player)
+  const relevant = _publicComments.filter(c =>
+    c.author.toLowerCase() === player.toLowerCase() ||
+    c.body.toLowerCase().includes(`u/${player.toLowerCase()}`)
+  );
+  const maxVisible = 5;
+  const visibleCount = Math.min(relevant.length, maxVisible);
+  const bodyH = headerH + Math.max(visibleCount, 3) * msgH + sendBtnH + PANEL_PAD * 2;
+
+  drawPanelFrame(ctx, x, y, w, bodyH, `MSG: ${player}`, '\u{1F4E2}');
+
+  // Back button
+  const backW = 30;
+  const backH = 14;
+  const backX = x + w - backW - PANEL_PAD;
+  const backY = y + 6;
+  ctx.fillStyle = 'rgba(255, 136, 0, 0.15)';
+  ctx.fillRect(backX, backY, backW, backH);
+  ctx.strokeStyle = 'rgba(255, 136, 0, 0.4)';
+  ctx.strokeRect(backX, backY, backW, backH);
+  ctx.font = 'bold 7px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#f80';
+  ctx.fillText('BACK', backX + backW / 2, backY + backH / 2);
+  _comsBackButton = { x: backX, y: backY, w: backW, h: backH };
+
+  const contentTop = y + headerH;
+
+  if (_publicLoading) {
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('LOADING...', x + w / 2, y + bodyH / 2);
+    return bodyH;
+  }
+
+  if (relevant.length === 0) {
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`No messages with ${player}`, x + w / 2, contentTop + 20);
+    ctx.font = '6px monospace';
+    ctx.fillText('Send the first public message!', x + w / 2, contentTop + 34);
+  } else {
+    // Show most recent messages involving this player (newest at bottom)
+    const shown = relevant.slice(-maxVisible);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x + 4, contentTop, w - 8, maxVisible * msgH);
+    ctx.clip();
+    for (let i = 0; i < shown.length; i++) {
+      const comment = shown[i]!;
+      const my = contentTop + i * msgH;
+
+      // Author + time
+      ctx.font = 'bold 6px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = comment.author.toLowerCase() === player.toLowerCase() ? '#f80' : '#4af';
+      const timeStr = new Date(comment.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      ctx.fillText(`${comment.author}  ${timeStr}`, x + PANEL_PAD, my + 2);
+
+      // Message body
+      ctx.font = '7px monospace';
+      ctx.fillStyle = G_MED;
+      const maxChars = Math.floor((w - PANEL_PAD * 2) / 4.2);
+      const bodyText = comment.body.length > maxChars ? comment.body.slice(0, maxChars - 1) + '\u2026' : comment.body;
+      ctx.fillText(bodyText, x + PANEL_PAD, my + 12);
+    }
+    ctx.restore();
+  }
+
+  // Send message button (prominent, like DM view)
+  const sendY = y + bodyH - sendBtnH - PANEL_PAD;
+  const sendW = w - PANEL_PAD * 2;
+  const sendX = x + PANEL_PAD;
+  ctx.fillStyle = 'rgba(255, 136, 0, 0.15)';
+  ctx.fillRect(sendX, sendY, sendW, sendBtnH);
+  ctx.strokeStyle = '#f80';
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(sendX, sendY, sendW, sendBtnH);
+  ctx.font = 'bold 8px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#f80';
+  ctx.fillText(`\u{1F4E8} SEND MESSAGE TO ${player.toUpperCase()}`, sendX + sendW / 2, sendY + sendBtnH / 2);
+  _publicPostButton = { x: sendX, y: sendY, w: sendW, h: sendBtnH };
+
+  return bodyH;
+}
+
+// ── Public Comments Drawing (ALL view) ──────────────────────────────────────
+
+function drawPublicComments(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number,
+): number {
+  _comsContactButtons = [];
+  _comsBackButton = null;
+  _comsSendButton = null;
+  _publicPageButtons = [];
+  _allianceButtons = [];
+  _allianceChatPageButtons = [];
+
+  const headerH = 28;
+  const pageBarH = 14; // pagination bar
+  const msgH = 28;
+  const postBtnH = 20;
+  const visibleCount = PUBLIC_PAGE_SIZE;
+  const bodyH = headerH + visibleCount * msgH + pageBarH + postBtnH + PANEL_PAD * 2;
+
+  const title = (_publicRecipient && _publicRecipient !== '__ALL__') ? `TO: ${_publicRecipient}` : 'PUBLIC THREAD';
+  drawPanelFrame(ctx, x, y, w, bodyH, title, '\u{1F310}');
+
+  // Back button (return to contact list)
+  const backW = 30;
+  const backH = 14;
+  const backX = x + w - backW - PANEL_PAD;
+  const backY = y + 6;
+  ctx.fillStyle = 'rgba(255, 136, 0, 0.15)';
+  ctx.fillRect(backX, backY, backW, backH);
+  ctx.strokeStyle = 'rgba(255, 136, 0, 0.4)';
+  ctx.strokeRect(backX, backY, backW, backH);
+  ctx.font = 'bold 7px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#f80';
+  ctx.fillText('BACK', backX + backW / 2, backY + backH / 2);
+  _comsBackButton = { x: backX, y: backY, w: backW, h: backH };
+
+  const contentTop = y + headerH;
+
+  if (_publicLoading) {
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('LOADING...', x + w / 2, y + bodyH / 2);
+    return bodyH;
+  }
+
+  if (_publicComments.length === 0) {
+    ctx.font = '7px monospace';
+    ctx.fillStyle = G_DIM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('No public messages yet', x + w / 2, contentTop + 40);
+    ctx.font = '6px monospace';
+    ctx.fillText('Be the first to post!', x + w / 2, contentTop + 54);
+  } else {
+    // Show in chat order (oldest first, newest at bottom) — page 0 = most recent page
+    const totalPages = Math.max(1, Math.ceil(_publicComments.length / PUBLIC_PAGE_SIZE));
+    // Clamp page
+    if (_publicPage >= totalPages) _publicPage = totalPages - 1;
+    if (_publicPage < 0) _publicPage = 0;
+
+    // Page 0 = last page of messages (most recent), page 1 = second-to-last, etc.
+    const reversedPageIdx = totalPages - 1 - _publicPage;
+    const startIdx = reversedPageIdx * PUBLIC_PAGE_SIZE;
+    const pageItems = _publicComments.slice(startIdx, startIdx + PUBLIC_PAGE_SIZE);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x + 4, contentTop, w - 8, visibleCount * msgH);
+    ctx.clip();
+    for (let i = 0; i < pageItems.length; i++) {
+      const comment = pageItems[i]!;
+      const my = contentTop + i * msgH;
+
+      // Author + time
+      ctx.font = 'bold 6px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#f80';
+      const timeStr = new Date(comment.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      ctx.fillText(`${comment.author}  ${timeStr}`, x + PANEL_PAD, my + 2);
+
+      // Message body
+      ctx.font = '7px monospace';
+      ctx.fillStyle = G_MED;
+      const maxChars = Math.floor((w - PANEL_PAD * 2 - 20) / 4.2);
+      const bodyText = comment.body.length > maxChars ? comment.body.slice(0, maxChars - 1) + '\u2026' : comment.body;
+      ctx.fillText(bodyText, x + PANEL_PAD, my + 12);
+
+      // Reply count indicator
+      if (comment.replies.length > 0) {
+        ctx.font = '6px monospace';
+        ctx.fillStyle = G_DIM;
+        ctx.textAlign = 'right';
+        ctx.fillText(`${comment.replies.length}\u{1F4AC}`, x + w - PANEL_PAD, my + 6);
+      }
+
+      // Reply button
+      const replyW = 20;
+      const replyH = 10;
+      const replyX = x + w - PANEL_PAD - replyW;
+      const replyY = my + 15;
+      ctx.fillStyle = 'rgba(255, 136, 0, 0.1)';
+      ctx.fillRect(replyX, replyY, replyW, replyH);
+      ctx.strokeStyle = 'rgba(255, 136, 0, 0.3)';
+      ctx.lineWidth = 0.3;
+      ctx.strokeRect(replyX, replyY, replyW, replyH);
+      ctx.font = '5px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#f80';
+      ctx.fillText('REPLY', replyX + replyW / 2, replyY + replyH / 2);
+      _publicReplyButtons.push({ comment, x: replyX, y: replyY, w: replyW, h: replyH });
+    }
+    ctx.restore();
+
+    // Pagination bar
+    if (totalPages > 1) {
+      const pageY = contentTop + visibleCount * msgH + 2;
+      const pageBtnW = 24;
+      const pageBtnH = 12;
+
+      // Prev button
+      if (_publicPage > 0) {
+        const prevX = x + PANEL_PAD;
+        ctx.fillStyle = 'rgba(255, 136, 0, 0.1)';
+        ctx.fillRect(prevX, pageY, pageBtnW, pageBtnH);
+        ctx.strokeStyle = 'rgba(255, 136, 0, 0.4)';
+        ctx.lineWidth = 0.3;
+        ctx.strokeRect(prevX, pageY, pageBtnW, pageBtnH);
+        ctx.font = 'bold 6px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#f80';
+        ctx.fillText('\u25C0 PREV', prevX + pageBtnW / 2, pageY + pageBtnH / 2);
+        _publicPageButtons.push({ dir: 'prev', x: prevX, y: pageY, w: pageBtnW, h: pageBtnH });
+      }
+
+      // Page indicator
+      ctx.font = '6px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = G_DIM;
+      ctx.fillText(`${_publicPage + 1}/${totalPages}`, x + w / 2, pageY + pageBtnH / 2);
+
+      // Next button
+      if (_publicPage < totalPages - 1) {
+        const nextX = x + w - PANEL_PAD - pageBtnW;
+        ctx.fillStyle = 'rgba(255, 136, 0, 0.1)';
+        ctx.fillRect(nextX, pageY, pageBtnW, pageBtnH);
+        ctx.strokeStyle = 'rgba(255, 136, 0, 0.4)';
+        ctx.lineWidth = 0.3;
+        ctx.strokeRect(nextX, pageY, pageBtnW, pageBtnH);
+        ctx.font = 'bold 6px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#f80';
+        ctx.fillText('NEXT \u25B6', nextX + pageBtnW / 2, pageY + pageBtnH / 2);
+        _publicPageButtons.push({ dir: 'next', x: nextX, y: pageY, w: pageBtnW, h: pageBtnH });
+      }
+    }
+  }
+
+  // New post button at bottom
+  const postY = y + bodyH - postBtnH - PANEL_PAD;
+  const postW = w - PANEL_PAD * 2;
+  const postX = x + PANEL_PAD;
+  ctx.fillStyle = 'rgba(255, 136, 0, 0.12)';
+  ctx.fillRect(postX, postY, postW, postBtnH);
+  ctx.strokeStyle = '#f80';
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(postX, postY, postW, postBtnH);
+  ctx.font = 'bold 8px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#f80';
+  const postLabel = (_publicRecipient && _publicRecipient !== '__ALL__')
+    ? `\u{270F}\u{FE0F} MSG ${_publicRecipient.toUpperCase()}`
+    : '\u{270F}\u{FE0F} NEW POST';
+  ctx.fillText(postLabel, postX + postW / 2, postY + postBtnH / 2);
+  _publicPostButton = { x: postX, y: postY, w: postW, h: postBtnH };
+
+  return bodyH;
+}
+
+/** Hit-test COMS panel clicks — contacts and DM buttons. */
+export function hitTestComsPanel(sx: number, sy: number): boolean {
+  // Tab buttons
+  for (const tab of _comsTabButtons) {
+    if (sx >= tab.x && sx <= tab.x + tab.w && sy >= tab.y && sy <= tab.y + tab.h) {
+      _comsTab = tab.tab;
+      return true;
+    }
+  }
+  // Back button
+  if (_comsBackButton) {
+    const b = _comsBackButton;
+    if (sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
+      if (_comsTab === 'alliance') {
+        // Return to alliance home view
+        _allianceView = _allianceInfo ? 'home' : 'none';
+        _allianceChatPage = 0;
+        _allianceInvitedPlayers.clear();
+      } else if (_comsTab === 'public') {
+        // Return to public contact list
+        _publicRecipient = null;
+        _publicPage = 0;
+      } else {
+        // Return to private contact list
+        _dmPeer = null;
+        _dmMessages = [];
+      }
+      _comsBackButton = null;
+      _comsSendButton = null;
+      return true;
+    }
+  }
+  // Page buttons (public comments pagination)
+  for (const btn of _publicPageButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      if (btn.dir === 'prev') _publicPage--;
+      else _publicPage++;
+      return true;
+    }
+  }
+  // Send button — show DM input overlay
+  if (_comsSendButton && _dmPeer) {
+    const b = _comsSendButton;
+    if (sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
+      _dmInputRequested = _dmPeer;
+      return true;
+    }
+  }
+  // Report buttons on DM messages
+  for (const btn of _dmReportButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      _dmReportPending = { messageId: btn.msg.id, from: btn.msg.from, body: btn.msg.body };
+      return true;
+    }
+  }
+  // Contact buttons
+  for (const btn of _comsContactButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      // Handle PUBLIC tab contact list buttons
+      if (btn.name === '__PUBLIC_ALL__') {
+        _publicRecipient = '__ALL__';
+        _publicPage = 0;
+        return true;
+      }
+      if (btn.name.startsWith('__PUBLIC_TO__')) {
+        _publicRecipient = btn.name.slice('__PUBLIC_TO__'.length);
+        _publicPage = 0;
+        return true;
+      }
+      // PRIVATE tab contact — open DM
+      _dmPeer = btn.name;
+      _dmMessages = [];
+      _dmLoading = true;
+      return true;
+    }
+  }
+  // Public post button
+  if (_publicPostButton) {
+    const b = _publicPostButton;
+    if (sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
+      const req: { parentId?: string; recipient?: string } = {};
+      if (_publicRecipient && _publicRecipient !== '__ALL__') req.recipient = _publicRecipient;
+      _publicInputRequested = req;
+      return true;
+    }
+  }
+  // Public reply buttons
+  for (const btn of _publicReplyButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      _publicInputRequested = { parentId: btn.comment.id };
+      return true;
+    }
+  }
+  // Alliance buttons
+  for (const btn of _allianceButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      const a = btn.action;
+      if (a === 'create') {
+        _allianceInputRequested = { type: 'create' };
+      } else if (a === 'view_invites') {
+        _allianceView = 'invites';
+      } else if (a === 'chat') {
+        _allianceView = 'chat';
+        _allianceChatPage = 0;
+      } else if (a === 'invite_view') {
+        _allianceView = 'invite';
+      } else if (a === 'leave') {
+        _pendingAllianceAction = { type: 'leave' };
+      } else if (a === 'send_chat') {
+        _allianceInputRequested = { type: 'chat' };
+      } else if (a.startsWith('kick:')) {
+        _pendingAllianceAction = { type: 'kick', target: a.slice(5) };
+      } else if (a.startsWith('join:')) {
+        _pendingAllianceAction = { type: 'join', allianceId: a.slice(5) };
+      } else if (a.startsWith('reject:')) {
+        _pendingAllianceAction = { type: 'reject', allianceId: a.slice(7) };
+      } else if (a.startsWith('invite:')) {
+        const target = a.slice(7);
+        _pendingAllianceAction = { type: 'invite', target };
+        _allianceInvitedPlayers.add(target);
+      } else if (a === 'test_bots') {
+        _pendingBotTest = true;
+      } else if (a === 'test_admin') {
+        _pendingBotAdminTest = true;
+      } else if (a === 'test_check') {
+        _pendingBotCheck = true;
+      } else if (a === 'copy_bot_log') {
+        _pendingBotCopy = true;
+      }
+      return true;
+    }
+  }
+  // Alliance chat pagination
+  for (const btn of _allianceChatPageButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      if (btn.dir === 'prev') _allianceChatPage--;
+      else _allianceChatPage++;
+      return true;
+    }
+  }
+  // Leaderboard seed button
+  if (_leaderboardSeedButton) {
+    const b = _leaderboardSeedButton;
+    if (sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
+      _pendingSeedBots = true;
+      return true;
+    }
+  }
+  return false;
 }
 
 // ── Dock Panel ──────────────────────────────────────────────────────────────
@@ -4351,8 +5806,8 @@ interface DockButton {
 
 let _lastDockButtons: DockButton[] = [];
 
-type DockExtensionAction = 'upgrade_station' | 'extend_habitat' | 'extend_ore' | 'extend_defense' | 'extend_warehouse' | 'extend_dock';
-export type DockPanelAction = DockAction | DockExtensionAction | 'buy_ships' | 'debug_complete';
+type DockExtensionAction = 'upgrade_station' | 'extend_habitat' | 'extend_ore' | 'extend_defense' | 'extend_warehouse' | 'extend_dock' | 'extend_shield' | 'extend_cannon';
+export type DockPanelAction = DockAction | DockExtensionAction | 'buy_ships' | 'debug_complete' | 'toggle_shield';
 
 let _completeButton: { x: number; y: number; w: number; h: number } | null = null;
 
@@ -4369,7 +5824,7 @@ type ExtensionButton = {
 type MockExtensionState = {
   action: DockExtensionAction;
   label: string;
-  key: 'mine' | 'solar' | 'hab' | 'station' | 'warehouse' | 'dock';
+  key: 'mine' | 'solar' | 'hab' | 'station' | 'warehouse' | 'dock' | 'shield' | 'cannon';
   cost: { ore: number; food: number; energy: number };
   buildMs: number;
 };
@@ -4381,6 +5836,8 @@ const MOCK_EXTENSION_DEFS: MockExtensionState[] = [
   { action: 'extend_defense', label: 'SOLAR', key: 'solar', cost: { ore: 300, food: 180, energy: 260 }, buildMs: 300_000 },
   { action: 'extend_warehouse', label: 'STORE', key: 'warehouse', cost: { ore: 240, food: 180, energy: 180 }, buildMs: 300_000 },
   { action: 'extend_dock', label: 'DOCK', key: 'dock', cost: { ore: 500, food: 300, energy: 400 }, buildMs: 600_000 },
+  { action: 'extend_shield', label: 'SHIELD', key: 'shield', cost: { ore: 400, food: 300, energy: 350 }, buildMs: 300_000 },
+  { action: 'extend_cannon', label: 'CANNON', key: 'cannon', cost: { ore: 500, food: 250, energy: 450 }, buildMs: 300_000 },
 ];
 
 let _lastExtensionButtons: ExtensionButton[] = [];
@@ -4390,6 +5847,8 @@ type ServerEconomySnapshot = {
   store: { ore: number; food: number; energy: number };
   rates: { ore: number; food: number; energy: number };
   cap: number;
+  shieldRaised: boolean;
+  defenseScore: { shield: number; cannon: number; total: number };
   buildings: {
     station: { level: number; status: string; completeAt: number | null };
     mine: { level: number; status: string; completeAt: number | null };
@@ -4397,17 +5856,37 @@ type ServerEconomySnapshot = {
     hab: { level: number; status: string; completeAt: number | null };
     warehouse: { level: number; status: string; completeAt: number | null };
     dock: { level: number; status: string; completeAt: number | null };
+    shield: { level: number; status: string; completeAt: number | null };
+    cannon: { level: number; status: string; completeAt: number | null };
   };
+  completeCharges?: number;
+  richness?: { ore: number; food: number; energy: number };
 };
 
 const _serverEconomyByStarIndex = new Map<number, ServerEconomySnapshot>();
 let _lastEconomyStarIndex: number | null = null;
-let _pendingBuildRequest: { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' } | null = null;
-let _pendingBuyShipRequest: { shipTypeId: number; quantity: number } | null = null;
-let _pendingUpgradeShipRequest: { fromTypeId: number } | null = null;
+let _pendingBuildRequest: { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' } | null = null;
+let _pendingBuyShipRequest: { shipTypeId: number; quantity: number; useBlueprint?: boolean } | null = null;
+let _pendingUpgradeShipRequest: { fromTypeId: number; useBlueprint?: boolean } | null = null;
 let _pendingCompleteBuilds = false;
 let _pendingColonizeRequest: { starIndex: number } | null = null;
+let _pendingToggleShield = false;
+let _pendingExplore: { starIndex: number; bodyIndex: number } | null = null;
+let _lastExploreResult: { kind: string; label: string; icon: string; amount: number; showUntil: number } | null = null;
 let _colonizeButton: { x: number; y: number; w: number; h: number } | null = null;
+let _shieldToggleButton: { x: number; y: number; w: number; h: number } | null = null;
+
+// Shield charging state — visual delay between button press and server-confirmed state
+const SHIELD_CHARGE_DURATION_MS = 3000; // 3 seconds to raise/lower
+let _shieldCharging: { raising: boolean; startMs: number } | null = null;
+
+export function getShieldCharging(): { raising: boolean; startMs: number } | null {
+  return _shieldCharging;
+}
+
+export function clearShieldCharging(): void {
+  _shieldCharging = null;
+}
 
 export function setServerStarEconomy(snapshot: ServerEconomySnapshot): void {
   // Detect building completions: was UPGRADING, now ACTIVE → play sound
@@ -4423,6 +5902,10 @@ export function setServerStarEconomy(snapshot: ServerEconomySnapshot): void {
     }
   }
   _serverEconomyByStarIndex.set(snapshot.starIndex, snapshot);
+  // Update complete charges from server
+  if (snapshot.completeCharges != null) {
+    _completeCharges = snapshot.completeCharges;
+  }
 }
 
 type ServerShipSnapshot = {
@@ -4441,6 +5924,10 @@ type TransitRecord = {
 };
 let _serverTransits: TransitRecord[] = [];
 let _postId: string = '';
+
+export function getPostId(): string {
+  return _postId;
+}
 
 export function setPostId(postId: string): void {
   _postId = postId;
@@ -4479,6 +5966,20 @@ type FreighterRouteRecord = {
   leg: 'outbound' | 'return';
 };
 let _serverFreighterRoutes: FreighterRouteRecord[] = [];
+
+type RaidRouteRecord = {
+  id: string;
+  homeStarIndex: number;
+  targetStarIndex: number;
+  cargo: { ore: number; food: number; energy: number };
+  departedAt: number;
+  arrivalAt: number;
+  leg: 'outbound' | 'return';
+  status: 'in-transit' | 'success' | 'destroyed';
+  successChance: number;
+};
+let _serverRaidRoutes: RaidRouteRecord[] = [];
+
 let _pendingCancelRoute: string | null = null;
 let _fleetCancelRouteButtons: Array<{ x: number; y: number; w: number; h: number; routeId: string }> = [];
 
@@ -4515,6 +6016,7 @@ export function setServerFleetAll(
   stars: Record<string, { ships: Array<{ typeId: number; count: number }>; building: { typeId: number; completeAt: number } | null }>,
   transits?: TransitRecord[],
   freighterRoutes?: FreighterRouteRecord[],
+  raidRoutes?: RaidRouteRecord[],
 ): void {
   // Detect freighter route leg completions for sound effects (disabled — voice too repetitive)
   // if (freighterRoutes && _serverFreighterRoutes.length > 0) {
@@ -4540,6 +6042,7 @@ export function setServerFleetAll(
   }
   _serverTransits = transits ?? [];
   _serverFreighterRoutes = freighterRoutes ?? [];
+  _serverRaidRoutes = raidRoutes ?? [];
 }
 
 /** Consume a pending freighter route cancel request. */
@@ -4549,19 +6052,19 @@ export function consumePendingCancelRoute(): string | null {
   return id;
 }
 
-export function consumePendingBuildRequest(): { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' } | null {
+export function consumePendingBuildRequest(): { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' } | null {
   const next = _pendingBuildRequest;
   _pendingBuildRequest = null;
   return next;
 }
 
-export function consumePendingBuyShipRequest(): { shipTypeId: number; quantity: number } | null {
+export function consumePendingBuyShipRequest(): { shipTypeId: number; quantity: number; useBlueprint?: boolean } | null {
   const next = _pendingBuyShipRequest;
   _pendingBuyShipRequest = null;
   return next;
 }
 
-export function consumePendingUpgradeShipRequest(): { fromTypeId: number } | null {
+export function consumePendingUpgradeShipRequest(): { fromTypeId: number; useBlueprint?: boolean } | null {
   const next = _pendingUpgradeShipRequest;
   _pendingUpgradeShipRequest = null;
   return next;
@@ -4579,12 +6082,38 @@ export function consumePendingColonizeRequest(): { starIndex: number } | null {
   return next;
 }
 
-function mapDockActionToBuildType(action: DockExtensionAction): 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' {
+export function consumePendingToggleShield(): boolean {
+  // Only fire the server call once the charge animation completes
+  if (!_pendingToggleShield || !_shieldCharging) return false;
+  const elapsed = Date.now() - _shieldCharging.startMs;
+  if (elapsed < SHIELD_CHARGE_DURATION_MS) return false;
+  // Charge complete — consume the pending flag
+  _pendingToggleShield = false;
+  return true;
+}
+
+export function consumePendingExplore(): { starIndex: number; bodyIndex: number } | null {
+  const next = _pendingExplore;
+  _pendingExplore = null;
+  return next;
+}
+
+export function showExploreResult(kind: string, label: string, icon: string, amount: number): void {
+  _lastExploreResult = { kind, label, icon, amount, showUntil: performance.now() + 4000 };
+}
+
+export function triggerExplore(starIndex: number, bodyIndex: number): void {
+  _pendingExplore = { starIndex, bodyIndex };
+}
+
+function mapDockActionToBuildType(action: DockExtensionAction): 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' {
   if (action === 'upgrade_station') return 'station';
   if (action === 'extend_ore') return 'mine';
   if (action === 'extend_defense') return 'solar';
   if (action === 'extend_warehouse') return 'warehouse';
   if (action === 'extend_dock') return 'dock';
+  if (action === 'extend_shield') return 'shield';
+  if (action === 'extend_cannon') return 'cannon';
   return 'hab';
 }
 
@@ -4602,7 +6131,7 @@ function isDockedAtStation(dock?: DockState): boolean {
 }
 
 export function triggerDockPanelAction(action: DockPanelAction, dock?: DockState): boolean {
-  if (action === 'upgrade_station' || action === 'extend_habitat' || action === 'extend_ore' || action === 'extend_defense' || action === 'extend_warehouse' || action === 'extend_dock') {
+  if (action === 'upgrade_station' || action === 'extend_habitat' || action === 'extend_ore' || action === 'extend_defense' || action === 'extend_warehouse' || action === 'extend_dock' || action === 'extend_shield' || action === 'extend_cannon') {
     const serverEcon = _lastEconomyStarIndex == null ? null : _serverEconomyByStarIndex.get(_lastEconomyStarIndex);
     if (!serverEcon || !isDockedAtStation(dock)) return false;
     const buildType = mapDockActionToBuildType(action);
@@ -4688,40 +6217,134 @@ export function drawDockPanel(
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText(`\u25CF ORBIT: ${dock.targetName.toUpperCase()}`, barX + 10, barY + barH / 2);
 
-  // Action buttons (SCAN + LEAVE) on right side of bar
+  // Action buttons on right side of bar
   const btnW = 48;
   const btnH = 22;
   const btnGap = 6;
   const btnY = barY + (barH - btnH) / 2;
 
+  // Determine if shield button should show
+  const shieldLevel = (starIndex != null && dock.docked && _panelsOwned)
+    ? (_serverEconomyByStarIndex.get(starIndex)?.buildings.shield?.level ?? 0)
+    : 0;
+  const shieldRaised = starIndex != null
+    ? (_serverEconomyByStarIndex.get(starIndex)?.shieldRaised ?? false)
+    : false;
+  const showShieldBtn = shieldLevel >= 1;
+  const isCharging = _shieldCharging != null;
+
+  // Build action list: [SHIELDS?] + SCAN + LEAVE
+  interface OrbitBtn { action: string; label: string; icon: string; color?: string }
+  const orbitBtns: OrbitBtn[] = [];
+  if (showShieldBtn) {
+    const shLabel = isCharging
+      ? (_shieldCharging!.raising ? 'CHARGING' : 'LOWERING')
+      : (shieldRaised ? 'SHIELDS' : 'SHIELDS');
+    orbitBtns.push({ action: 'toggle_shield', label: shLabel, icon: '\u26E8', color: isCharging ? '#ffdc64' : shieldRaised ? '#64c8ff' : '#ff6666' });
+  }
+  for (const act of DOCK_ACTIONS) {
+    orbitBtns.push(act);
+  }
+
+  const shieldBtnW = 58; // slightly wider for SHIELDS label
+
   _lastDockButtons = [];
-  for (const [i, act] of DOCK_ACTIONS.entries()) {
-    const bx = barX + barW - (DOCK_ACTIONS.length - i) * (btnW + btnGap);
+  _shieldToggleButton = null;
+  for (const [i, act] of orbitBtns.entries()) {
+    const isShield = act.action === 'toggle_shield';
+    const thisW = isShield ? shieldBtnW : btnW;
+    // Calculate x from right edge
+    let rightOffset = 0;
+    for (let j = i + 1; j < orbitBtns.length; j++) {
+      rightOffset += (orbitBtns[j]!.action === 'toggle_shield' ? shieldBtnW : btnW) + btnGap;
+    }
+    rightOffset += thisW;
+    const bx = barX + barW - rightOffset;
     const by = btnY;
 
-    _lastDockButtons.push({ ...act, x: bx, y: by, w: btnW, h: btnH });
+    if (isShield) {
+      // Store shield button rect for hit testing
+      if (!isCharging) {
+        _shieldToggleButton = { x: bx, y: by, w: thisW, h: btnH };
+      }
+      // Draw with colored outline
+      const color = act.color!;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      roundedRect(ctx, bx, by, thisW, btnH, 3);
+      ctx.stroke();
 
-    const enabled = dock.docked || act.action === 'leave';
-    ctx.strokeStyle = enabled ? G_BRIGHT : G_FAINT;
+      // Charging progress fill
+      if (isCharging) {
+        const progress = Math.min(1, (Date.now() - _shieldCharging!.startMs) / SHIELD_CHARGE_DURATION_MS);
+        ctx.fillStyle = `rgba(255, 220, 100, 0.2)`;
+        roundedRect(ctx, bx, by, thisW * progress, btnH, 3);
+        ctx.fill();
+      }
+
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = color;
+      ctx.fillText(act.icon, bx + 12, by + btnH / 2);
+
+      ctx.font = '7px monospace';
+      ctx.fillText(act.label, bx + 36, by + btnH / 2);
+    } else {
+      _lastDockButtons.push({ action: act.action as DockAction, label: act.label, icon: act.icon, x: bx, y: by, w: thisW, h: btnH });
+
+      const enabled = dock.docked || act.action === 'leave';
+      ctx.strokeStyle = enabled ? G_BRIGHT : G_FAINT;
+      ctx.lineWidth = 1;
+      roundedRect(ctx, bx, by, thisW, btnH, 3);
+      ctx.stroke();
+
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = enabled ? G_BRIGHT : G_FAINT;
+      ctx.fillText(act.icon, bx + 12, by + btnH / 2);
+
+      ctx.font = '7px monospace';
+      ctx.fillText(act.label, bx + 32, by + btnH / 2);
+    }
+  }
+
+  // ── Exploration result popup (above orbit bar, fades out) ──
+  if (_lastExploreResult && performance.now() < _lastExploreResult.showUntil) {
+    const remaining = _lastExploreResult.showUntil - performance.now();
+    const alpha = Math.min(1, remaining / 1000); // fade out over last 1s
+    const popW = 200;
+    const popH = 24;
+    const popX = (screenW - popW) / 2;
+    const popY = barY - popH - 50;
+
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = _lastExploreResult.kind === 'nothing' ? 'rgba(80, 80, 80, 0.9)' : 'rgba(0, 60, 30, 0.9)';
+    roundedRect(ctx, popX, popY, popW, popH, 4);
+    ctx.fill();
+    ctx.strokeStyle = _lastExploreResult.kind === 'nothing' ? 'rgba(150, 150, 150, 0.8)' : G_BRIGHT;
     ctx.lineWidth = 1;
-    roundedRect(ctx, bx, by, btnW, btnH, 3);
+    roundedRect(ctx, popX, popY, popW, popH, 4);
     ctx.stroke();
 
-    ctx.font = '10px monospace';
+    ctx.font = '9px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = enabled ? G_BRIGHT : G_FAINT;
-    ctx.fillText(act.icon, bx + 12, by + btnH / 2);
-
-    ctx.font = '7px monospace';
-    ctx.fillText(act.label, bx + 32, by + btnH / 2);
+    ctx.fillStyle = _lastExploreResult.kind === 'nothing' ? '#aaa' : G_BRIGHT;
+    const text = _lastExploreResult.amount > 0 && _lastExploreResult.kind !== 'artifact' && _lastExploreResult.kind !== 'blueprint' && _lastExploreResult.kind !== 'anomaly'
+      ? `${_lastExploreResult.label} (+${_lastExploreResult.amount})`
+      : _lastExploreResult.label;
+    ctx.fillText(text, popX + popW / 2, popY + popH / 2);
+    ctx.globalAlpha = 1;
   }
 
   // ── COLONIZE button (above orbit bar) ──
-  // Show when: docked (planet or station) + star not player-owned + Colony Ship present
+  // Show when: docked (planet or station) + star not player-owned + Colony Ship present + NOT a trading station
   _colonizeButton = null;
   const canColonizeTarget = dock.targetLabel === 'Station' || dock.targetLabel === 'Planet';
-  if (dock.docked && canColonizeTarget && starIndex != null) {
+  const isTradeStation = _postId && starIndex != null && isTradingStation(_postId, starIndex);
+  if (dock.docked && canColonizeTarget && starIndex != null && !isTradeStation) {
     const starShips = _serverShipsByStarIndex.get(starIndex);
     const hasColonyShip = starShips?.ships.some(s => s.typeId === 8 && s.count > 0) ?? false;
     if (!_panelsOwned && hasColonyShip) {
@@ -4755,6 +6378,22 @@ export function drawDockPanel(
 
 /** Hit-test dock panel buttons (orbit bar). Returns the action if clicked, null otherwise. */
 export function hitTestDockPanel(screenPos: Vec2): DockPanelAction | null {
+  // Check SHIELD TOGGLE button
+  if (_shieldToggleButton) {
+    const b = _shieldToggleButton;
+    if (screenPos.x >= b.x && screenPos.x <= b.x + b.w &&
+        screenPos.y >= b.y && screenPos.y <= b.y + b.h) {
+      _pendingToggleShield = true;
+      // Determine if raising or lowering based on current state
+      const starIndex = _panelsStarIndex;
+      const serverEcon = starIndex != null ? _serverEconomyByStarIndex.get(starIndex) : null;
+      const currentlyRaised = serverEcon?.shieldRaised ?? false;
+      const raising = !currentlyRaised;
+      _shieldCharging = { raising, startMs: Date.now() };
+      playSound(raising ? 'shields_activated' : 'shields_deactivated');
+      return null; // consumed internally
+    }
+  }
   // Check COLONIZE button first (above orbit bar)
   if (_colonizeButton) {
     const b = _colonizeButton;
@@ -4790,6 +6429,7 @@ type ShipButton = {
   isUpgrade?: boolean;
   upgradeFromTypeId?: number;
   disableReason?: string | undefined;
+  useBlueprint?: boolean;
 };
 
 let _lastShipButtons: ShipButton[] = [];

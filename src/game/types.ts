@@ -27,6 +27,7 @@ export interface FuelPod {
   claimRequested: boolean;
   refuels: boolean;
   color: string;
+  kind: import('./constants').PodKind;
 }
 
 export type ShipShape = 'scout' | 'destroyer' | 'frigate' | 'battleship' | 'cruiser' | 'dreadnought';

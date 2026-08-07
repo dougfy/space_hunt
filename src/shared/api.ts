@@ -72,6 +72,7 @@ export type RoomPosesResponse = {
 export type ClaimPodRequest = {
   podId: number;
   username: string;
+  isYellow?: boolean;
 };
 
 export type ClaimPodResponse = {
@@ -111,7 +112,9 @@ export type PlayerProfileResponse = {
   lastPosition?: { starIndex: number; tier: number; bodyIndex: number };
   claimed?: Array<{ starIndex: number; username: string }>;
   discoveredStars?: number[];
+  enhancedProbeStars?: number[];  // stars discovered by enhanced probe
   journeyDone?: boolean;
+  devMode?: boolean;
 };
 
 export type ResourceStore = {
@@ -128,7 +131,7 @@ export type ResourceRates = {
 
 export type BuildStatus = 'LOCKED' | 'READY' | 'UPGRADING' | 'ACTIVE';
 
-export type BuildType = 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock';
+export type BuildType = 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon';
 
 export type StarBuildingState = {
   level: number;
@@ -143,7 +146,14 @@ export type StarEconomyState = {
   rates: ResourceRates;
   cap: number;
   buildings: StarBuildingsState;
+  shieldRaised: boolean;
   lastTickMs: number;
+};
+
+export type DefenseScore = {
+  shield: number;
+  cannon: number;
+  total: number;
 };
 
 export type StarEconomyResponse = {
@@ -153,7 +163,23 @@ export type StarEconomyResponse = {
   rates: ResourceRates;
   cap: number;
   buildings: StarBuildingsState;
+  shieldRaised: boolean;
+  defenseScore: DefenseScore;
   lastTickMs: number;
+  completeCharges?: number;
+  richness?: ResourceStore;
+};
+
+export type ToggleShieldRequest = {
+  username: string;
+  starIndex: number;
+};
+
+export type ToggleShieldResponse = {
+  ok: true;
+  shieldRaised: boolean;
+  rates: ResourceRates;
+  defenseScore: DefenseScore;
 };
 
 export type BuildBuildingRequest = {
@@ -171,6 +197,7 @@ export type SaveProfileRequest = {
   name?: string;
   lastPosition?: { starIndex: number; tier: number; bodyIndex: number };
   discoveredStars?: number[];
+  enhancedProbeStars?: number[];
   journeyDone?: boolean;
 };
 
@@ -195,6 +222,7 @@ export type BuyShipRequest = {
   starIndex: number;
   shipTypeId: ShipTypeId;
   quantity: number;
+  useBlueprint?: boolean;
 };
 
 export type BuyShipResponse = {
@@ -214,6 +242,7 @@ export type UpgradeShipRequest = {
   username: string;
   starIndex: number;
   fromTypeId: ShipTypeId;
+  useBlueprint?: boolean;
 };
 
 export type UpgradeShipResponse = {
@@ -260,11 +289,38 @@ export type FreighterRouteCancelRequest = {
   routeId: string;
 };
 
+// ── Raid Routes ─────────────────────────────────────────────────────────────
+
+export type RaidRoute = {
+  id: string;
+  homeStarIndex: number;            // raider's origin (where loot returns)
+  targetStarIndex: number;          // enemy star being raided
+  cargo: ResourceStore;             // stolen resources (filled on success)
+  departedAt: number;               // epoch ms
+  arrivalAt: number;                // epoch ms
+  leg: 'outbound' | 'return';      // outbound = going to target, return = coming home
+  status: 'in-transit' | 'success' | 'destroyed'; // outcome after arrival
+  successChance: number;            // 0-1 probability of surviving the raid
+};
+
+export type RaidRouteRequest = {
+  username: string;
+  homeStarIndex: number;
+  targetStarIndex: number;
+};
+
+export type RaidRouteResponse = {
+  ok: true;
+  route: RaidRoute;
+};
+
 export type FleetAllResponse = {
   stars: Record<string, { ships: StarShipsState; building: ShipBuildingState | null }>;
   transits: ShipTransit[];
   freighterRoutes: FreighterRoute[];
+  raidRoutes: RaidRoute[];
   discoveredStars: number[];
+  enhancedProbeStars: number[];  // stars discovered by enhanced probe (reveals owner)
 };
 
 export type FleetTransferRequest = {
@@ -351,6 +407,57 @@ export type ComsUnreadResponse = {
   latestTimestamp: number;
 };
 
+// ── Public Comments (Reddit thread) ─────────────────────────────────────────
+
+export type PublicComment = {
+  id: string;          // Reddit comment ID (t1_xxx)
+  author: string;
+  body: string;
+  createdAt: number;   // epoch ms
+  replies: PublicComment[];
+};
+
+export type PublicCommentsResponse = {
+  comments: PublicComment[];
+};
+
+export type PublicCommentPostRequest = {
+  text: string;
+  parentId?: string;   // comment ID to reply to; omit for top-level
+  username?: string;   // poster's username for attribution
+};
+
+// ── Direct Messages ─────────────────────────────────────────────────────────
+
+export type DirectMessage = {
+  id: string;
+  from: string;
+  to: string;
+  body: string;
+  createdAt: number; // epoch ms
+};
+
+export type DMListResponse = {
+  messages: DirectMessage[];
+};
+
+export type DMSendRequest = {
+  from: string;
+  to: string;
+  text: string;
+};
+
+export type DMUnreadResponse = {
+  unreadFrom: string[];  // usernames with unread messages
+};
+
+export type DMReportRequest = {
+  messageId: string;
+  reporterUsername: string;
+  reportedUsername: string;
+  messageBody: string;
+};
+
 // ── Trading Stations ────────────────────────────────────────────────────────
 
 export type TradeStationState = {
@@ -387,4 +494,85 @@ export type TradeResponse = {
   receiveType: 'ore' | 'food' | 'energy';
   playerStore: ResourceStore;
   stationStock: ResourceStore;
+};
+
+// ── Alliance Types ──────────────────────────────────────────────
+
+export type Alliance = {
+  id: string;
+  name: string;
+  manager: string;
+  members: string[];
+  createdAt: number;
+};
+
+export type AllianceInvite = {
+  allianceId: string;
+  allianceName: string;
+  invitedBy: string;
+  createdAt: number;
+};
+
+export type AllianceChatMessage = {
+  from: string;
+  text: string;
+  createdAt: number;
+};
+
+export type AllianceInfoResponse = {
+  alliance: Alliance | null;
+};
+
+export type AllianceInvitesResponse = {
+  invites: AllianceInvite[];
+};
+
+export type AllianceChatResponse = {
+  messages: AllianceChatMessage[];
+};
+
+export type AllianceCreateRequest = {
+  username: string;
+  name: string;
+};
+
+export type AllianceInviteRequest = {
+  username: string;
+  target: string;
+};
+
+export type AllianceRespondRequest = {
+  username: string;
+  allianceId: string;
+  accept: boolean;
+};
+
+export type AllianceLeaveRequest = {
+  username: string;
+};
+
+export type AllianceKickRequest = {
+  username: string;
+  target: string;
+};
+
+export type AllianceChatSendRequest = {
+  username: string;
+  text: string;
+};
+
+// ── Leaderboard ─────────────────────────────────────────────────────────────
+
+export type LeaderboardEntry = {
+  rank: number;
+  username: string;
+  starCount: number;
+  totalShips: number;
+  totalBuildingLevels: number;
+  playtimeSeconds: number;
+  power: number; // composite score
+};
+
+export type LeaderboardResponse = {
+  players: LeaderboardEntry[];
 };

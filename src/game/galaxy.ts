@@ -4,6 +4,7 @@ import type { Vec2 } from './types';
 import type { StarOwner } from './ownership-contracts';
 import { vec2, createRng, stableHash, magnitude, sub } from './math';
 import { reduceStarOwnership } from './ownership';
+import { isTradingStation } from '../shared/trading';
 import {
   GALAXY_SIZE, STAR_COUNT, STAR_MIN_SPACING,
   STAR_ENTER_RADIUS, SYSTEM_SIZE, SYSTEM_BODY_MIN, SYSTEM_BODY_MAX,
@@ -31,9 +32,10 @@ export interface GalaxyStar {
   owner: StarOwner;
   discovered: boolean;
   discoveryLevel: 'none' | 'probed' | 'visited';
+  claimedBy?: string;  // username of foreign owner (revealed by enhanced probe or visit)
 }
 
-export type FeatureType = 'mine' | 'relay' | 'refinery' | 'station' | 'outpost' | 'colony' | 'solar_array' | 'mine_l2' | 'solar_array_l2' | 'warehouse' | 'dock';
+export type FeatureType = 'mine' | 'relay' | 'refinery' | 'station' | 'outpost' | 'colony' | 'solar_array' | 'mine_l2' | 'solar_array_l2' | 'warehouse' | 'dock' | 'shield' | 'cannon';
 
 export interface PlanetFeature {
   name: string;
@@ -67,6 +69,16 @@ export interface GalaxyState {
 }
 
 let externalStarNames: string[] = [];
+
+// Set when visiting a foreign star — consumed by game-loop to add contact
+let _onVisitForeignOwner: string | null = null;
+
+/** Consume and return the foreign owner discovered during last star visit. */
+export function consumeVisitForeignOwner(): string | null {
+  const owner = _onVisitForeignOwner;
+  _onVisitForeignOwner = null;
+  return owner;
+}
 
 export function setExternalStarNames(names: string[]): void {
   const cleaned = Array.from(new Set(
@@ -146,7 +158,7 @@ function romanNumeral(n: number): string {
   return numerals[n - 1] || String(n);
 }
 
-export function generateSystem(star: GalaxyStar): SystemBody[] {
+export function generateSystem(star: GalaxyStar, postId?: string): SystemBody[] {
   const rng = createRng(star.seed);
   const bodies: SystemBody[] = [];
   const center = SYSTEM_SIZE / 2;
@@ -172,9 +184,10 @@ export function generateSystem(star: GalaxyStar): SystemBody[] {
     const radius = type === 'belt' ? rng.range(0.6, 1.0) : rng.range(0.4, 0.8);
 
     // Generate sub-features for planets.
-    // Station only appears on player-owned stars (colonized).
+    // Station appears on player-owned stars, foreign-owned stars, OR trading station stars.
     const features: PlanetFeature[] = [];
-    if (type === 'planet' && i === 0 && star.owner === 'player') {
+    const isTrading = postId ? isTradingStation(postId, star.index) : false;
+    if (type === 'planet' && i === 0 && (star.owner === 'player' || star.owner === 'foreign' || isTrading)) {
       const featRng = createRng(bodySeed + 777);
       // Constrain angle to upper half of screen (avoid bottom where UI panels sit)
       // World +Y = screen top, so angles in upper semicircle: -π/4 to 5π/4
@@ -363,6 +376,7 @@ export function applyTransition(
   galaxy: GalaxyState,
   transition: TierTransition,
   currentShipPos?: Vec2,
+  postId?: string,
 ): Vec2 {
   galaxy.tier = transition.newTier;
 
@@ -385,7 +399,11 @@ export function applyTransition(
       });
       const star = galaxy.stars[transition.starIndex];
       if (!star) throw new Error(`Missing star ${transition.starIndex} during transition`);
-      galaxy.bodies = generateSystem(star);
+      // When visiting a foreign star, reveal the owner as a contact
+      if (star.owner === 'foreign' && star.claimedBy) {
+        _onVisitForeignOwner = star.claimedBy;
+      }
+      galaxy.bodies = generateSystem(star, postId);
     }
     galaxy.currentBodyIndex = -1;
     const center = SYSTEM_SIZE / 2;

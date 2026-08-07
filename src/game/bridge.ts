@@ -41,7 +41,7 @@ export interface DevvitCallbacks {
   /** Ship pose changed — report to server (throttled by caller) */
   onPose(x: number, y: number, angle: number, name: string, tier: number, starIndex: number, bodyIndex: number): void;
   /** Ship touched a fuel pod — request server claim */
-  onClaimPod(podId: number): void;
+  onClaimPod(podId: number, isYellow: boolean): void;
   /** Player fired a burst — send shots to server */
   onFire(projectiles: Projectile[]): void;
 }

@@ -194,9 +194,9 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
   15: {
     id: 15,
     name: 'Raider',
-    speed: 3,
-    offense: 0,
-    defense: 30,
+    speed: 5,
+    offense: 40,
+    defense: 20,
     transport: 500,
     shipPoints: 4,
     dockTier: 1,

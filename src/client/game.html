@@ -6,11 +6,11 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
     />
+    <meta name="mobile-web-app-capable" content="yes" />
     <title>spacehunt</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-      body { background: url('/loading.png') center/cover no-repeat #000; }
       #game-canvas { width: 100%; height: 100%; display: block; }
 
       /* Overlay UI (inline mode only) */
@@ -307,9 +307,53 @@
         pointer-events: auto;
         min-width: 260px;
         max-height: 80vh;
-        overflow: hidden;
+        overflow-y: auto;
       }
       #admin-panel.visible { display: flex; }
+      #admin-results-panel {
+        position: absolute;
+        top: 56px;
+        right: 286px;
+        z-index: 101;
+        display: none;
+        flex-direction: column;
+        background: rgba(10, 10, 30, 0.95);
+        border: 2px solid #66aaff;
+        padding: 10px;
+        pointer-events: auto;
+        min-width: 220px;
+        max-width: 300px;
+        max-height: 80vh;
+        overflow-y: auto;
+        font-family: monospace;
+        font-size: 10px;
+        color: #aaccff;
+      }
+      #admin-results-panel.visible { display: flex; }
+      #admin-results-panel h4 {
+        color: #66aaff;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin: 0 0 6px 0;
+      }
+      .admin-result-row {
+        padding: 3px 0;
+        border-bottom: 1px solid rgba(100, 150, 255, 0.2);
+      }
+      .admin-result-row:last-child { border-bottom: none; }
+      .admin-mode-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-family: monospace;
+        font-size: 9px;
+        color: #cc7755;
+        margin-bottom: 4px;
+      }
+      .admin-mode-row input[type="checkbox"] {
+        accent-color: #66aaff;
+      }
       #admin-panel h3 {
         color: #ff6644;
         font-family: monospace;
@@ -318,52 +362,25 @@
         letter-spacing: 1px;
         margin: 0 0 4px 0;
       }
-      #admin-claims {
-        font-family: monospace;
-        font-size: 10px;
-        color: #cc9977;
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-      }
-      .admin-claim-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 2px 0;
-        border-bottom: 1px solid rgba(255, 102, 68, 0.15);
-      }
-      .admin-claim-star { color: #ff6644; font-weight: bold; }
-      .admin-claim-user { color: #cc9977; }
-      #admin-player-stats {
-        font-family: monospace;
-        font-size: 9px;
-        color: #cc9977;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        overflow: hidden;
-      }
-      .admin-player-card {
-        background: rgba(60, 20, 10, 0.6);
-        border: 1px solid rgba(255, 102, 68, 0.2);
-        padding: 4px 6px;
-      }
-      .admin-player-card .player-name { color: #ff6644; font-weight: bold; }
-      .admin-player-card .player-star { color: #ffaa88; }
-      .admin-player-card .player-detail { color: #997755; font-size: 8px; }
       .admin-btn {
         background: rgba(80, 20, 10, 0.8);
         border: 1px solid #ff6644;
         color: #ffaa88;
         font-family: monospace;
-        font-size: 10px;
-        padding: 6px 10px;
+        font-size: 9px;
+        padding: 5px 4px;
         cursor: pointer;
         text-transform: uppercase;
       }
       .admin-btn:hover { background: rgba(120, 30, 10, 0.9); color: #ffffff; }
       .admin-btn.danger { border-color: #ff3322; color: #ff6655; }
       .admin-btn.danger:hover { background: rgba(150, 20, 10, 0.9); color: #ffffff; }
+      .admin-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px;
+      }
+      .admin-grid .admin-btn.full { grid-column: 1 / -1; }
       #admin-status {
         font-family: monospace;
         font-size: 9px;
@@ -383,20 +400,30 @@
     </div>
     <div id="admin-panel">
       <h3>&#x2691; Admin Panel</h3>
-      <h3 style="font-size:9px;color:#cc7755;margin:0">Star Claims</h3>
-      <div id="admin-claims"><span style="color:#776655">loading...</span></div>
-      <button id="admin-refresh" class="admin-btn">Refresh Claims</button>
-      <h3 style="font-size:9px;color:#cc7755;margin:8px 0 2px 0">Player Stats</h3>
-      <div id="admin-player-stats"><span style="color:#776655">click refresh</span></div>
-      <div id="admin-stats-pager"></div>
-      <button id="admin-copy-stats" class="admin-btn">&#x1F4CB; Copy Player Stats</button>
-      <button id="admin-reset-claims" class="admin-btn danger">Reset All Claims</button>
-      <button id="admin-reset-all" class="admin-btn danger">Full Reset (claims + economy)</button>
-      <button id="admin-complete-builds" class="admin-btn">Complete My Builds</button>
-      <button id="admin-spawn-enemy" class="admin-btn" style="background:rgba(120,30,30,0.6);border-color:#ff4444">Spawn Enemy</button>
-      <button id="admin-trade-stations" class="admin-btn">Show Trade Stations</button>
-      <div id="admin-trade-list" style="font-size:9px;color:#aaa;margin:4px 0"></div>
+      <div class="admin-mode-row">
+        <input type="checkbox" id="admin-panel-mode" />
+        <label for="admin-panel-mode">Show results in panel</label>
+      </div>
+      <div class="admin-grid">
+        <button id="admin-active-players" class="admin-btn" style="background:rgba(20,60,40,0.6);border-color:#44ffaa;color:#44ffaa">Active Players</button>
+        <button id="admin-toggle-devmode" class="admin-btn" style="background:rgba(20,80,20,0.6);border-color:#44ff66;color:#44ff66">Dev Mode</button>
+        <button id="admin-copy-claims" class="admin-btn">Claims</button>
+        <button id="admin-copy-stats" class="admin-btn">Stats</button>
+        <button id="admin-copy-trades" class="admin-btn">Trades</button>
+        <button id="admin-complete-builds" class="admin-btn">Complete Builds</button>
+        <button id="admin-reset-claims" class="admin-btn danger">Reset Claims</button>
+        <button id="admin-reset-all" class="admin-btn danger">Full Reset</button>
+        <button id="admin-spawn-enemy" class="admin-btn" style="background:rgba(120,30,30,0.6);border-color:#ff4444">Spawn Enemy</button>
+        <button id="admin-autobot-state" class="admin-btn" style="background:rgba(20,60,80,0.6);border-color:#66ccff;color:#66ccff">Bot State</button>
+        <button id="admin-autobot-tick" class="admin-btn" style="background:rgba(20,60,80,0.6);border-color:#66ccff;color:#66ccff">Bot Tick</button>
+        <button id="admin-autobot-flyby" class="admin-btn" style="background:rgba(20,80,60,0.6);border-color:#44ff88;color:#44ff88">Bot Fly-By</button>
+        <button id="admin-autobot-reset" class="admin-btn danger" style="border-color:#ff6644">Bot Reset</button>
+      </div>
       <div id="admin-status"></div>
+    </div>
+    <div id="admin-results-panel">
+      <h4 id="admin-results-title">Results</h4>
+      <div id="admin-results-content"></div>
     </div>
     <div id="help-panel">
       <div class="help-tabs">
@@ -415,6 +442,14 @@
       <div class="help-row">Fly near a star to enter its system</div>
       <div class="help-row">Fly near a belt ring to explore it</div>
       <div class="help-row">Collect fuel pods to keep moving</div>
+
+      <h3 style="margin-top:8px">Economy</h3>
+      <div class="help-row">Each star has unique resource richness (1-10)</div>
+      <div class="help-row">Home stars are guaranteed richness 5-10</div>
+      <div class="help-row">Building output scales with star richness</div>
+
+      <h3 style="margin-top:8px">Session</h3>
+      <div class="help-row">30 min idle timeout — returns to splash</div>
       </div>
       <div class="help-tab-content" id="help-tab-buildings">
       <div class="help-block">
@@ -539,18 +574,28 @@
       <div id="ghost-list"><span class="ghost-empty">none</span></div>
       <div id="ghost-pager"></div>
       <div style="margin-top:8px;text-align:right">
-        <button id="debug-copy" title="Copy debug log to clipboard">&#x1F4CB; Copy Debug Log</button>
+        <button id="debug-copy" title="Copy debug log to clipboard" style="display:none">&#x1F4CB; Copy Debug Log</button>
       </div>
-      <div id="debug-log"></div>
+      <div id="debug-log" style="display:none"></div>
       <div id="version-display"></div>
     </div>
     <div id="overlay" class="visible">
       <div id="btn-row">
-        <button id="play-here" class="play-btn">&#9654; Join Here</button>
+        <button id="play-here" class="play-btn">&#9654; Join Inline</button>
         <button id="play-full" class="play-btn">&#x29C9; Join Full Size</button>
       </div>
     </div>
-    <script>window.__INLINE_MODE__ = true;</script>
-    <script type="module" src="game.ts"></script>
+    <!-- DM Input Overlay -->
+    <div id="dm-input-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center">
+      <div style="background:#0a1a12;border:1px solid #0f6;border-radius:4px;padding:12px;width:80%;max-width:300px">
+        <div id="dm-input-label" style="color:#0f6;font:bold 10px monospace;margin-bottom:8px">Message to:</div>
+        <input id="dm-input-text" type="text" maxlength="500" placeholder="Type your message..." style="width:100%;box-sizing:border-box;background:#061208;border:1px solid #0a4;color:#0f6;font:10px monospace;padding:6px;border-radius:2px;outline:none" />
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="dm-input-send" style="flex:1;background:#0a3;border:1px solid #0f6;color:#fff;font:bold 9px monospace;padding:6px;border-radius:2px;cursor:pointer">SEND</button>
+          <button id="dm-input-cancel" style="flex:1;background:#1a0a0a;border:1px solid #633;color:#f66;font:bold 9px monospace;padding:6px;border-radius:2px;cursor:pointer">CANCEL</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="loader.ts"></script>
   </body>
 </html>

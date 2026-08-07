@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { context, redis, reddit } from '@devvit/web/server';
 import { onColonize, onShipBuy, onShipUpgrade, onDockUpgrade, onFirstTransfer } from '../core/achievements';
+import { setActivePostId } from './scheduler';
 import type {
   BuildBuildingRequest,
   BuildBuildingResponse,
@@ -18,8 +19,12 @@ import type {
   FreighterRouteRequest,
   FreighterRouteCancelRequest,
   FreighterRouteResponse,
+  RaidRouteRequest,
+  RaidRouteResponse,
   IncrementResponse,
   InitResponse,
+  LeaderboardEntry,
+  LeaderboardResponse,
   OkResponse,
   PlayerProfileResponse,
   PoseUpdateRequest,
@@ -33,6 +38,8 @@ import type {
   ShotsResponse,
   TradeRequest,
   TradeStationInfoResponse,
+  ToggleShieldRequest,
+  ToggleShieldResponse,
   UpgradeShipRequest,
   UpgradeShipResponse,
 } from '../../shared/api';
@@ -59,12 +66,19 @@ import {
   updatePlayerStats,
   upgradeBuilding,
   upgradeShip,
+  toggleShield,
+  assignRaidRoute,
   storePose,
   storeShots,
 } from '../core/game-service';
 import { getTradeStationInfo, executeTrade } from '../core/trading';
 import { isTradingStation } from '../../shared/trading';
 import type { ResourceType } from '../../shared/trading';
+import { SHIP_CATALOG } from '../../shared/ships';
+import { rollDiscovery } from '../../shared/exploration';
+import { popSensorAlerts } from '../core/sensor-alerts';
+import type { ExploreRequest, ExploreResponse } from '../../shared/exploration';
+import { requireDev } from '../core/admin-auth';
 
 type ErrorResponse = {
   status: 'error';
@@ -88,6 +102,9 @@ api.get('/init', async (c) => {
   }
 
   try {
+    // Lazily store the postId so scheduler jobs can find it
+    void setActivePostId(postId);
+
     const [count, username] = await Promise.all([
       redis.get('count'),
       reddit.getCurrentUsername(),
@@ -237,21 +254,36 @@ api.get('/profile', async (c) => {
   const response = await loadProfile(redis, user);
   console.log('[SERVER-LOAD] profile for', user, ':', JSON.stringify({ lastPosition: response.lastPosition, discoveredStars: response.discoveredStars }));
 
+  // Check dev mode flag
+  const devModeFlag = await redis.get('app:dev_mode').catch(() => null);
+  const devMode = devModeFlag === '1';
+
   // If postId provided, also resolve home star claim
   if (postId) {
     const claim = await claimHomeStar(redis, postId, user);
-    return c.json<PlayerProfileResponse>({ ...response, homeStar: claim.homeStar, claimed: claim.claimed });
+    return c.json<PlayerProfileResponse>({ ...response, homeStar: claim.homeStar, claimed: claim.claimed, devMode });
   }
 
-  return c.json<PlayerProfileResponse>(response);
+  return c.json<PlayerProfileResponse>({ ...response, devMode });
 });
 
 /** Debug: dump raw profile hash from Redis. */
-api.get('/debug/profile-raw', async (c) => {
+api.get('/debug/profile-raw', requireDev, async (c) => {
   const user = c.req.query('username');
   if (!user) return c.json({ error: 'username required' }, 400);
   const raw = await redis.hGetAll(`profile:${user}`);
   return c.json({ raw });
+});
+
+/** Admin: toggle dev mode (controls visibility of debug UI for all users). */
+api.post('/admin/dev-mode', requireDev, async (c) => {
+  const body = await c.req.json<{ enabled: boolean }>();
+  if (body.enabled) {
+    await redis.set('app:dev_mode', '1');
+  } else {
+    await redis.del('app:dev_mode');
+  }
+  return c.json({ ok: true, devMode: body.enabled });
 });
 
 /** Get all claimed stars for a post. */
@@ -263,7 +295,7 @@ api.get('/stars/claimed', async (c) => {
 });
 
 /** Debug: reset star claims for a post so they re-assign on next load. */
-api.post('/stars/reset', async (c) => {
+api.post('/stars/reset', requireDev, async (c) => {
   const body = await c.req.json<{ postId: string }>();
   if (!body.postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
   const allClaims = await redis.hGetAll(`stars:${body.postId}`);
@@ -284,7 +316,7 @@ api.post('/stars/reset', async (c) => {
 });
 
 /** Admin: full reset — clear claims, economy, and ships for all users of a post. */
-api.post('/admin/reset-all', async (c) => {
+api.post('/admin/reset-all', requireDev, async (c) => {
   const body = await c.req.json<{ postId: string; adminUser: string }>();
   if (!body.postId || !body.adminUser) return c.json<ErrorResponse>({ status: 'error', message: 'postId and adminUser required' }, 400);
 
@@ -318,6 +350,26 @@ api.post('/admin/reset-all', async (c) => {
     const poseKeys = Object.keys(await redis.hGetAll(`poses:${body.postId}`));
     if (poseKeys.length > 0) await redis.hDel(`poses:${body.postId}`, poseKeys);
   } catch { /* ignore */ }
+
+  // Clear alliance data for each user
+  const allianceIds = new Set<string>();
+  for (const user of users) {
+    try {
+      const allianceId = await redis.get(`player_alliance:${user.toLowerCase()}`);
+      if (allianceId) {
+        allianceIds.add(allianceId);
+        await redis.del(`player_alliance:${user.toLowerCase()}`);
+      }
+      await redis.del(`alliance_invites:${user.toLowerCase()}`);
+    } catch { /* ignore */ }
+  }
+  // Clear alliance records and chat
+  for (const aid of allianceIds) {
+    try {
+      await redis.del(`alliance:${aid}`);
+      await redis.del(`alliance_chat:${aid}`);
+    } catch { /* ignore */ }
+  }
 
   return c.json({ ok: true, usersCleared: cleared, claimsCleared: keys.length });
 });
@@ -403,6 +455,23 @@ api.post('/buildings/upgrade', async (c) => {
     return c.json<BuildBuildingResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to start building upgrade';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+/** Toggle shield raised/lowered on a star. */
+api.post('/buildings/toggle-shield', async (c) => {
+  const body = await c.req.json<ToggleShieldRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!Number.isInteger(body.starIndex) || body.starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
+  }
+
+  try {
+    const response = await toggleShield(redis, body.username, body.starIndex);
+    return c.json<ToggleShieldResponse>(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to toggle shield';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
   }
 });
@@ -550,6 +619,25 @@ api.delete('/fleet/freighter-route', async (c) => {
   }
 });
 
+/** Dispatch a Raider to raid an enemy star. */
+api.post('/fleet/raid-route', async (c) => {
+  const body = await c.req.json<RaidRouteRequest>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!Number.isInteger(body.homeStarIndex) || body.homeStarIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'homeStarIndex must be >= 0' }, 400);
+  }
+  if (!Number.isInteger(body.targetStarIndex) || body.targetStarIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'targetStarIndex must be >= 0' }, 400);
+  }
+  try {
+    const response = await assignRaidRoute(redis, body.username, body.homeStarIndex, body.targetStarIndex);
+    return c.json<RaidRouteResponse>(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to start raid';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
 /** Colonize an unclaimed star — consumes Colony Ship, claims star, seeds economy. */
 api.post('/colonize', async (c) => {
   const body = await c.req.json<ColonizeRequest>();
@@ -572,14 +660,36 @@ api.post('/colonize', async (c) => {
   }
 });
 
-/** Debug: instantly complete all builds at a star. */
-api.post('/debug/complete-builds', async (c) => {
+/** Public: instantly complete all builds at a star (costs 1 complete charge). */
+api.post('/complete-builds', async (c) => {
   const body = await c.req.json<{ username: string; starIndex: number }>();
   if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
   if (!Number.isInteger(body.starIndex) || body.starIndex < 0) {
     return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
   }
   try {
+    const chargeKey = `complete_charges:${body.username.toLowerCase()}`;
+    const charges = parseInt(await redis.get(chargeKey) ?? '0', 10);
+    if (charges < 1) return c.json<ErrorResponse>({ status: 'error', message: 'No complete charges available' }, 400);
+    // Deduct charge
+    await redis.set(chargeKey, String(charges - 1));
+    const response = await completeAllBuilds(redis, body.username, body.starIndex);
+    return c.json(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to complete builds';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+/** Debug: instantly complete all builds at a star. */
+api.post('/debug/complete-builds', requireDev, async (c) => {
+  const body = await c.req.json<{ username: string; starIndex: number }>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!Number.isInteger(body.starIndex) || body.starIndex < 0) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
+  }
+  try {
+    // Dev-only endpoint — no charge check needed (requireDev already verified)
     const response = await completeAllBuilds(redis, body.username, body.starIndex);
     return c.json(response);
   } catch (error) {
@@ -589,7 +699,7 @@ api.post('/debug/complete-builds', async (c) => {
 });
 
 /** Debug: spawn an "Enemy" user with a claimed star and a Destroyer. */
-api.post('/debug/spawn-enemy', async (c) => {
+api.post('/debug/spawn-enemy', requireDev, async (c) => {
   const body = await c.req.json<{ postId: string }>();
   if (!body.postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
   try {
@@ -608,7 +718,7 @@ api.post('/debug/spawn-enemy', async (c) => {
 });
 
 /** Debug: reset fleet — remove all ships except at home star, clear transits. */
-api.post('/debug/reset-fleet', async (c) => {
+api.post('/debug/reset-fleet', requireDev, async (c) => {
   const body = await c.req.json<{ username: string; homeStarIndex: number }>();
   if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
   if (!Number.isInteger(body.homeStarIndex) || body.homeStarIndex < 0) {
@@ -666,11 +776,77 @@ api.post('/stats', async (c) => {
 });
 
 /** Admin: get all player stats + summaries for the post. */
-api.get('/admin/player-stats', async (c) => {
+api.get('/admin/player-stats', requireDev, async (c) => {
   const postId = c.req.query('postId');
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
   const response = await getAdminPlayerStats(redis, postId);
   return c.json<AdminPlayerStatsResponse>(response);
+});
+
+/** Admin: get currently active players (seen in last 5 min). */
+api.get('/admin/active-players', requireDev, async (c) => {
+  const postId = c.req.query('postId');
+  if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
+  const response = await getAdminPlayerStats(redis, postId);
+  const now = Date.now();
+  const THRESHOLD = 5 * 60 * 1000; // 5 min
+  const active = response.players
+    .filter(p => p.lastSeen > 0 && (now - p.lastSeen) < THRESHOLD)
+    .map(p => ({
+      username: p.username,
+      starName: p.starName,
+      ago: Math.floor((now - p.lastSeen) / 1000),
+      totalShips: p.totalShips,
+      totalBuildingLevels: p.totalBuildingLevels,
+    }));
+  return c.json({ active, total: response.players.length });
+});
+
+// ── Leaderboard (public) ────────────────────────────────────────────────────
+
+import { isAutoBot } from '../core/autobot';
+
+api.get('/leaderboard', async (c) => {
+  const postId = context.postId;
+  if (!postId) return c.json<LeaderboardResponse>({ players: [] });
+
+  const adminStats = await getAdminPlayerStats(redis, postId);
+  const claims = await getClaimedStars(redis, postId);
+
+  // Count stars per player
+  const starCounts = new Map<string, number>();
+  for (const claim of claims) {
+    starCounts.set(claim.username, (starCounts.get(claim.username) ?? 0) + 1);
+  }
+
+  // Deduplicate adminStats by username (it has one entry per star claim)
+  const seen = new Map<string, typeof adminStats.players[number]>();
+  for (const p of adminStats.players) {
+    // Exclude automated bots from leaderboard
+    if (isAutoBot(p.username)) continue;
+    if (!seen.has(p.username)) {
+      seen.set(p.username, p);
+    }
+  }
+
+  const entries: LeaderboardEntry[] = [...seen.values()].map(p => {
+    const starCount = starCounts.get(p.username) ?? 0;
+    const power = starCount * 100 + p.totalShips * 10 + p.totalBuildingLevels * 25 + Math.floor(p.playtimeSeconds / 720);
+    return {
+      rank: 0,
+      username: p.username,
+      starCount,
+      totalShips: p.totalShips,
+      totalBuildingLevels: p.totalBuildingLevels,
+      playtimeSeconds: p.playtimeSeconds,
+      power,
+    };
+  });
+
+  entries.sort((a, b) => b.power - a.power);
+  entries.forEach((e, i) => { e.rank = i + 1; });
+
+  return c.json<LeaderboardResponse>({ players: entries });
 });
 
 // ── Trading Stations ────────────────────────────────────────────────────────
@@ -722,4 +898,142 @@ api.post('/trade-station/trade', async (c) => {
     const message = error instanceof Error ? error.message : 'Trade failed';
     return c.json<ErrorResponse>({ status: 'error', message }, 400);
   }
+});
+
+// ── Fleet Share (post to comments) ──────────────────────────────────────────
+
+const SHARE_COOLDOWN_SECONDS = 300; // 5 min
+
+api.post('/share/fleet', async (c) => {
+  const body = await c.req.json<{ username: string }>();
+  if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+
+  const postId = context.postId;
+  if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'no postId in context' }, 500);
+
+  // Rate limit: 1 fleet share per 5 minutes per user
+  const cooldownKey = `share:fleet:${body.username}`;
+  const lastShare = await redis.get(cooldownKey);
+  if (lastShare) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Share on cooldown' }, 429);
+  }
+
+  try {
+    // Gather fleet data
+    const fleetData = await loadAllFleet(redis, body.username);
+    const claims = await getClaimedStars(redis, postId);
+    const userStars = claims.filter(cl => cl.username === body.username);
+
+    // Build fleet summary
+    const shipTotals = new Map<number, number>();
+    for (const starData of Object.values(fleetData.stars)) {
+      for (const s of starData.ships) {
+        shipTotals.set(s.typeId, (shipTotals.get(s.typeId) ?? 0) + s.count);
+      }
+    }
+
+    if (shipTotals.size === 0) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'No ships to share' }, 400);
+    }
+
+    const shipLines: string[] = [];
+    let totalSP = 0;
+    for (const [typeId, count] of shipTotals.entries()) {
+      const entry = SHIP_CATALOG[typeId as keyof typeof SHIP_CATALOG];
+      if (!entry) continue;
+      totalSP += entry.shipPoints * count;
+      shipLines.push(`${entry.name} x${count}`);
+    }
+
+    const text = `🚀 **u/${body.username}**'s fleet: ${shipLines.join(', ')} — **${totalSP} SP** across ${userStars.length} system${userStars.length !== 1 ? 's' : ''}`;
+
+    const fullId = postId.startsWith('t3_') ? postId : `t3_${postId}`;
+    await reddit.submitComment({
+      id: fullId as `t3_${string}`,
+      text,
+      runAs: 'APP',
+    });
+
+    // Set cooldown
+    await redis.set(cooldownKey, '1', { expiration: new Date(Date.now() + SHARE_COOLDOWN_SECONDS * 1000) });
+
+    return c.json({ status: 'ok' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Share failed';
+    console.error('[SHARE] fleet share error:', error);
+    return c.json<ErrorResponse>({ status: 'error', message }, 500);
+  }
+});
+
+// ── Planet Exploration ─────────────────────────────────────────────────────────
+
+/** Explore a planet for the first time. One shot per planet per player (global seed). */
+api.post('/explore', async (c) => {
+  const { postId } = context;
+  if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'No postId' }, 400);
+
+  try {
+    const body = await c.req.json<ExploreRequest & { username: string; starIndex: number }>();
+    const { username, starIndex, bodyIndex } = body;
+    if (!username || starIndex == null || bodyIndex == null) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'Missing fields' }, 400);
+    }
+
+    // Check if already explored (one-shot per planet per player)
+    const exploreKey = `explored:${username}:${starIndex}:${bodyIndex}`;
+    const alreadyExplored = await redis.get(exploreKey);
+    if (alreadyExplored) {
+      const cached = JSON.parse(alreadyExplored) as ExploreResponse;
+      return c.json<ExploreResponse>({ ...cached, explored: false });
+    }
+
+    // Compute galaxy seed from postId (same as client)
+    let galaxySeed = 23;
+    const seedStr = postId + ':galaxy';
+    for (let i = 0; i < seedStr.length; i++) {
+      galaxySeed = (galaxySeed * 31 + seedStr.charCodeAt(i)) | 0;
+    }
+
+    // Roll discovery (deterministic per planet)
+    const result = rollDiscovery(galaxySeed, starIndex, bodyIndex);
+
+    // Grant resources to the star the player is exploring
+    if (result.kind === 'ore' || result.kind === 'food' || result.kind === 'energy') {
+      const profileKey = `profile:${username}`;
+      const economyRaw = await redis.hGet(profileKey, 'economy');
+      const economy = economyRaw ? JSON.parse(economyRaw) as { stars: Record<string, { store?: { ore: number; food: number; energy: number } }> } : { stars: {} };
+      const sKey = `s:${starIndex}`;
+      const star = economy.stars[sKey];
+      if (star?.store) {
+        star.store[result.kind] = (star.store[result.kind] ?? 0) + result.amount;
+        await redis.hSet(profileKey, { economy: JSON.stringify(economy) });
+      }
+    }
+
+    // Grant a complete-charge for blueprint finds
+    if (result.kind === 'blueprint') {
+      const chargeKey = `complete_charges:${username.toLowerCase()}`;
+      await redis.incrBy(chargeKey, 1);
+      console.log(`[EXPLORE] user=${username} found blueprint — granted 1 complete charge`);
+    }
+
+    // Mark explored (persist forever)
+    const response: ExploreResponse = { explored: true, result };
+    await redis.set(exploreKey, JSON.stringify(response));
+
+    return c.json<ExploreResponse>(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Exploration failed';
+    console.error('[EXPLORE] error:', error);
+    return c.json<ErrorResponse>({ status: 'error', message }, 500);
+  }
+});
+
+// ── Sensor Alerts ─────────────────────────────────────────────────────────────
+
+api.get('/sensors', async (c) => {
+  const username = c.req.query('username');
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  const alerts = await popSensorAlerts(redis, username);
+  return c.json({ alerts });
 });

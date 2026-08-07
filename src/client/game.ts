@@ -5,26 +5,33 @@
 import { context, requestExpandedMode } from '@devvit/web/client';
 import { telemetry } from '@devvit/analytics/client/reddit';
 import versionJson from '../../version.json';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, playSound, preloadSounds, onColonizeSuccess, setComsMessages, setComsUnread, clearComsUnread, isComsPanelOpen, setComsLoading, setPostId, setTradeStationInfo } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingSeedBots, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
+import { initSkins } from '../game/skin';
+import { proceduralSkin } from '../game/skins/procedural';
 import type {
   BuildBuildingRequest,
   ClaimPodResponse,
   ClaimedPodsResponse,
-  ComsResponse,
   ComsUnreadResponse,
+  DMListResponse,
+  DMUnreadResponse,
   FleetAllResponse,
   PlayerProfileResponse,
   PoseUpdateRequest,
   PostShotsRequest,
+  PublicCommentsResponse,
   RoomPosesResponse,
   SaveProfileRequest,
   StarEconomyResponse,
   StarShipsResponse,
   ShotsResponse,
   TradeStationInfoResponse,
+  AllianceInfoResponse,
+  AllianceInvitesResponse,
+  AllianceChatResponse,
 } from '../shared/api';
 import { isTradingStation } from '../shared/trading';
 
@@ -112,6 +119,7 @@ if (debugForceSave) {
     console.log('[DEBUG] force save triggered');
     _lastSavedPosition = '';
     _lastSavedDiscovered = '';
+    _lastSavedVisited = '';
     savePositionIfChanged();
   });
 }
@@ -153,12 +161,12 @@ const bridge: DevvitBridge = createDevvitBridge(canvas, {
       body: JSON.stringify(payload),
     }).catch(() => {});
   },
-  onClaimPod(podId) {
+  onClaimPod(podId, isYellow) {
     // Request pod claim from server
     fetch('/api/claim-pod', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ podId, username }),
+      body: JSON.stringify({ podId, username, isYellow }),
     })
       .then(r => r.json())
       .then((res: ClaimPodResponse) => {
@@ -192,10 +200,15 @@ bridge.setPlayerName(username);
 bridge.setShipShape('scout');
 bridge.setSharedWorldSeed(postId);
 setPostId(postId);
+setAllianceUsername(username);
 preloadSounds();
+initSkins(proceduralSkin);
 
 // Start rendering immediately (splash/preview mode — no networking yet)
 const _tSplash = performance.now();
+// Stop the lightweight splash animation before the game engine takes over
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+if (typeof (globalThis as any).__stopSplash === 'function') (globalThis as any).__stopSplash();
 bridge.beginSplash();
 console.log(`[PERF] beginSplash (galaxy+asteroids) in ${(performance.now() - _tSplash).toFixed(0)}ms`);
 
@@ -219,17 +232,18 @@ function loadPlayerProfile(): Promise<void> {
         console.log(`[STAR] assigned home star: ${profile.homeStar}`);
         playerHomeStarIndex = profile.homeStar;
         relocateToHomeStar(profile.homeStar);
+        journeyProgress(0.10, 'home_star_claimed');
+      }
+      // Restore discovered stars BEFORE claims (claims check discoveryLevel)
+      if (profile.discoveredStars && profile.discoveredStars.length > 0) {
+        console.log(`[PROFILE] restoring ${profile.discoveredStars.length} discovered stars:`, profile.discoveredStars);
+        setDiscoveredStars(profile.discoveredStars, profile.enhancedProbeStars);
+      } else {
+        console.log('[PROFILE] no discoveredStars in profile response');
       }
       // Mark other players' stars as foreign
       if (profile.claimed && profile.claimed.length > 0) {
         setStarClaims(profile.claimed, username);
-      }
-      // Restore discovered stars
-      if (profile.discoveredStars && profile.discoveredStars.length > 0) {
-        console.log(`[PROFILE] restoring ${profile.discoveredStars.length} discovered stars:`, profile.discoveredStars);
-        setDiscoveredStars(profile.discoveredStars);
-      } else {
-        console.log('[PROFILE] no discoveredStars in profile response');
       }
       // Restore last position if different from home star
       if (profile.lastPosition && profile.homeStar != null) {
@@ -250,6 +264,11 @@ function loadPlayerProfile(): Promise<void> {
       } else {
         startJourney();
         journeyStart();
+      }
+      // Show/hide debug UI based on server dev mode flag
+      const debugDisplay = profile.devMode ? '' : 'none';
+      for (const id of ['debug-copy', 'debug-log', 'debug-force-save', 'debug-check-redis', 'debug-toggle']) {
+        document.getElementById(id)?.style.setProperty('display', debugDisplay);
       }
     })
     .catch(() => {});
@@ -317,19 +336,6 @@ async function pollComsUnread() {
   } catch (_e) { /* ignore */ }
 }
 
-async function pollComsMessages() {
-  try {
-    setComsLoading(true);
-    const res = await fetch('/api/coms/messages?limit=50');
-    if (res.ok) {
-      const data = await res.json() as ComsResponse;
-      setComsMessages(data.messages);
-    } else {
-      setComsLoading(false);
-    }
-  } catch (_e) { setComsLoading(false); }
-}
-
 async function markComsRead() {
   try {
     await fetch(`/api/coms/mark-read?username=${encodeURIComponent(username)}`, { method: 'POST' });
@@ -337,25 +343,478 @@ async function markComsRead() {
   } catch (_e) { /* ignore */ }
 }
 
-// Poll coms: check unread every 30s, fetch messages when panel is open
+// Poll coms: fast detection (2s), rate-limited fetches
 let _lastComsOpen = false;
+let _lastDMPeer: string | null = null;
+let _lastDMFetchMs = 0;
+let _lastPublicFetchMs = 0;
+let _lastUnreadFetchMs = 0;
+let _prevDMUnreadCount = 0;
+let _prevAllianceChatCount = 0;
+const DM_POLL_INTERVAL = 10_000;      // 10s between DM message fetches
+const PUBLIC_POLL_INTERVAL = 10_000;  // 10s between public comment fetches
+const UNREAD_POLL_INTERVAL = 30_000;  // 30s between unread checks
+
 function pollComsLoop() {
+  const now = Date.now();
   const panelOpen = isComsPanelOpen();
+
   if (panelOpen && !_lastComsOpen) {
-    // Panel just opened — fetch messages and mark read
-    void pollComsMessages();
+    // Panel just opened — immediate load
+    setKnownPlayers(getKnownPlayers());
+    void pollDMUnread();
     void markComsRead();
+    void pollPublicComments();
+    void pollAllianceInfo();
+    void pollAllianceInvites();
+    _lastUnreadFetchMs = now;
+    _lastPublicFetchMs = now;
+    _lastAllianceFetchMs = now;
+    _lastAllianceInviteFetchMs = now;
   } else if (panelOpen) {
-    // Panel staying open — refresh messages periodically (handled by interval)
-    void pollComsMessages();
+    // Panel staying open — rate-limited fetches
+    const tab = getComsTab();
+
+    // Always check pending sends regardless of active tab
+    const send = consumePendingDMSend();
+    if (send) {
+      void sendDM(send.to, send.text);
+    }
+    const dmReport = consumePendingDMReport();
+    if (dmReport) {
+      void reportDM(dmReport.messageId, dmReport.from, dmReport.body);
+    }
+    const post = consumePendingPublicPost();
+    if (post) {
+      void postPublicComment(post.text, post.parentId);
+    }
+
+    if (tab === 'private') {
+      const peer = getDMPeer();
+      if (peer) {
+        if (peer !== _lastDMPeer) {
+          // Peer changed — fetch immediately
+          void pollDMMessages(peer);
+          void markDMRead(peer);
+          _lastDMFetchMs = now;
+        } else if (now - _lastDMFetchMs > DM_POLL_INTERVAL) {
+          void pollDMMessages(peer);
+          _lastDMFetchMs = now;
+        }
+      }
+      _lastDMPeer = peer;
+      // Refresh known players (local, no network)
+      setKnownPlayers(getKnownPlayers());
+      // Rate-limited unread check
+      if (now - _lastUnreadFetchMs > UNREAD_POLL_INTERVAL) {
+        void pollDMUnread();
+        _lastUnreadFetchMs = now;
+      }
+    } else if (tab === 'public') {
+      // PUBLIC tab — rate-limited fetch
+      if (now - _lastPublicFetchMs > PUBLIC_POLL_INTERVAL) {
+        void pollPublicComments();
+        _lastPublicFetchMs = now;
+      }
+    } else if (tab === 'alliance') {
+      // ALLIANCE tab — process actions & rate-limited fetches
+      processAllianceActions();
+      processBotTest();
+      processBotAdminTest();
+      processBotCheck();
+      processBotCopy();
+      setKnownPlayers(getKnownPlayers());
+      if (now - _lastAllianceFetchMs > ALLIANCE_INFO_INTERVAL) {
+        void pollAllianceInfo();
+        _lastAllianceFetchMs = now;
+      }
+      if (now - _lastAllianceInviteFetchMs > ALLIANCE_INVITE_INTERVAL) {
+        void pollAllianceInvites();
+        _lastAllianceInviteFetchMs = now;
+      }
+      const view = getAllianceView();
+      if (view === 'chat' && now - _lastAllianceChatFetchMs > ALLIANCE_CHAT_INTERVAL) {
+        void pollAllianceChat();
+        _lastAllianceChatFetchMs = now;
+      }
+    } else if (tab === 'board') {
+      // BOARD tab — rate-limited leaderboard fetch
+      if (consumePendingSeedBots()) {
+        void seedBots();
+      }
+      if (now - _lastLeaderboardFetchMs > LEADERBOARD_POLL_INTERVAL) {
+        void pollLeaderboard();
+        _lastLeaderboardFetchMs = now;
+      }
+    }
   } else {
-    // Panel closed — just check unread count
-    void pollComsUnread();
+    // Panel closed — rate-limited unread check
+    if (now - _lastUnreadFetchMs > UNREAD_POLL_INTERVAL) {
+      void pollDMUnread();
+      _lastUnreadFetchMs = now;
+    }
+    _lastDMPeer = null;
   }
   _lastComsOpen = panelOpen;
 }
 
+async function pollDMUnread() {
+  try {
+    const res = await fetch(`/api/coms/dm/unread?username=${encodeURIComponent(username)}`);
+    if (res.ok) {
+      const data = await res.json() as DMUnreadResponse;
+      // Play sound if new unread DMs arrived while panel is closed
+      if (!isComsPanelOpen() && data.unreadFrom.length > _prevDMUnreadCount) {
+        playSound('new_comm');
+      }
+      _prevDMUnreadCount = data.unreadFrom.length;
+      setDMUnread(data.unreadFrom);
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+async function pollDMMessages(peer: string) {
+  try {
+    const res = await fetch(`/api/coms/dm/messages?username=${encodeURIComponent(username)}&peer=${encodeURIComponent(peer)}`);
+    if (res.ok) {
+      const data = await res.json() as DMListResponse;
+      setDMMessages(data.messages);
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+async function markDMRead(peer: string) {
+  try {
+    await fetch(`/api/coms/dm/mark-read?username=${encodeURIComponent(username)}&peer=${encodeURIComponent(peer)}`, { method: 'POST' });
+  } catch (_e) { /* ignore */ }
+}
+
+async function sendDM(to: string, text: string) {
+  try {
+    await fetch('/api/coms/dm/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: username, to, text }),
+    });
+    // Refresh messages after sending
+    void pollDMMessages(to);
+  } catch (_e) { /* ignore */ }
+}
+
+async function reportDM(messageId: string, reportedUsername: string, messageBody: string) {
+  try {
+    const res = await fetch('/api/coms/dm/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageId, reporterUsername: username, reportedUsername, messageBody }),
+    });
+    if (res.ok) {
+      console.log('[DM] Report submitted for message:', messageId);
+      showDMReportConfirm();
+    } else {
+      console.warn('[DM] Report failed:', await res.text());
+    }
+  } catch (e) {
+    console.warn('[DM] Report error:', e);
+  }
+}
+
+// ── Public Comments ─────────────────────────────────────────────────────────
+
+async function pollPublicComments() {
+  try {
+    const res = await fetch('/api/coms/public/messages');
+    if (res.ok) {
+      const data = await res.json() as PublicCommentsResponse;
+      setPublicComments(data.comments);
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+async function postPublicComment(text: string, parentId?: string) {
+  try {
+    const res = await fetch('/api/coms/public/post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, parentId, username }),
+    });
+    await res.json(); // consume response
+    // Refresh comments after posting (immediate + delayed for Reddit API cache)
+    void pollPublicComments();
+    setTimeout(() => void pollPublicComments(), 3000);
+    setTimeout(() => void pollPublicComments(), 6000);
+  } catch (_e) { /* ignore */ }
+}
+
+async function shareFleet() {
+  try {
+    const res = await fetch('/api/share/fleet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username }),
+    });
+    if (res.ok) {
+      setFleetShareCooldown(300_000); // 5 min cooldown
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+async function explorePlanet(starIndex: number, bodyIndex: number, isStation: boolean) {
+  try {
+    const res = await fetch('/api/explore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, starIndex, bodyIndex }),
+    });
+    if (res.ok) {
+      const data = await res.json() as { explored: boolean; result: { kind: string; label: string; icon: string; amount: number } };
+      showExploreResult(data.result.kind, data.result.label, data.result.icon, data.result.amount);
+      if (data.explored) {
+        const kind = data.result.kind;
+        if (kind === 'nothing') {
+          playSound(isStation ? 'scan_nothing_station' : 'scan_nothing_planet');
+        } else if (kind === 'blueprint') {
+          playSound('scan_blueprint');
+        } else if (kind === 'artifact') {
+          playSound('scan_artifact');
+        } else if (kind === 'anomaly') {
+          playSound('scan_anomaly');
+        } else {
+          playSound('scan_ore');
+        }
+      }
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+// ── Alliance ────────────────────────────────────────────────────────────────
+
+let _lastAllianceFetchMs = 0;
+let _lastAllianceChatFetchMs = 0;
+let _lastAllianceInviteFetchMs = 0;
+const ALLIANCE_INFO_INTERVAL = 15_000;   // 15s
+const ALLIANCE_CHAT_INTERVAL = 5_000;    // 5s
+const ALLIANCE_INVITE_INTERVAL = 30_000; // 30s
+
+let _lastLeaderboardFetchMs = 0;
+const LEADERBOARD_POLL_INTERVAL = 30_000; // 30s
+
+async function pollLeaderboard() {
+  try {
+    const res = await fetch('/api/leaderboard');
+    if (res.ok) {
+      const data = await res.json() as import('../shared/api').LeaderboardResponse;
+      setLeaderboardData(data.players);
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+async function seedBots() {
+  try {
+    await fetch('/api/bots/seed-bots', { method: 'POST' });
+    // Re-poll leaderboard after seeding
+    await pollLeaderboard();
+  } catch (_e) { /* ignore */ }
+}
+
+async function pollAllianceInfo() {
+  try {
+    const res = await fetch(`/api/alliance/info?username=${encodeURIComponent(username)}`);
+    if (res.ok) {
+      const data = await res.json() as AllianceInfoResponse;
+      setAllianceInfo(data.alliance);
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+async function pollAllianceChat() {
+  try {
+    const res = await fetch(`/api/alliance/chat?username=${encodeURIComponent(username)}`);
+    if (res.ok) {
+      const data = await res.json() as AllianceChatResponse;
+      // Play sound if new alliance messages arrived (not from self)
+      if (data.messages.length > _prevAllianceChatCount && _prevAllianceChatCount > 0) {
+        const newest = data.messages[data.messages.length - 1];
+        if (newest && newest.from !== username) {
+          playSound('fleet_command');
+        }
+      }
+      _prevAllianceChatCount = data.messages.length;
+      setAllianceChat(data.messages);
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+// ── Sensor Alerts ─────────────────────────────────────────────────────────────
+
+async function pollSensorAlerts() {
+  try {
+    const res = await fetch(`/api/sensors?username=${encodeURIComponent(username)}`);
+    if (res.ok) {
+      const data = await res.json() as { alerts: Array<{ type: string; starIndex: number; from: string; ts: number }> };
+      for (const alert of data.alerts) {
+        console.log(`[SENSOR] type=${alert.type} star=${alert.starIndex} from=${alert.from} age=${Math.round((Date.now() - alert.ts) / 1000)}s`);
+        if (alert.type === 'raider') {
+          playSound('hostile_raider');
+        } else if (alert.type === 'unidentified') {
+          playSound('unidentified_ship');
+        }
+      }
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+async function pollAllianceInvites() {
+  try {
+    const res = await fetch(`/api/alliance/invites?username=${encodeURIComponent(username)}`);
+    if (res.ok) {
+      const data = await res.json() as AllianceInvitesResponse;
+      setAllianceInvites(data.invites);
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+async function createAlliance(name: string) {
+  try {
+    await fetch('/api/alliance/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, name }),
+    });
+    void pollAllianceInfo();
+  } catch (_e) { /* ignore */ }
+}
+
+async function inviteToAlliance(target: string) {
+  try {
+    await fetch('/api/alliance/invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, target }),
+    });
+  } catch (_e) { /* ignore */ }
+}
+
+async function respondToInvite(allianceId: string, accept: boolean) {
+  try {
+    await fetch('/api/alliance/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, allianceId, accept }),
+    });
+    if (accept) journeyProgress(0.90, 'alliance_joined');
+    void pollAllianceInfo();
+    void pollAllianceInvites();
+  } catch (_e) { /* ignore */ }
+}
+
+async function leaveAlliance() {
+  try {
+    await fetch('/api/alliance/leave', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username }),
+    });
+    void pollAllianceInfo();
+  } catch (_e) { /* ignore */ }
+}
+
+async function kickAllianceMember(target: string) {
+  try {
+    await fetch('/api/alliance/kick', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, target }),
+    });
+    void pollAllianceInfo();
+  } catch (_e) { /* ignore */ }
+}
+
+async function sendAllianceChat(text: string) {
+  try {
+    await fetch('/api/alliance/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, text }),
+    });
+    void pollAllianceChat();
+  } catch (_e) { /* ignore */ }
+}
+
+function processAllianceActions() {
+  const action = consumeAllianceAction();
+  if (!action) return;
+  switch (action.type) {
+    case 'create':
+      if (action.name) void createAlliance(action.name);
+      break;
+    case 'invite':
+      if (action.target) void inviteToAlliance(action.target);
+      break;
+    case 'join':
+      if (action.allianceId) void respondToInvite(action.allianceId, true);
+      break;
+    case 'reject':
+      if (action.allianceId) void respondToInvite(action.allianceId, false);
+      break;
+    case 'leave':
+      void leaveAlliance();
+      break;
+    case 'kick':
+      if (action.target) void kickAllianceMember(action.target);
+      break;
+    case 'chat':
+      if (action.text) void sendAllianceChat(action.text);
+      break;
+  }
+}
+
+function processBotTest() {
+  if (!consumePendingBotTest()) return;
+  void runBotEndpoint('/api/bots/test');
+}
+
+function processBotAdminTest() {
+  if (!consumePendingBotAdminTest()) return;
+  void runBotEndpoint('/api/bots/test-admin', { username });
+}
+
+function processBotCheck() {
+  if (!consumePendingBotCheck()) return;
+  void runBotEndpoint('/api/bots/test-check');
+}
+
+async function runBotEndpoint(url: string, body?: Record<string, string>) {
+  try {
+    console.log(`[BOT-TEST] Calling ${url}...`);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    });
+    const data = await res.json() as { ok: boolean; log: string[] };
+    const logText = data.log.join('\n');
+    setBotTestLog(logText);
+    console.log(`[BOT-TEST] Result:\n${logText}`);
+  } catch (e) {
+    const errMsg = `ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    setBotTestLog(errMsg);
+    console.error('[BOT-TEST] Failed:', e);
+  }
+}
+
+function processBotCopy() {
+  const log = consumePendingBotCopy();
+  if (!log) return;
+  void navigator.clipboard.writeText(log).then(() => {
+    console.log('[BOT-TEST] Log copied to clipboard');
+  });
+}
+
 async function pollEconomy() {
+  // Piggyback bot tick (server self-limits to once per 10s)
+  void fetch('/api/bots/tick', { method: 'POST' }).catch(() => {});
+
   try {
     const gs = getGameState();
     if (!gs) return;
@@ -386,6 +845,27 @@ async function pollEconomy() {
           } catch (e) {
             console.warn('[FLEET] freighter route error:', e);
           }
+        } else if (transfer.shipTypeId === 15) {
+          // Raider (typeId 15) → create a raid route to enemy star
+          try {
+            const raidRes = await fetch('/api/fleet/raid-route', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                username,
+                homeStarIndex: transfer.fromStarIndex,
+                targetStarIndex: transfer.toStarIndex,
+              }),
+            });
+            if (!raidRes.ok) {
+              const err = await raidRes.json().catch(() => ({ message: 'unknown' }));
+              console.warn('[FLEET] raid route failed:', err);
+            } else {
+              playSound('send');
+            }
+          } catch (e) {
+            console.warn('[FLEET] raid route error:', e);
+          }
         } else {
           try {
             const transferRes = await fetch('/api/fleet/transfer', {
@@ -404,6 +884,7 @@ async function pollEconomy() {
               console.warn('[FLEET] transfer failed:', err);
             } else {
               playSound('send');
+              journeyProgress(0.35, 'first_transfer');
             }
           } catch (e) {
             console.warn('[FLEET] transfer error:', e);
@@ -425,55 +906,26 @@ async function pollEconomy() {
         }
       }
 
-      // Process pending trade
-      const pendingTrade = consumePendingTrade();
-      if (pendingTrade && gs) {
-        const tradeStarIndex = gs.galaxy.currentStarIndex;
-        try {
-          const tradeRes = await fetch('/api/trade-station/trade', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              username,
-              starIndex: tradeStarIndex,
-              giveType: pendingTrade.giveType,
-              receiveType: pendingTrade.receiveType,
-              giveAmount: 50,
-            }),
-          });
-          if (tradeRes.ok) {
-            if (!hasTraded) { playSound('freighter_unloading'); hasTraded = true; }
-            // Refresh trade station info
-            const refreshRes = await fetch(`/api/trade-station?postId=${encodeURIComponent(postId)}&starIndex=${tradeStarIndex}`);
-            if (refreshRes.ok) {
-              const tradeData = await refreshRes.json() as TradeStationInfoResponse;
-              setTradeStationInfo(tradeData);
-            }
-          } else {
-            const err = await tradeRes.json().catch(() => ({ message: 'unknown' }));
-            console.warn('[TRADE] failed:', err);
-            playSound('insufficient_resources');
-          }
-        } catch (e) {
-          console.warn('[TRADE] error:', e);
-          playSound('fuel_critical');
-        }
+      // Process pending fleet share (POST button)
+      if (consumePendingFleetShare()) {
+        void shareFleet();
       }
 
       try {
         const fleetRes = await fetch(`/api/fleet/all?username=${encodeURIComponent(username)}`);
         if (fleetRes.ok) {
           const fleetData = await fleetRes.json() as FleetAllResponse;
-          setServerFleetAll(fleetData.stars, fleetData.transits, fleetData.freighterRoutes);
+          setServerFleetAll(fleetData.stars, fleetData.transits, fleetData.freighterRoutes, fleetData.raidRoutes);
           // Mark discovered stars from server (probes consumed on arrival)
           if (fleetData.discoveredStars && fleetData.discoveredStars.length > 0) {
             const gs2 = getGameState();
             if (gs2) {
+              const enhancedSet = new Set(fleetData.enhancedProbeStars ?? []);
               let newDiscovery = false;
               for (const si of fleetData.discoveredStars) {
                 const star = gs2.galaxy.stars[si];
                 if (star && star.discoveryLevel === 'none') {
-                  star.discoveryLevel = 'probed';
+                  star.discoveryLevel = enhancedSet.has(si) ? 'visited' : 'probed';
                   star.discovered = true;
                   newDiscovery = true;
                 }
@@ -502,13 +954,21 @@ async function pollEconomy() {
         if (foreignRes.ok) {
           const foreignData = await foreignRes.json() as { stars: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }> }> };
           setForeignFleet(foreignData.stars);
-          // Also mark these stars as foreign-owned in game state
+          // Also mark these stars as foreign-owned in game state (only if already discovered)
           const gs2 = getGameState();
           if (gs2) {
-            for (const key of Object.keys(foreignData.stars)) {
+            for (const [key, val] of Object.entries(foreignData.stars)) {
               const idx = parseInt(key.replace('s:', ''), 10);
               if (!Number.isNaN(idx) && gs2.galaxy.stars[idx]) {
-                gs2.galaxy.stars[idx].owner = 'foreign';
+                const star = gs2.galaxy.stars[idx];
+                if (star.discoveryLevel !== 'none') {
+                  star.owner = 'foreign';
+                  // Reveal owner name at 'visited' level
+                  if (star.discoveryLevel === 'visited') {
+                    star.claimedBy = val.owner;
+                    addKnownPlayer(val.owner);
+                  }
+                }
               }
             }
           }
@@ -519,6 +979,48 @@ async function pollEconomy() {
 
     const starIndex = gs.galaxy.currentStarIndex;
     if (starIndex < 0) return;
+
+    // Process pending planet exploration (SCAN button)
+    const exploreReq = consumePendingExplore();
+    if (exploreReq) {
+      const gs = getGameState();
+      const isStation = gs?.dock?.targetType === 'feature';
+      void explorePlanet(exploreReq.starIndex, exploreReq.bodyIndex, isStation);
+    }
+
+    // Process pending trade
+    const pendingTrade = consumePendingTrade();
+    if (pendingTrade) {
+      try {
+        const tradeRes = await fetch('/api/trade-station/trade', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username,
+            starIndex,
+            giveType: pendingTrade.giveType,
+            receiveType: pendingTrade.receiveType,
+            giveAmount: 50,
+          }),
+        });
+        if (tradeRes.ok) {
+          if (!hasTraded) { playSound('freighter_unloading'); hasTraded = true; }
+          // Refresh trade station info
+          const refreshRes = await fetch(`/api/trade-station?postId=${encodeURIComponent(postId)}&starIndex=${starIndex}`);
+          if (refreshRes.ok) {
+            const tradeData = await refreshRes.json() as TradeStationInfoResponse;
+            setTradeStationInfo(tradeData);
+          }
+        } else {
+          const err = await tradeRes.json().catch(() => ({ message: 'unknown' }));
+          console.warn('[TRADE] failed:', err);
+          playSound('insufficient_resources');
+        }
+      } catch (e) {
+        console.warn('[TRADE] error:', e);
+        playSound('fuel_critical');
+      }
+    }
 
     // Process colonize request
     const pendingColonize = consumePendingColonizeRequest();
@@ -543,6 +1045,7 @@ async function pollEconomy() {
           );
           playSound('colonize');
           console.log('[COLONIZE] Success! Star colonized:', pendingColonize.starIndex);
+          journeyProgress(0.60, 'first_colony');
           journeyEnd(true);
         } else {
           const err = await colonizeRes.json().catch(() => ({ message: 'unknown' }));
@@ -570,6 +1073,7 @@ async function pollEconomy() {
         if (buildRes.ok) {
           console.log('[BUILD] build success');
           playSound('begin_building_facility');
+          journeyProgress(0.15, 'first_building');
           if (pendingBuild.buildType === 'dock') journeyProgress(0.25, 'dock_upgraded');
         } else {
           console.warn('[BUILD] build failed');
@@ -577,9 +1081,31 @@ async function pollEconomy() {
         }
       } catch (_e) { /* ignore */ }
     }
+    const pendingShieldToggle = consumePendingToggleShield();
+    if (pendingShieldToggle) {
+      const charging = getShieldCharging();
+      const raising = charging?.raising ?? true;
+      console.log('[SHIELD] charge complete, firing server toggle, starIndex=', starIndex, 'raising=', raising);
+      try {
+        const shieldRes = await fetch('/api/buildings/toggle-shield', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, starIndex }),
+        });
+        if (shieldRes.ok) {
+          const data = await shieldRes.json();
+          console.log('[SHIELD] toggle success, raised=', data.shieldRaised);
+          playSound(raising ? 'shields_up' : 'shields_down');
+        } else {
+          console.warn('[SHIELD] toggle failed');
+          playSound('low_fuel');
+        }
+      } catch (_e) { /* ignore */ }
+      clearShieldCharging();
+    }
     const pendingShip = consumePendingBuyShipRequest();
     if (pendingShip) {
-      console.log('[SHIPS] sending buy request, starIndex=', starIndex, 'shipTypeId=', pendingShip.shipTypeId);
+      console.log('[SHIPS] sending buy request, starIndex=', starIndex, 'shipTypeId=', pendingShip.shipTypeId, 'useBlueprint=', pendingShip.useBlueprint);
       try {
         const shipRes = await fetch('/api/ships/buy', {
           method: 'POST',
@@ -589,11 +1115,13 @@ async function pollEconomy() {
             starIndex,
             shipTypeId: pendingShip.shipTypeId,
             quantity: pendingShip.quantity,
+            ...(pendingShip.useBlueprint ? { useBlueprint: true } : {}),
           }),
         });
         if (shipRes.ok) {
           console.log('[SHIPS] buy success');
           playSound('begin_building_ship');
+          journeyProgress(0.20, 'first_ship_built');
           journeyProgress(0.50, 'ship_upgraded');
         } else {
           const err = await shipRes.json().catch(() => ({ message: 'unknown' }));
@@ -609,7 +1137,7 @@ async function pollEconomy() {
     }
     const pendingUpgrade = consumePendingUpgradeShipRequest();
     if (pendingUpgrade) {
-      console.log('[SHIPS] sending upgrade request, starIndex=', starIndex, 'fromTypeId=', pendingUpgrade.fromTypeId);
+      console.log('[SHIPS] sending upgrade request, starIndex=', starIndex, 'fromTypeId=', pendingUpgrade.fromTypeId, 'useBlueprint=', pendingUpgrade.useBlueprint);
       try {
         const upgradeRes = await fetch('/api/ships/upgrade', {
           method: 'POST',
@@ -618,6 +1146,7 @@ async function pollEconomy() {
             username,
             starIndex,
             fromTypeId: pendingUpgrade.fromTypeId,
+            ...(pendingUpgrade.useBlueprint ? { useBlueprint: true } : {}),
           }),
         });
         if (upgradeRes.ok) {
@@ -639,13 +1168,15 @@ async function pollEconomy() {
     }
     if (consumePendingCompleteBuilds()) {
       try {
-        await fetch('/api/debug/complete-builds', {
+        const isAdm = ['weirdad4511', 'fred'].includes(username.toLowerCase());
+        const endpoint = isAdm ? '/api/debug/complete-builds' : '/api/complete-builds';
+        await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, starIndex }),
         });
       } catch (e) {
-        console.warn('[DEBUG] complete-builds error:', e);
+        console.warn('[COMPLETE] complete-builds error:', e);
       }
     }
     const _tBldg = performance.now();
@@ -658,7 +1189,11 @@ async function pollEconomy() {
       store: data.store,
       rates: data.rates,
       cap: data.cap,
+      shieldRaised: data.shieldRaised ?? false,
+      defenseScore: data.defenseScore ?? { shield: 0, cannon: 0, total: 0 },
       buildings: data.buildings,
+      completeCharges: data.completeCharges ?? 0,
+      ...(data.richness ? { richness: data.richness } : {}),
     });
     // Poll ship state
     const _tShips = performance.now();
@@ -696,15 +1231,16 @@ async function pollEconomy() {
       const fleetRes = await fetch(`/api/fleet/all?username=${encodeURIComponent(username)}`);
       if (fleetRes.ok) {
         const fleetData = await fleetRes.json() as FleetAllResponse;
-        setServerFleetAll(fleetData.stars, fleetData.transits);
+        setServerFleetAll(fleetData.stars, fleetData.transits, fleetData.freighterRoutes, fleetData.raidRoutes);
         // Mark discovered stars from server
         if (fleetData.discoveredStars && fleetData.discoveredStars.length > 0) {
           const gs2 = getGameState();
           if (gs2) {
+            const enhancedSet = new Set(fleetData.enhancedProbeStars ?? []);
             for (const si of fleetData.discoveredStars) {
               const star = gs2.galaxy.stars[si];
               if (star && star.discoveryLevel === 'none') {
-                star.discoveryLevel = 'probed';
+                star.discoveryLevel = enhancedSet.has(si) ? 'visited' : 'probed';
                 star.discovered = true;
               }
             }
@@ -732,6 +1268,7 @@ async function pollEconomy() {
 // ── Save position periodically ──────────────────────────────────────────────
 let _lastSavedPosition = '';
 let _lastSavedDiscovered = '';
+let _lastSavedVisited = '';
 let _lastSavedJourneyDone = false;
 function savePositionIfChanged() {
   const gs = getGameState();
@@ -746,24 +1283,29 @@ function savePositionIfChanged() {
     bodyIndex: gs.galaxy.currentBodyIndex,
   });
   const discovered = getDiscoveredStars();
+  const visited = getVisitedStars();
   const discoveredKey = discovered.join(',');
+  const visitedKey = visited.join(',');
   const journeyDone = isJourneyDone();
   const posChanged = pos !== _lastSavedPosition;
   const discoveredChanged = discoveredKey !== _lastSavedDiscovered;
+  const visitedChanged = visitedKey !== _lastSavedVisited;
   const journeyChanged = journeyDone && !_lastSavedJourneyDone;
-  if (!posChanged && !discoveredChanged && !journeyChanged) return;
+  if (!posChanged && !discoveredChanged && !visitedChanged && !journeyChanged) return;
   // Track star discovery milestone
   if (discoveredChanged && discovered.length >= 2) {
     journeyProgress(0.75, 'star_discovered');
   }
   _lastSavedPosition = pos;
   _lastSavedDiscovered = discoveredKey;
+  _lastSavedVisited = visitedKey;
   if (journeyDone) _lastSavedJourneyDone = true;
   // Always send BOTH fields — Devvit hSet may replace the entire hash
   const payload: Record<string, unknown> = {
     username,
     lastPosition: JSON.parse(pos),
     discoveredStars: discovered,
+    enhancedProbeStars: visited,
     journeyDone,
   };
   console.log('[SAVE] saving profile:', JSON.stringify(payload));
@@ -775,7 +1317,9 @@ function savePositionIfChanged() {
 }
 
 // ── Devvit Journey Telemetry ────────────────────────────────────────────────
-// Simple progression funnel: start → dock_upgraded → ship_upgraded → star_discovered → colonized
+// Progression funnel: home_star_claimed(0.10) → first_building(0.15) → first_ship_built(0.20) →
+// dock_upgraded(0.25) → first_transfer(0.35) → ship_upgraded(0.50) → first_colony(0.60) →
+// star_discovered(0.75) → alliance_joined(0.90) → journey_end
 let _journeyStarted = false;
 const _progressSent = new Set<string>();
 
@@ -809,6 +1353,30 @@ function trackInteraction() { _statsInteractions++; }
 window.addEventListener('pointerdown', trackInteraction, { passive: true });
 window.addEventListener('keydown', trackInteraction, { passive: true });
 
+// ── Idle timeout: return to splash after 30 minutes of no interaction ──────
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+let _idleTimer: ReturnType<typeof setTimeout> | null = null;
+let _isPlaying = false; // set true once startMultiplayer runs
+
+function resetIdleTimer() {
+  if (!_isPlaying) return;
+  if (_idleTimer) clearTimeout(_idleTimer);
+  _idleTimer = setTimeout(() => {
+    console.log('[IDLE] 30 min idle — returning to splash');
+    savePositionIfChanged();
+    journeyProgress(0, 'idle_timeout');
+    void telemetry.endJourney({ complete: false, game: { win: false, score: 0 } })
+      .then(() => console.log('[TELEMETRY] journey ended — idle timeout'))
+      .catch(() => {})
+      .finally(() => location.reload());
+  }, IDLE_TIMEOUT_MS);
+}
+window.addEventListener('pointerdown', resetIdleTimer, { passive: true });
+window.addEventListener('keydown', resetIdleTimer, { passive: true });
+window.addEventListener('pointermove', resetIdleTimer, { passive: true });
+window.addEventListener('wheel', resetIdleTimer, { passive: true });
+window.addEventListener('touchstart', resetIdleTimer, { passive: true });
+
 function sendStatsHeartbeat() {
   const now = Date.now();
   const deltaSec = (now - _statsLastHeartbeat) / 1000;
@@ -826,15 +1394,121 @@ function sendStatsHeartbeat() {
 // ── Activate multiplayer networking ─────────────────────────────────────────
 function startMultiplayer() {
   bridge.beginPlay(); // Activate networking callbacks on existing game
+  _isPlaying = true;
+  resetIdleTimer(); // start the 30-min idle countdown
   journeyAppReady();
-  ghostPollInterval = setInterval(pollGhosts, 250);
-  shotPollInterval = setInterval(pollShots, 250);
-  economyPollInterval = setInterval(pollEconomy, 1500);
+  ghostPollInterval = setInterval(pollGhosts, 1000);
+  shotPollInterval = setInterval(pollShots, 1000);
+  economyPollInterval = setInterval(pollEconomy, 5000);
   setInterval(savePositionIfChanged, 5000);
   setInterval(sendStatsHeartbeat, STATS_HEARTBEAT_MS);
-  setInterval(pollComsLoop, 15000); // check coms every 15s
+  setInterval(pollComsLoop, 2000); // fast detection, rate-limited fetches
+  setInterval(pollSensorAlerts, 30_000); // sensor alerts every 30s
   void pollEconomy();
   void pollComsUnread(); // initial unread check
+
+  // ── DM Input Overlay ────────────────────────────────────────────────────
+  const dmOverlay = document.getElementById('dm-input-overlay');
+  const dmInputText = document.getElementById('dm-input-text') as HTMLInputElement | null;
+  const dmInputLabel = document.getElementById('dm-input-label');
+  const dmInputSend = document.getElementById('dm-input-send');
+  const dmInputCancel = document.getElementById('dm-input-cancel');
+
+  // Track overlay mode: 'dm' or 'public' or 'alliance-create' or 'alliance-chat'
+  let _overlayMode: 'dm' | 'public' | 'alliance-create' | 'alliance-chat' = 'dm';
+  let _overlayPublicParentId: string | undefined = undefined;
+  let _overlayPublicRecipient: string | undefined = undefined;
+
+  function hideDMOverlay() {
+    if (dmOverlay) dmOverlay.style.display = 'none';
+    if (dmInputText) dmInputText.value = '';
+  }
+
+  function showDMOverlay(peer: string) {
+    if (!dmOverlay || !dmInputText || !dmInputLabel) return;
+    _overlayMode = 'dm';
+    dmInputLabel.textContent = `Message to ${peer}:`;
+    dmInputText.value = '';
+    dmInputText.placeholder = 'Type your message...';
+    dmOverlay.style.display = 'flex';
+    setTimeout(() => dmInputText.focus(), 50);
+  }
+
+  function showPublicOverlay(parentId?: string, recipient?: string) {
+    if (!dmOverlay || !dmInputText || !dmInputLabel) return;
+    _overlayMode = 'public';
+    _overlayPublicParentId = parentId;
+    _overlayPublicRecipient = recipient;
+    if (recipient) {
+      dmInputLabel.textContent = `Public message to u/${recipient}:`;
+    } else if (parentId) {
+      dmInputLabel.textContent = 'Reply to comment:';
+    } else {
+      dmInputLabel.textContent = 'New public post:';
+    }
+    dmInputText.value = '';
+    dmInputText.placeholder = recipient ? `Message to ${recipient}...` : (parentId ? 'Type your reply...' : 'Type your message...');
+    dmOverlay.style.display = 'flex';
+    setTimeout(() => dmInputText.focus(), 50);
+  }
+
+  function showAllianceOverlay(type: 'create' | 'chat') {
+    if (!dmOverlay || !dmInputText || !dmInputLabel) return;
+    _overlayMode = type === 'create' ? 'alliance-create' : 'alliance-chat';
+    dmInputLabel.textContent = type === 'create' ? 'Alliance name:' : 'Alliance chat:';
+    dmInputText.value = '';
+    dmInputText.placeholder = type === 'create' ? 'Enter alliance name...' : 'Type your message...';
+    if (dmInputSend) dmInputSend.textContent = type === 'create' ? 'CREATE' : 'SEND';
+    dmOverlay.style.display = 'flex';
+    setTimeout(() => dmInputText.focus(), 50);
+  }
+
+  function handleOverlaySubmit() {
+    if (!dmInputText || !dmInputText.value.trim()) { hideDMOverlay(); return; }
+    const text = dmInputText.value.trim();
+    if (_overlayMode === 'dm') {
+      const peer = getDMPeer();
+      if (peer) {
+        submitDMInput(text);
+        // sendDM is handled by consumePendingDMSend in the polling loop
+      }
+    } else if (_overlayMode === 'public') {
+      submitPublicPost(text, _overlayPublicParentId, _overlayPublicRecipient);
+      // postPublicComment is handled by consumePendingPublicPost in the polling loop
+    } else if (_overlayMode === 'alliance-create') {
+      submitAllianceInput('create', text);
+    } else if (_overlayMode === 'alliance-chat') {
+      submitAllianceInput('chat', text);
+    }
+    hideDMOverlay();
+  }
+
+  if (dmInputSend) {
+    dmInputSend.addEventListener('click', () => handleOverlaySubmit());
+  }
+  if (dmInputCancel) {
+    dmInputCancel.addEventListener('click', () => hideDMOverlay());
+  }
+  if (dmInputText) {
+    dmInputText.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // prevent game controls while typing
+      if (e.key === 'Enter') {
+        handleOverlaySubmit();
+      } else if (e.key === 'Escape') {
+        hideDMOverlay();
+      }
+    });
+  }
+
+  // Check for DM, public, and alliance input requests every 100ms
+  setInterval(() => {
+    const peer = consumeDMInputRequest();
+    if (peer) showDMOverlay(peer);
+    const pubReq = consumePublicInputRequest();
+    if (pubReq) showPublicOverlay(pubReq.parentId, pubReq.recipient);
+    const allianceReq = consumeAllianceInputRequest();
+    if (allianceReq) showAllianceOverlay(allianceReq.type);
+  }, 100);
 
   // Fetch already-claimed pods so late-joiners see correct state
   fetch(`/api/claimed-pods?postId=${encodeURIComponent(postId)}`)
@@ -858,6 +1532,7 @@ playHereBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 playHereBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   overlay.classList.remove('visible');
+  enableFullGestures(canvas); // User engaged — allow full touch gestures
   void loadPlayerProfile().then(() => startMultiplayer()).catch(() => startMultiplayer());
 });
 
@@ -869,6 +1544,24 @@ playFullBtn.addEventListener('click', (e) => {
     setTimeout(() => requestExpandedMode(e, 'game'), 100);
   });
 });
+
+// ── Deferred play: if module was loaded via splash play button ──────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const deferredMode = (globalThis as any).__DEFERRED_PLAY__ as string | undefined;
+if (deferredMode && isInline) {
+  console.log(`[INIT] Deferred play mode: ${deferredMode}`);
+  overlay.classList.remove('visible');
+  if (deferredMode === 'full') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const savedEvent = (globalThis as any).__DEFERRED_EVENT__ as MouseEvent | undefined;
+    void loadPlayerProfile().then(() => {
+      requestExpandedMode(savedEvent ?? new PointerEvent('click'), 'game');
+    });
+  } else {
+    enableFullGestures(canvas);
+    void loadPlayerProfile().then(() => startMultiplayer()).catch(() => startMultiplayer());
+  }
+}
 
 // ── Cleanup on page hide ────────────────────────────────────────────────────
 window.addEventListener('pagehide', () => {
@@ -997,10 +1690,13 @@ try {
 const ADMIN_USERS = ['WeirdAd4511', 'Fred', 'weirdad4511', 'fred'];
 const adminBtn = document.getElementById('admin-btn')!;
 const adminPanel = document.getElementById('admin-panel')!;
-const adminClaims = document.getElementById('admin-claims')!;
 const adminStatus = document.getElementById('admin-status')!;
+const adminPanelMode = document.getElementById('admin-panel-mode') as HTMLInputElement | null;
+const adminResultsPanel = document.getElementById('admin-results-panel');
+const adminResultsTitle = document.getElementById('admin-results-title');
+const adminResultsContent = document.getElementById('admin-results-content');
 
-console.log('[ADMIN] elements:', !!adminBtn, !!adminPanel, !!adminClaims, !!adminStatus, 'username=', username);
+console.log('[ADMIN] elements:', !!adminBtn, !!adminPanel, !!adminStatus, 'username=', username);
 if (adminBtn && adminPanel && ADMIN_USERS.some(u => u.toLowerCase() === username.toLowerCase())) {
   adminBtn.style.display = 'inline-flex';
   setIsAdmin(true);
@@ -1015,42 +1711,102 @@ adminBtn.addEventListener('click', (e) => {
   const opening = !adminPanel.classList.contains('visible');
   adminPanel.classList.toggle('visible');
   if (opening) {
-    void refreshAdminClaims();
-    void refreshAdminPlayerStats();
+    adminStatus.textContent = '';
+  } else {
+    adminResultsPanel?.classList.remove('visible');
   }
 });
 adminPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
 adminPanel.addEventListener('click', (e) => e.stopPropagation());
+adminResultsPanel?.addEventListener('pointerdown', (e) => e.stopPropagation());
+adminResultsPanel?.addEventListener('click', (e) => e.stopPropagation());
 
-async function refreshAdminClaims() {
-  adminStatus.textContent = 'loading...';
+// Dev mode toggle
+document.getElementById('admin-toggle-devmode')?.addEventListener('click', async () => {
+  adminStatus.textContent = 'toggling dev mode...';
+  try {
+    // Fetch current state from profile to toggle
+    const profRes = await fetch(`/api/profile?username=${encodeURIComponent(username)}&postId=${encodeURIComponent(postId)}`);
+    const prof = await profRes.json() as { devMode?: boolean };
+    const newState = !prof.devMode;
+    const res = await fetch('/api/admin/dev-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: newState }),
+    });
+    if (!res.ok) throw new Error(`${res.status}`);
+    adminStatus.textContent = `dev mode: ${newState ? 'ON' : 'OFF'}`;
+    // Apply immediately
+    const debugDisplay = newState ? '' : 'none';
+    for (const id of ['debug-copy', 'debug-log', 'debug-force-save', 'debug-check-redis', 'debug-toggle']) {
+      document.getElementById(id)?.style.setProperty('display', debugDisplay);
+    }
+  } catch (e) {
+    adminStatus.textContent = `dev-mode error: ${e}`;
+  }
+});
+
+// Admin results panel mode: copy to clipboard vs show in side panel
+function adminOutput(title: string, text: string, html?: string): void {
+  const usePanel = adminPanelMode?.checked ?? false;
+  if (usePanel && adminResultsPanel && adminResultsTitle && adminResultsContent) {
+    adminResultsTitle.textContent = title;
+    adminResultsContent.innerHTML = html ?? text.split('\n').map(l => `<div class="admin-result-row">${l}</div>`).join('');
+    adminResultsPanel.classList.add('visible');
+    adminStatus.textContent = title;
+  } else {
+    void navigator.clipboard.writeText(text).then(() => {
+      adminStatus.textContent = `${title} — copied to clipboard`;
+    });
+  }
+}
+
+// Active players
+document.getElementById('admin-active-players')?.addEventListener('click', async () => {
+  adminStatus.textContent = 'checking active players...';
+  try {
+    const res = await fetch(`/api/admin/active-players?postId=${encodeURIComponent(postId)}`);
+    const data = await res.json() as { active: Array<{ username: string; starName: string; ago: number; totalShips: number; totalBuildingLevels: number }>; total: number };
+    if (data.active.length === 0) {
+      adminOutput('Active Players', `No active players (${data.total} total)`);
+      return;
+    }
+    const lines = data.active.map(p => `${p.username} — ${p.starName} — ${p.ago}s ago — ${p.totalShips} ships, ${p.totalBuildingLevels} bldg`);
+    const text = `Active Players (${data.active.length}/${data.total})\n${'─'.repeat(40)}\n${lines.join('\n')}`;
+    const html = `<div class="admin-result-row" style="color:#44ffaa;margin-bottom:4px">${data.active.length} active / ${data.total} total</div>` +
+      data.active.map(p => `<div class="admin-result-row"><b>${p.username}</b> @ ${p.starName}<br/>${p.ago}s ago · ${p.totalShips} ships · ${p.totalBuildingLevels} bldg</div>`).join('');
+    adminOutput(`Active Players (${data.active.length})`, text, html);
+  } catch (_e) { adminStatus.textContent = 'error loading active players'; }
+});
+
+document.getElementById('admin-copy-claims')!.addEventListener('click', async () => {
+  adminStatus.textContent = 'loading claims...';
   try {
     const res = await fetch(`/api/stars/claimed?postId=${encodeURIComponent(postId)}`);
     const data = await res.json() as { claimed: Array<{ starIndex: number; username: string }> };
     if (!data.claimed || data.claimed.length === 0) {
-      adminClaims.innerHTML = '<span style="color:#776655">no claims</span>';
-    } else {
-      adminClaims.innerHTML = data.claimed
-        .sort((a, b) => a.starIndex - b.starIndex)
-        .map(c => `<div class="admin-claim-row"><span class="admin-claim-star">Star ${c.starIndex}</span><span class="admin-claim-user">${escapeHtml(c.username)}</span></div>`)
-        .join('');
+      adminOutput('Star Claims', 'No claims found');
+      return;
     }
-    adminStatus.textContent = `${data.claimed?.length ?? 0} claim(s)`;
-  } catch (e) {
-    adminStatus.textContent = 'error loading claims';
-  }
-}
-
-document.getElementById('admin-refresh')!.addEventListener('click', () => {
-  void refreshAdminClaims();
-  void refreshAdminPlayerStats();
+    const gs = getGameState();
+    const lines = data.claimed
+      .sort((a, b) => a.starIndex - b.starIndex)
+      .map(c => {
+        const starName = gs?.galaxy.stars[c.starIndex]?.name ?? '';
+        const label = starName ? `${starName} (#${c.starIndex})` : `Star ${c.starIndex}`;
+        return `${label} — ${c.username}`;
+      });
+    const text = `Star Claims (${new Date().toISOString()})\n${'─'.repeat(40)}\n${lines.join('\n')}`;
+    const html = data.claimed
+      .sort((a, b) => a.starIndex - b.starIndex)
+      .map(c => {
+        const starName = gs?.galaxy.stars[c.starIndex]?.name ?? '';
+        const label = starName ? `${starName} (#${c.starIndex})` : `Star ${c.starIndex}`;
+        return `<div class="admin-result-row">${label} — <b>${c.username}</b></div>`;
+      }).join('');
+    adminOutput(`Star Claims (${data.claimed.length})`, text, html);
+  } catch (_e) { adminStatus.textContent = 'error loading claims'; }
 });
-
-const adminPlayerStats = document.getElementById('admin-player-stats')!;
-const adminStatsPager = document.getElementById('admin-stats-pager');
-const ADMIN_STATS_PAGE_SIZE = 4;
-let adminStatsPage = 0;
-let lastPlayerStatsData: Array<{username:string;starName:string;starIndex:number;playtimeSeconds:number;interactions:number;lastSeen:number;totalBuildingLevels:number;totalShips:number;shipBreakdown:Array<{name:string;count:number}>}> = [];
 
 function formatPlaytime(seconds: number): string {
   if (seconds < 60) return `${Math.round(seconds)}s`;
@@ -1069,61 +1825,29 @@ function formatTimeSince(ts: number): string {
   return `${Math.floor(ago / 86400)}d ago`;
 }
 
-function renderAdminStatsPage() {
-  if (lastPlayerStatsData.length === 0) {
-    adminPlayerStats.innerHTML = '<span style="color:#776655">no players</span>';
-    if (adminStatsPager) adminStatsPager.innerHTML = '';
-    return;
-  }
-  const maxPage = Math.max(0, Math.ceil(lastPlayerStatsData.length / ADMIN_STATS_PAGE_SIZE) - 1);
-  if (adminStatsPage > maxPage) adminStatsPage = maxPage;
-  const start = adminStatsPage * ADMIN_STATS_PAGE_SIZE;
-  const page = lastPlayerStatsData.slice(start, start + ADMIN_STATS_PAGE_SIZE);
-  adminPlayerStats.innerHTML = page.map(p => {
-    const ships = p.shipBreakdown.map(s => `${s.count}x ${escapeHtml(s.name)}`).join(', ') || 'none';
-    return `<div class="admin-player-card">
-      <div><span class="player-name">${escapeHtml(p.username)}</span> — <span class="player-star">${escapeHtml(p.starName)} (#${p.starIndex})</span></div>
-      <div class="player-detail">Playtime: ${formatPlaytime(p.playtimeSeconds)} | Actions: ${p.interactions} | Last: ${formatTimeSince(p.lastSeen)}</div>
-      <div class="player-detail">Buildings: ${p.totalBuildingLevels} lvls | Ships: ${p.totalShips} (${ships})</div>
-    </div>`;
-  }).join('');
-  if (adminStatsPager) {
-    const parts: string[] = [];
-    if (adminStatsPage > 0) parts.push('<button class="admin-pager-btn" id="admin-stats-prev">\u25b2 back</button>');
-    if (adminStatsPage < maxPage) parts.push(`<button class="admin-pager-btn" id="admin-stats-next">\u25bc ${lastPlayerStatsData.length - start - page.length} more</button>`);
-    adminStatsPager.innerHTML = parts.join('');
-    document.getElementById('admin-stats-prev')?.addEventListener('click', (e) => { e.stopPropagation(); adminStatsPage--; renderAdminStatsPage(); });
-    document.getElementById('admin-stats-next')?.addEventListener('click', (e) => { e.stopPropagation(); adminStatsPage++; renderAdminStatsPage(); });
-  }
-}
+type PlayerStatEntry = {username:string;starName:string;starIndex:number;playtimeSeconds:number;interactions:number;lastSeen:number;totalBuildingLevels:number;totalShips:number;shipBreakdown:Array<{name:string;count:number}>};
 
-async function refreshAdminPlayerStats() {
-  adminPlayerStats.innerHTML = '<span style="color:#776655">loading...</span>';
-  if (adminStatsPager) adminStatsPager.innerHTML = '';
+document.getElementById('admin-copy-stats')!.addEventListener('click', async () => {
+  adminStatus.textContent = 'loading player stats...';
   try {
     const res = await fetch(`/api/admin/player-stats?postId=${encodeURIComponent(postId)}`);
-    const data = await res.json() as { players: typeof lastPlayerStatsData };
-    lastPlayerStatsData = data.players ?? [];
-    adminStatsPage = 0;
-    renderAdminStatsPage();
-  } catch (_e) {
-    adminPlayerStats.innerHTML = '<span style="color:#776655">error</span>';
-  }
-}
-
-document.getElementById('admin-copy-stats')!.addEventListener('click', () => {
-  if (lastPlayerStatsData.length === 0) {
-    adminStatus!.textContent = 'no stats to copy';
-    return;
-  }
-  const lines = lastPlayerStatsData.map(p => {
-    const ships = p.shipBreakdown.map(s => `${s.count}x ${s.name}`).join(', ') || 'none';
-    return `${p.username} | ${p.starName} (#${p.starIndex}) | Play: ${formatPlaytime(p.playtimeSeconds)} | Actions: ${p.interactions} | Last: ${formatTimeSince(p.lastSeen)} | Bldg lvls: ${p.totalBuildingLevels} | Ships: ${p.totalShips} (${ships})`;
-  });
-  const text = `Player Stats (${new Date().toISOString()})\n${'─'.repeat(60)}\n${lines.join('\n')}`;
-  void navigator.clipboard.writeText(text).then(() => {
-    adminStatus!.textContent = 'stats copied to clipboard';
-  });
+    const data = await res.json() as { players: PlayerStatEntry[] };
+    const players = data.players ?? [];
+    if (players.length === 0) {
+      adminStatus.textContent = 'no players to copy';
+      return;
+    }
+    const lines = players.map(p => {
+      const ships = p.shipBreakdown.map(s => `${s.count}x ${s.name}`).join(', ') || 'none';
+      return `${p.username} | ${p.starName} (#${p.starIndex}) | Play: ${formatPlaytime(p.playtimeSeconds)} | Actions: ${p.interactions} | Last: ${formatTimeSince(p.lastSeen)} | Bldg lvls: ${p.totalBuildingLevels} | Ships: ${p.totalShips} (${ships})`;
+    });
+    const text = `Player Stats (${new Date().toISOString()})\n${'─'.repeat(60)}\n${lines.join('\n')}`;
+    const html = players.map(p => {
+      const ships = p.shipBreakdown.map(s => `${s.count}x ${s.name}`).join(', ') || 'none';
+      return `<div class="admin-result-row"><b>${p.username}</b> @ ${p.starName}<br/>Play: ${formatPlaytime(p.playtimeSeconds)} · Last: ${formatTimeSince(p.lastSeen)}<br/>Ships: ${p.totalShips} (${ships}) · Bldg: ${p.totalBuildingLevels}</div>`;
+    }).join('');
+    adminOutput(`Player Stats (${players.length})`, text, html);
+  } catch (_e) { adminStatus.textContent = 'error loading stats'; }
 });
 
 document.getElementById('admin-reset-claims')!.addEventListener('click', async () => {
@@ -1136,7 +1860,6 @@ document.getElementById('admin-reset-claims')!.addEventListener('click', async (
     });
     const data = await res.json();
     adminStatus.textContent = `cleared ${data.cleared} claim(s) — reload to re-assign`;
-    void refreshAdminClaims();
   } catch (_e) { adminStatus.textContent = 'error'; }
 });
 
@@ -1150,7 +1873,6 @@ document.getElementById('admin-reset-all')!.addEventListener('click', async () =
     });
     const data = await res.json();
     adminStatus!.textContent = `reset: ${data.usersCleared} users, ${data.claimsCleared} claims — reload`;
-    void refreshAdminClaims();
   } catch (_e) { adminStatus!.textContent = 'error'; }
 });
 
@@ -1179,13 +1901,12 @@ document.getElementById('admin-spawn-enemy')!.addEventListener('click', async ()
     const data = await res.json() as { ok?: boolean; enemy?: string; starIndex?: number; message?: string };
     if (data.ok) {
       adminStatus!.textContent = `spawned ${data.enemy} at star #${data.starIndex} with Destroyer`;
-      void refreshAdminClaims();
     } else {
       adminStatus!.textContent = data.message ?? 'error';
     }
   } catch (_e) { adminStatus!.textContent = 'error'; }
 });
-document.getElementById('admin-trade-stations')!.addEventListener('click', () => {
+document.getElementById('admin-copy-trades')!.addEventListener('click', () => {
   const gs = getGameState();
   if (!gs) { adminStatus!.textContent = 'no game state'; return; }
   const names: string[] = [];
@@ -1194,11 +1915,76 @@ document.getElementById('admin-trade-stations')!.addEventListener('click', () =>
       names.push(`${star.name} (#${star.index})`);
     }
   }
-  const el = document.getElementById('admin-trade-list')!;
-  el.innerHTML = names.length > 0
-    ? names.map(n => `<div>${n}</div>`).join('')
-    : '<span style="color:#776655">none</span>';
-  adminStatus!.textContent = `${names.length} trading station(s)`;
+  if (names.length === 0) {
+    adminOutput('Trade Stations', 'No trade stations found');
+    return;
+  }
+  const text = `Trade Stations (${new Date().toISOString()})\n${'─'.repeat(40)}\n${names.join('\n')}`;
+  const html = names.map(n => `<div class="admin-result-row">${n}</div>`).join('');
+  adminOutput(`Trade Stations (${names.length})`, text, html);
+});
+
+// ── Autobot Admin ──────────────────────────────────────────────────────────
+
+document.getElementById('admin-autobot-state')!.addEventListener('click', async () => {
+  adminStatus!.textContent = 'fetching bot state...';
+  try {
+    const res = await fetch('/api/bots/autobot/state');
+    const data = await res.json();
+    const json = JSON.stringify(data, null, 2);
+    await navigator.clipboard.writeText(json);
+    adminStatus!.textContent = 'bot state copied to clipboard';
+  } catch (_e) { adminStatus!.textContent = 'error fetching bot state'; }
+});
+
+document.getElementById('admin-autobot-tick')!.addEventListener('click', async () => {
+  adminStatus!.textContent = 'triggering bot tick...';
+  try {
+    const res = await fetch('/api/bots/autobot/tick', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ postId }),
+    });
+    const data = await res.json();
+    const json = JSON.stringify(data, null, 2);
+    await navigator.clipboard.writeText(json);
+    adminStatus!.textContent = 'bot tick result copied to clipboard';
+  } catch (_e) { adminStatus!.textContent = 'error triggering bot tick'; }
+});
+
+document.getElementById('admin-autobot-reset')!.addEventListener('click', async () => {
+  adminStatus!.textContent = 'resetting bot...';
+  try {
+    await fetch('/api/bots/autobot/reset', { method: 'POST' });
+    adminStatus!.textContent = 'bot state reset';
+  } catch (_e) { adminStatus!.textContent = 'error resetting bot'; }
+});
+
+document.getElementById('admin-autobot-flyby')!.addEventListener('click', async () => {
+  const gs = getGameState();
+  const tier = gs?.galaxy.tier ?? 0;
+  const starIndex = gs?.galaxy.currentStarIndex ?? -1;
+  const bodyIndex = gs?.galaxy.currentBodyIndex ?? -1;
+  adminStatus!.textContent = `flyby: t${tier} s${starIndex} b${bodyIndex} postId=${postId?.slice(0, 8)}...`;
+  try {
+    const res = await fetch('/api/bots/autobot/flyby', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ postId, starIndex, bodyIndex }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const poses = data.storedPoses ?? {};
+      const poseKeys = Object.keys(poses);
+      const planetPose = poses['bot:VALCORDIA_PROBE:planet'];
+      const roomT2 = data.roomPosesT2 ?? [];
+      adminStatus!.textContent = `s${data.starIndex} b${data.bodyIndex} poses:${poseKeys.length} planet:${planetPose ? `t${planetPose.tier}s${planetPose.starIndex}b${planetPose.bodyIndex}` : 'NONE'} roomT2:${roomT2.length}`;
+      console.log('[FLYBY] stored poses:', JSON.stringify(data.storedPoses, null, 2));
+      console.log('[FLYBY] roomPosesT2:', JSON.stringify(roomT2, null, 2));
+    } else {
+      adminStatus!.textContent = `flyby ERR: ${data.error}`;
+    }
+  } catch (e) { adminStatus!.textContent = `flyby exception: ${e}`; }
 });
 } catch (adminErr) { console.error('[ADMIN] init error:', adminErr); }
 

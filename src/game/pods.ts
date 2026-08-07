@@ -3,11 +3,27 @@
 import type { Asteroid, FuelPod, GameState } from './types';
 import {
   POD_COUNT_PER_ASTEROID, POD_SURFACE_OFFSET, POD_COLLECT_RADIUS,
-  FUEL_MAX, RED_DOCK_FRACTION,
+  FUEL_MAX, POD_TYPES, POD_TOTAL_WEIGHT,
 } from './constants';
+import type { PodKind } from './constants';
 import {
   add, sub, scale, normalize, magnitude, createRng, stableHash,
 } from './math';
+
+/** Pick a pod type using weighted random selection */
+function pickPodKind(roll: number): { kind: PodKind; color: string; fuelBonus: number } {
+  const scaled = roll * POD_TOTAL_WEIGHT;
+  let cumulative = 0;
+  for (const entry of POD_TYPES) {
+    cumulative += entry.weight;
+    if (scaled < cumulative) {
+      return { kind: entry.kind, color: entry.color, fuelBonus: entry.fuelBonus };
+    }
+  }
+  // Fallback (shouldn't happen)
+  const last = POD_TYPES[POD_TYPES.length - 1]!;
+  return { kind: last.kind, color: last.color, fuelBonus: last.fuelBonus };
+}
 
 
 export function generateFuelPods(asteroids: Asteroid[], seed: string): FuelPod[] {
@@ -55,7 +71,7 @@ export function generateFuelPods(asteroids: Asteroid[], seed: string): FuelPod[]
       const outward = normalize(sub(surfacePoint, a.pos));
       const podPos = add(surfacePoint, scale(outward, POD_SURFACE_OFFSET));
 
-      const isRefuel = rng.range(0, 1) < RED_DOCK_FRACTION;
+      const picked = pickPodKind(rng.range(0, 1));
       pods.push({
         id: id++,
         astIndex: ai,
@@ -63,8 +79,9 @@ export function generateFuelPods(asteroids: Asteroid[], seed: string): FuelPod[]
         discovered: false,
         collected: false,
         claimRequested: false,
-        refuels: isRefuel,
-        color: isRefuel ? '#FF5A3D' : '#FFD24A',
+        refuels: picked.kind === 'refuel',
+        color: picked.color,
+        kind: picked.kind,
       });
     }
   }
@@ -109,12 +126,14 @@ export function applyPodCollected(state: GameState, podId: number, mine: boolean
   pod.collected = true;
 
   if (mine) {
-    if (pod.refuels) {
+    const entry = POD_TYPES.find(t => t.kind === pod.kind);
+    const fuelBonus = entry?.fuelBonus ?? 0;
+    if (pod.kind === 'refuel') {
       state.fuelPercent = FUEL_MAX;
       console.log('[PODS] REFUEL pod id=', podId, 'fuel=', state.fuelPercent);
-    } else {
-      state.fuelPercent = Math.min(FUEL_MAX, state.fuelPercent + 15);
-      console.log('[PODS] DOCK pod id=', podId, 'fuel=', state.fuelPercent, 'docks=', state.docksCollected + 1);
+    } else if (fuelBonus > 0) {
+      state.fuelPercent = Math.min(FUEL_MAX, state.fuelPercent + fuelBonus);
+      console.log(`[PODS] ${pod.kind.toUpperCase()} pod id=`, podId, 'fuel=', state.fuelPercent);
     }
     state.docksCollected++;
   }

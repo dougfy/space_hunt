@@ -4,7 +4,7 @@
 
 import versionJson from '../../version.json';
 
-type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded' | 'freighter_arrived' | 'freighter_unloading';
+type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'undocking_alt' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded' | 'freighter_arrived' | 'freighter_unloading' | 'shields_activated' | 'shields_up' | 'shields_deactivated' | 'shields_down' | 'hostile_raider' | 'unidentified_ship' | 'new_comm' | 'fleet_command' | 'scan_nothing_planet' | 'scan_nothing_station' | 'scan_ore' | 'scan_artifact' | 'scan_anomaly' | 'scan_blueprint';
 
 // Cache-bust sound URLs with version so updated wavs are fetched fresh
 const V = versionJson.version;
@@ -30,6 +30,21 @@ const SOUND_FILES: Partial<Record<SoundId, string>> = {
   scout_range_exceeded: `/sounds/Scout%20range%20exceeded.wav?v=${V}`,
   freighter_arrived: `/sounds/Freighter%20arrived%20at.wav?v=${V}`,
   freighter_unloading: `/sounds/Freighter%20unloading%20cargo.wav?v=${V}`,
+  shields_activated: `/sounds/Shields%20are%20activated.wav?v=${V}`,
+  shields_up: `/sounds/Shields%20are%20up.wav?v=${V}`,
+  shields_deactivated: `/sounds/Shields%20are%20deactivated.wav?v=${V}`,
+  shields_down: `/sounds/Shields%20are%20down.wav?v=${V}`,
+  hostile_raider: `/sounds/Warning%20hostile%20raider.wav?v=${V}`,
+  unidentified_ship: `/sounds/Warning%20unidentified%20ship.wav?v=${V}`,
+  new_comm: `/sounds/New%20comm%20message.wav?v=${V}`,
+  fleet_command: `/sounds/Fleet%20command%20message.wav?v=${V}`,
+  undocking_alt: `/sounds/Undocking.wav?v=${V}`,
+  scan_nothing_planet: `/sounds/Barren%20surface%20nothing.wav?v=${V}`,
+  scan_nothing_station: `/sounds/Normal%20starbase%20No.wav?v=${V}`,
+  scan_ore: `/sounds/Ore%20deposit%20discovered.wav?v=${V}`,
+  scan_artifact: `/sounds/Ancient%20artifact%20recovered.wav?v=${V}`,
+  scan_anomaly: `/sounds/Anomalous%20signal%20detected.wav?v=${V}`,
+  scan_blueprint: `/sounds/Ship%20blueprint%20found.wav?v=${V}`,
 };
 
 let _audioCtx: AudioContext | null = null;

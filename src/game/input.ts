@@ -41,6 +41,7 @@ export function setupInput(
   input: InputState,
   getState: () => GameState | null,
   _getCamera: () => Camera,
+  inline?: boolean,
 ): () => void {
   const DRAG_THRESHOLD = 6; // pixels before treating as a drag (not a tap)
   let dragTotal = 0;
@@ -147,7 +148,8 @@ export function setupInput(
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('contextmenu', onContextMenu);
-  canvas.style.touchAction = 'none';
+  // In inline mode, allow native scroll until user engages; expanded = full gestures
+  canvas.style.touchAction = inline ? 'manipulation' : 'none';
   canvas.style.cursor = 'crosshair';
 
   // ── Scroll wheel zoom (galaxy map) ──
@@ -156,9 +158,12 @@ export function setupInput(
     // Normalize: deltaY > 0 = scroll down = zoom out (increase ortho)
     input.scrollDelta += e.deltaY > 0 ? 1 : -1;
   };
-  canvas.addEventListener('wheel', onWheel, { passive: false });
+  // Only attach wheel listener in non-inline mode (inline uses +/- buttons)
+  if (!inline) {
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+  }
 
-  // ── Pinch zoom (touch, galaxy map) ──
+  // ── Pinch zoom (touch, galaxy map) — skip in inline mode ──
   let pinchDist = 0;
   const activeTouches = new Map<number, { x: number; y: number }>();
 
@@ -192,9 +197,11 @@ export function setupInput(
     }
     if (activeTouches.size < 2) pinchDist = 0;
   };
-  canvas.addEventListener('touchstart', onTouchStart, { passive: true });
-  canvas.addEventListener('touchmove', onTouchMove, { passive: true });
-  canvas.addEventListener('touchend', onTouchEnd, { passive: true });
+  if (!inline) {
+    canvas.addEventListener('touchstart', onTouchStart, { passive: true });
+    canvas.addEventListener('touchmove', onTouchMove, { passive: true });
+    canvas.addEventListener('touchend', onTouchEnd, { passive: true });
+  }
 
   // Keyboard listeners (on window so they work even when canvas isn't focused)
   const MOVEMENT_KEYS = new Set([
@@ -238,6 +245,11 @@ export function setupInput(
     window.removeEventListener('keyup', onKeyUp);
     window.removeEventListener('blur', onBlur);
   };
+}
+
+/** Switch from inline (manipulation) to full gesture mode after user engagement. */
+export function enableFullGestures(canvas: HTMLCanvasElement): void {
+  canvas.style.touchAction = 'none';
 }
 
 export function processInput(

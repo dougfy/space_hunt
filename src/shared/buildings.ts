@@ -1,5 +1,6 @@
 import type {
   BuildType,
+  DefenseScore,
   ResourceStore,
   StarBuildingState,
   StarBuildingsState,
@@ -56,10 +57,23 @@ export const BUILDING_CATALOG: Record<BuildType, BuildingCatalogEntry> = {
     durationSeconds: 600,
     prereqs: { station: 2 },
   },
+  shield: {
+    id: 'shield',
+    label: 'Shield Gen',
+    maxLevel: 5,
+    durationSeconds: 300,
+    prereqs: { station: 2 },
+  },
+  cannon: {
+    id: 'cannon',
+    label: 'Ion Cannon',
+    maxLevel: 5,
+    durationSeconds: 300,
+    prereqs: { station: 3 },
+  },
 };
 
-const BUILDING_ORDER: BuildType[] = ['station', 'mine', 'solar', 'hab', 'warehouse', 'dock'];
-const BASE_RESOURCE_RATE: ResourceStore = { ore: 84, food: 84, energy: 84 };
+const BUILDING_ORDER: BuildType[] = ['station', 'mine', 'solar', 'hab', 'warehouse', 'dock', 'shield', 'cannon'];
 const BASE_RESOURCE_CAP = 1600;
 const WAREHOUSE_CAP_BONUS = 400;
 const STATION_COST_BASE: ResourceStore = { ore: 420, food: 420, energy: 420 };
@@ -70,6 +84,8 @@ const BUILD_COST_BASE: Record<Exclude<BuildType, 'station'>, ResourceStore> = {
   hab: { ore: 180, food: 220, energy: 120 },
   warehouse: { ore: 240, food: 180, energy: 180 },
   dock: { ore: 500, food: 300, energy: 400 },
+  shield: { ore: 400, food: 300, energy: 350 },
+  cannon: { ore: 500, food: 250, energy: 450 },
 };
 const BUILD_RATE_STEP = 21;
 
@@ -85,6 +101,8 @@ export function createInitialStarBuildings(): StarBuildingsState {
     hab: makeBuildingState(0, 'READY'),
     warehouse: makeBuildingState(0, 'LOCKED'),
     dock: makeBuildingState(0, 'LOCKED'),
+    shield: makeBuildingState(0, 'LOCKED'),
+    cannon: makeBuildingState(0, 'LOCKED'),
   };
 }
 
@@ -180,21 +198,64 @@ function bonusForLevel(level: number): number {
   return BUILD_RATE_STEP * ((level * (level + 1)) / 2);
 }
 
-export function computeResourceRatesFromBuildings(buildings: StarBuildingsState): ResourceStore {
+// ── Per-Star Richness ────────────────────────────────────────────────────────
+
+const RATE_PER_RICHNESS = 17; // base rate = richness * this (richness 5→85/min ≈ old 84, richness 10→170/min)
+const DEFAULT_RICHNESS: ResourceStore = { ore: 5, food: 5, energy: 5 };
+
+/** Simple deterministic hash for per-star seeding */
+function starRichnessHash(starIndex: number, offset: number): number {
+  let h = (starIndex * 2654435761 + offset * 40503) | 0;
+  h = (h ^ (h >>> 16)) | 0;
+  h = Math.imul(h, 0x45d9f3b);
+  h = (h ^ (h >>> 16)) | 0;
+  return (h >>> 0);
+}
+
+/** Get deterministic resource richness (1-10) for a star. Home stars get 5-10. */
+export function getStarRichness(starIndex: number, isHomeStar = false): ResourceStore {
+  const min = isHomeStar ? 5 : 1;
+  const range = isHomeStar ? 6 : 10; // 5-10 or 1-10
+  return {
+    ore:    min + (starRichnessHash(starIndex, 1) % range),
+    food:   min + (starRichnessHash(starIndex, 2) % range),
+    energy: min + (starRichnessHash(starIndex, 3) % range),
+  };
+}
+
+export function computeResourceRatesFromBuildings(
+  buildings: StarBuildingsState,
+  shieldRaised = false,
+  richness: ResourceStore = DEFAULT_RICHNESS,
+): ResourceStore {
   const normalized = normalizeStarBuildings(buildings);
   const hasStation = normalized.station.level > 0;
   if (!hasStation) {
     return { ore: 0, food: 0, energy: 0 };
   }
 
+  const energyDrain = shieldRaised ? SHIELD_ENERGY_DRAIN * normalized.shield.level : 0;
   return {
-    ore: BASE_RESOURCE_RATE.ore + bonusForLevel(normalized.mine.level),
-    food: BASE_RESOURCE_RATE.food + bonusForLevel(normalized.hab.level),
-    energy: BASE_RESOURCE_RATE.energy + bonusForLevel(normalized.solar.level),
+    ore: richness.ore * RATE_PER_RICHNESS + Math.round(bonusForLevel(normalized.mine.level) * richness.ore / 5),
+    food: richness.food * RATE_PER_RICHNESS + Math.round(bonusForLevel(normalized.hab.level) * richness.food / 5),
+    energy: richness.energy * RATE_PER_RICHNESS + Math.round(bonusForLevel(normalized.solar.level) * richness.energy / 5) - energyDrain,
   };
 }
 
 export function computeResourceCapFromBuildings(buildings: StarBuildingsState): number {
   const normalized = normalizeStarBuildings(buildings);
   return BASE_RESOURCE_CAP + normalized.warehouse.level * WAREHOUSE_CAP_BONUS;
+}
+
+// ── Defense ─────────────────────────────────────────────────────────────────
+
+const SHIELD_DEFENSE_PER_LEVEL = 50;
+const CANNON_DEFENSE_PER_LEVEL = 40;
+const SHIELD_ENERGY_DRAIN = 20; // per minute per shield level when raised
+
+export function computeDefenseScore(buildings: StarBuildingsState, shieldRaised: boolean): DefenseScore {
+  const normalized = normalizeStarBuildings(buildings);
+  const shield = shieldRaised ? normalized.shield.level * SHIELD_DEFENSE_PER_LEVEL : 0;
+  const cannon = normalized.cannon.level * CANNON_DEFENSE_PER_LEVEL;
+  return { shield, cannon, total: shield + cannon };
 }

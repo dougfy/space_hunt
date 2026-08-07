@@ -6,6 +6,7 @@ import {
   CANVAS_W, CANVAS_H, FUEL_MAX,
   FUEL_DRAIN_PER_SECOND, LOW_FUEL_THRESHOLD, LOW_FUEL_BLINK_PERIOD,
   SHIP_IMPACT_BUFFER, SYSTEM_SIZE, SHIP_SIZE, PLAYER_MAX_HP, GALAXY_SIZE,
+  STAR_ENTER_RADIUS,
 } from './constants';
 import { vec2 } from './math';
 import { generateAsteroids, generateRingAsteroids } from './asteroids';
@@ -27,14 +28,16 @@ import {
   setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert,
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
   drawGalaxyZoomButtons, hitTestGalaxyZoomButtons,
+  drawSkinToggleButton, hitTestSkinToggle,
   selectGalaxyStar, deselectGalaxyStar, getSelectedStarIndex, hitTestStarInfoDismiss, hitTestStarInfoVisit,
   drawGalaxyModeToggle, drawGalaxyModeBanner, hitTestGalaxyModeBtn, toggleGalaxyMode, setGalaxyMode, getGalaxyMode,
   setGalaxyJumpReturnTier, isFleetPanelOpen, closeFleetPanel,
+  getPostId, triggerExplore,
 } from './renderer';
 import type { GalaxyMode as _GalaxyMode } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
-import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, applyStarNames, generateSystem } from './galaxy';
+import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, applyStarNames, generateSystem, consumeVisitForeignOwner } from './galaxy';
 import { checkDocking, updateDocking, undock } from './dock';
 import type { DockAction } from './dock';
 import { initJourney, skipJourney, journeyAction, updateJourney, isJourneyDone as _isJourneyDone } from './journey';
@@ -56,11 +59,22 @@ let poseTimer = 0;
 let _savedDock: GameState['dock'] = null; // preserved across temporary galaxy jumps
 let devvitCb: DevvitCallbacks | null = null;
 
-const POSE_INTERVAL = 1 / 12; // ~12Hz pose reporting
+const POSE_INTERVAL = 1; // 1Hz pose reporting (1 request/sec)
 
 // ── Scout boundary warning ──
 let _scoutWarningTimer = 0;
 const SCOUT_WARNING_DURATION = 3.5; // seconds
+
+// ── Known players (discovered via probes/visits) ──
+const _knownPlayers = new Set<string>();
+
+export function addKnownPlayer(name: string): void {
+  _knownPlayers.add(name);
+}
+
+export function getKnownPlayers(): string[] {
+  return Array.from(_knownPlayers);
+}
 
 export function getGameState(): GameState | null {
   return gameState;
@@ -74,7 +88,7 @@ export function onColonizeSuccess(starIndex: number): void {
   star.owner = 'player';
   // Regenerate system bodies so station feature is created
   if (gameState.galaxy.currentStarIndex === starIndex) {
-    gameState.galaxy.bodies = generateSystem(star);
+    gameState.galaxy.bodies = generateSystem(star, getPostId());
   }
 }
 
@@ -98,8 +112,22 @@ export function setStarClaims(claims: Array<{ starIndex: number; username: strin
       star.discovered = true;
       playerClaimCount++;
     } else {
-      star.owner = 'foreign';
-      star.discovered = true;
+      // Only reveal foreign stars if player has already discovered them
+      if (star.discoveryLevel !== 'none') {
+        star.owner = 'foreign';
+        // Always store claimedBy so it's available when player visits later
+        star.claimedBy = claim.username;
+        // Only add to contacts at 'visited' level (enhanced probe or physical visit)
+        if (star.discoveryLevel === 'visited') {
+          addKnownPlayer(claim.username);
+        }
+        // If player is currently at this star (system/planet tier), regenerate bodies
+        // so the foreign starbase appears (covers refresh/late-load timing)
+        if (gameState.galaxy.currentStarIndex === claim.starIndex &&
+            gameState.galaxy.tier !== NavigationTier.Galaxy) {
+          gameState.galaxy.bodies = generateSystem(star, getPostId());
+        }
+      }
     }
   }
   // Skip tutorial for returning players who already have colonies
@@ -109,15 +137,19 @@ export function setStarClaims(claims: Array<{ starIndex: number; username: strin
 }
 
 /** Restore discovered stars from server data. */
-export function setDiscoveredStars(starIndices: number[]): void {
+export function setDiscoveredStars(starIndices: number[], enhancedProbeStars?: number[]): void {
   if (!gameState) return;
+  // If enhancedProbeStars is undefined, this is a legacy profile — treat all as visited
+  const legacyMode = enhancedProbeStars === undefined;
+  const enhancedSet = new Set(enhancedProbeStars ?? []);
   for (const idx of starIndices) {
     const star = gameState.galaxy.stars[idx];
     if (!star) continue;
     // Mark as discovered — does NOT claim ownership (that requires colonization)
     star.discovered = true;
     if (star.discoveryLevel === 'none') {
-      star.discoveryLevel = 'visited';
+      // Legacy profiles: all discovered = visited. New profiles: check enhanced list.
+      star.discoveryLevel = (legacyMode || enhancedSet.has(idx)) ? 'visited' : 'probed';
     }
   }
 }
@@ -127,6 +159,14 @@ export function getDiscoveredStars(): number[] {
   if (!gameState) return [];
   return gameState.galaxy.stars
     .filter(s => s.discovered)
+    .map(s => s.index);
+}
+
+/** Get stars at 'visited' discovery level (enhanced probe or scout visit). */
+export function getVisitedStars(): number[] {
+  if (!gameState) return [];
+  return gameState.galaxy.stars
+    .filter(s => s.discoveryLevel === 'visited')
     .map(s => s.index);
 }
 
@@ -168,7 +208,7 @@ export function relocateToHomeStar(starIndex: number): void {
   star.discovered = true;
 
   // Generate system for the new home star
-  gameState.galaxy.bodies = generateSystem(star);
+  gameState.galaxy.bodies = generateSystem(star, getPostId());
 
   // Place ship at first body (station planet) in Planet tier, docked
   const stationBody = gameState.galaxy.bodies[0];
@@ -238,7 +278,7 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
     gameState.dock = null; // Clear dock state from startGame
   } else if (tier === NavigationTier.System) {
     // At system view — generate system, place ship near system edge (not center)
-    gameState.galaxy.bodies = generateSystem(star);
+    gameState.galaxy.bodies = generateSystem(star, getPostId());
     gameState.galaxy.tier = NavigationTier.System;
     const center = SYSTEM_SIZE / 2;
     const edgeDist = 20; // SYSTEM_EXIT_RADIUS - 2, near outer boundary
@@ -246,7 +286,7 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
     gameState.dock = null; // Clear dock state from startGame
   } else {
     // Planet tier — generate system, go to specific body
-    gameState.galaxy.bodies = generateSystem(star);
+    gameState.galaxy.bodies = generateSystem(star, getPostId());
     const bi = Math.min(bodyIndex, gameState.galaxy.bodies.length - 1);
     gameState.galaxy.currentBodyIndex = bi;
     gameState.galaxy.tier = NavigationTier.Planet;
@@ -390,7 +430,7 @@ export function startGame(
   const sh = renderer.height / (window.devicePixelRatio || 1);
   gameState.camera.aspect = sw / sh;
   inputState = createInputState();
-  cleanupInput = setupInput(canvas, inputState, () => gameState, () => gameState!.camera);
+  cleanupInput = setupInput(canvas, inputState, () => gameState, () => gameState!.camera, isSplash);
   lastTime = performance.now();
   poseTimer = 0;
 
@@ -476,9 +516,18 @@ function update(dt: number): void {
       inputState.pointerDown = false;
       if (dockAction === 'leave') {
         console.log('[DOCK] Undocking from', gameState.dock.targetName);
-        playSound(gameState.dock.targetType === 'planet' ? 'leaving_orbit' : 'undocking');
+        if (gameState.dock.targetType === 'planet') {
+          playSound('leaving_orbit');
+        } else {
+          playSound(Math.random() < 0.5 ? 'undocking' : 'undocking_alt');
+        }
         undock(gameState);
         journeyAction();
+      } else if (dockAction === 'scan') {
+        playSound('click');
+        // Trigger planet exploration
+        triggerExplore(gameState.galaxy.currentStarIndex, gameState.galaxy.currentBodyIndex);
+        console.log('[DOCK] SCAN triggered at star', gameState.galaxy.currentStarIndex, 'body', gameState.galaxy.currentBodyIndex);
       } else if (dockAction === 'ships' || dockAction === 'buy_ships') {
         playSound('click');
         // Ship panel toggle/buy handled inside hitTestDockPanel
@@ -570,6 +619,13 @@ function update(dt: number): void {
     } else if (zHit === 'zoomOut') {
       gameState.galaxyZoom = Math.min(GALAXY_ORTHO_MAX, gameState.galaxyZoom + GALAXY_ZOOM_STEP);
       gameState.galaxyZoomCooldown = 1.0;
+      inputState.pointerDown = false;
+    }
+  }
+
+  // Handle skin toggle button tap (admin only, planet tier)
+  if (gameState.galaxy.tier === NavigationTier.Planet && inputState.pointerDown && inputState.pointerPos) {
+    if (hitTestSkinToggle(renderer, inputState.pointerPos.x, inputState.pointerPos.y)) {
       inputState.pointerDown = false;
     }
   }
@@ -823,7 +879,8 @@ function update(dt: number): void {
   const claimed = checkPodCollection(gameState);
   if (devvitCb) {
     for (const podId of claimed) {
-      devvitCb.onClaimPod(podId);
+      const pod = gameState.pods.find(p => p.id === podId);
+      devvitCb.onClaimPod(podId, pod ? !pod.refuels : false);
     }
   }
 
@@ -840,8 +897,23 @@ function update(dt: number): void {
   const worldShipPos = gameState.ship.pos;
   const transition = checkTierTransition(worldShipPos, gameState.galaxy);
   if (transition) {
-    // Belt pass-through: if ship has active target beyond the belt, don't enter Local tier
+    // Star pass-through: if ship has active target at a DIFFERENT star, skip entering this star
+    // Only applies when in galaxy tier flying between stars
     let skipTransition = false;
+    if (transition.newTier === NavigationTier.System && tier === NavigationTier.Galaxy && gameState.tgtActive) {
+      const targetStar = gameState.galaxy.stars[transition.starIndex];
+      if (targetStar) {
+        const tgtDistToStar = Math.sqrt(
+          (gameState.tgtPos.x - targetStar.pos.x) ** 2 + (gameState.tgtPos.y - targetStar.pos.y) ** 2,
+        );
+        // If the target isn't this star (target position is far from star center), skip
+        if (tgtDistToStar > STAR_ENTER_RADIUS) {
+          skipTransition = true;
+        }
+      }
+    }
+
+    // Belt pass-through: if ship has active target beyond the belt, don't enter Local tier
     if (transition.newTier === NavigationTier.Local) {
       const center = SYSTEM_SIZE / 2;
       const body = gameState.galaxy.bodies[transition.bodyIndex];
@@ -883,10 +955,16 @@ function update(dt: number): void {
       // Don't apply transition
     } else {
     console.log('[TRANSITION] from tier=', gameState.galaxy.tier, 'to=', transition.newTier, 'shipPos=', gameState.ship.pos, 'worldShipPos=', worldShipPos, 'starIdx=', transition.starIndex, 'bodyIdx=', transition.bodyIndex);
-    const newPos = applyTransition(gameState.galaxy, transition, gameState.ship.pos);
+    const newPos = applyTransition(gameState.galaxy, transition, gameState.ship.pos, getPostId());
     gameState.ship.pos = newPos;
     gameState.worldOffset = vec2(0, 0);
     gameState.tgtActive = false;
+
+    // When visiting a foreign star, add the owner to known contacts
+    const foreignOwner = consumeVisitForeignOwner();
+    if (foreignOwner) {
+      addKnownPlayer(foreignOwner);
+    }
 
     // Entering a system from galaxy → close fleet panel so it doesn't force us back
     if (transition.newTier === NavigationTier.System && tier === NavigationTier.Galaxy) {
@@ -958,7 +1036,7 @@ function render(): void {
   // ── Galaxy tier ──
   if (tier === NavigationTier.Galaxy) {
     const shipRenderSize = SHIP_SIZE * 3;
-    drawGalaxyView(renderer, camera, gameState.galaxy, gameState.ship.pos, true, true);
+    drawGalaxyView(renderer, camera, gameState.galaxy, gameState.ship.pos, true, _debugBounds);
 
     // Draw ghost ships in galaxy
     for (const g of gameState.ghosts) {
@@ -1108,6 +1186,7 @@ function render(): void {
 
     // Planet tier info is in the planet view itself (top-left), no separate HUD needed
     drawControlButtons(renderer, false, false, _debugBounds);
+    drawSkinToggleButton(renderer);
 
     // Draw dock panel only when fully docked
     if (gameState.dock?.docked) {

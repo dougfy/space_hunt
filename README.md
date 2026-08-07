@@ -19,6 +19,7 @@ Players start docked at a home star station with a Scout ship. From there:
 - **Fleet Management** — Build and deploy ships across multiple star systems, transfer ships between stars
 - **Colonize** — Send Colony Ships to unclaimed stars, dock at the station, and press COLONIZE to expand your empire
 - **Discover** — Stars progress from Unexplored → Probed → Visited as you explore
+- **NPC Ships** — An automated probe (VALCORDIA_PROBE) patrols the galaxy, visiting star systems and planets. It appears as a normal ghost ship with realistic arrive/linger/depart behavior.
 
 ### Navigation Tiers
 
@@ -87,7 +88,7 @@ src/
   client/         # WebView entry points (game.ts, inline.html)
   server/         # Hono API routes + game service
     core/         # Game service (economy, ships, fleet)
-    routes/       # API endpoints
+    routes/       # API endpoints (including bots.ts for NPC management)
   game/           # Client-side game engine
     game-loop.ts  # Main loop, state management, tier transitions
     renderer.ts   # All canvas rendering, UI panels, hit testing
@@ -108,6 +109,68 @@ assets/
 ## Current Version
 
 v1.0.0
+
+## Reddit App Review Compliance
+
+### 1. In-line Scroll Trap (Fixed)
+
+**Requirement:** [Inline mode](https://developers.reddit.com/docs/capabilities/server/launch_screen_and_entry_points/view_modes_entry_points#inline-mode-requirements) web views must not trap scrolling — this interferes with Reddit-native gestures.
+
+**What we did (v1.1.32 – v1.1.37):**
+
+- **Removed all `overflow-y: auto`** from every HTML panel (help, admin, debug log, ghost list, player stats). No scrollable containers remain in the inline view.
+- **Replaced scrollable lists with paginated tap-button navigation:**
+  - Help panel → split into CONTROLS / BUILDINGS / SHIPS tabs
+  - Ghost list → paginated (5 per page) with PREV / NEXT buttons
+  - Admin player stats → paginated (4 per page) with PREV / NEXT buttons
+- **Canvas `touch-action`** set to `manipulation` in inline mode (allows native scroll-through) and `none` in expanded mode (full gesture control).
+- **Scroll wheel and pinch-zoom listeners** only attached in expanded mode — inline mode uses on-screen +/− buttons for galaxy zoom.
+- **Inline entry** uses a splash attract-mode animation with two buttons: "Play Here" (starts inline gameplay) and "Play Full Size" (calls `requestExpandedMode()` to transition to expanded).
+
+**Commits:** `c844106` (v1.1.32), `522bd4b` (v1.1.37)
+
+### 2. Admin / Debug Endpoint Security (Fixed)
+
+**Requirement:** Admin and debug endpoints must have server-side authentication — they cannot rely on client-supplied credentials.
+
+**Purpose of admin endpoints:** These are strictly **developer debugging tools**, not moderator features. The game is a complex multiplayer system with server-side economy, fleet state, and building queues stored in Redis. When something goes wrong in a live game (e.g. a player's economy gets stuck, a star claim is corrupted, or build queues stall), the dev team needs the ability to inspect and reset state without redeploying the app. These endpoints are not intended for subreddit moderators — moderators use Reddit's native mod tools and modmail (see UGC Reportability below). The admin panel is hidden from all non-dev users in the client UI.
+
+**Admin endpoints and what they do:**
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /debug/profile-raw` | Inspect a player's raw Redis hash to diagnose data issues |
+| `POST /stars/reset` | Re-roll star claims when generation is bugged |
+| `POST /admin/reset-all` | Full game reset for a post (used when testing major updates) |
+| `POST /debug/complete-builds` | Instantly finish build queues (used to test late-game content) |
+| `POST /debug/spawn-enemy` | Create a test opponent for combat testing |
+| `POST /debug/reset-fleet` | Clear a player's fleet to recover from fleet state corruption |
+| `GET /admin/player-stats` | View all player summaries to diagnose balance issues |
+| `POST /api/bots/autobot/tick` | Force an NPC bot FSM tick (advance state) |
+| `GET /api/bots/autobot/state` | View current bot FSM state and location |
+| `POST /api/bots/autobot/reset` | Reset bot to initial dormant state |
+| `POST /api/bots/autobot/flyby` | Inject bot pose at player's current location for testing |
+
+**How authentication works:**
+
+- Created `requireDev` middleware (`src/server/core/admin-auth.ts`) that calls `reddit.getCurrentUsername()` — this is the **Devvit-authenticated Reddit identity**, resolved server-side from Reddit's own auth layer. It cannot be spoofed or forged from the client.
+- The middleware checks the authenticated username against a hardcoded developer list: `DEV_USERS = ['WeirdAd4511']`. If the caller is not on this list, the request is rejected with HTTP 403.
+- Applied to all admin/debug endpoints in `api.ts` and globally to all bot management routes via `bots.use('*', requireDev)`.
+- Removed a prior `body.admin` boolean that the client could set to bypass charge limits on `/debug/complete-builds` — this client-trusted flag no longer exists.
+- The client-side `ADMIN_USERS` list is retained only for **UI visibility** (shows/hides the admin panel in the settings screen). It has zero security impact — even if a user modified the client to show the panel, every API call would be rejected server-side by `requireDev`.
+
+### 3. UGC Reportability (Fixed)
+
+**Requirement:** All user-generated content must be reportable so moderators can act on policy violations.
+
+**What we did:**
+
+- Added a **⚑ report button** on every peer DM message in the conversation view (canvas-rendered, per-message hit target).
+- Created `POST /api/coms/dm/report` server endpoint that:
+  1. Validates and deduplicates reports via a `reports:{postId}` Redis sorted set
+  2. Sends a formatted report to **subreddit modmail** via `reddit.modMail.createConversation()` with the message content, reported user, reporter identity, and post context
+  3. Author is hidden (`isAuthorHidden: true`) so the reporter's identity is only visible to moderators
+- Reports flow through Reddit's own moderation infrastructure — moderators see them in their existing modmail workflow.
 
 ## License
 

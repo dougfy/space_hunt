@@ -11,6 +11,8 @@ import type {
   FleetTransferResponse,
   FreighterRoute,
   FreighterRouteResponse,
+  RaidRoute,
+  RaidRouteResponse,
   ResourceStore,
   ShipBuildingState,
   ShipTransit,
@@ -31,17 +33,20 @@ import type {
   SaveProfileRequest,
   ShotItem,
   ShotsResponse,
+  ToggleShieldResponse,
   UpgradeShipRequest,
   UpgradeShipResponse,
 } from '../../shared/api';
 import { normalizeSharedShipShape } from '../../shared/api';
 import {
   BUILDING_CATALOG,
+  computeDefenseScore,
   computeResourceCapFromBuildings,
   computeResourceRatesFromBuildings,
   getBuildingCost,
   getBuildingDurationSeconds,
   getBuildingTargetLevel,
+  getStarRichness,
   isBuildUnlocked,
   normalizeStarBuildings,
   reconcileStarBuildings,
@@ -49,16 +54,24 @@ import {
 import { SHIP_CATALOG, canBuildShip, getUpgradeTarget, canUpgradeShip } from '../../shared/ships';
 import { getStarName } from '../../shared/star-names';
 import { isTradingStation } from '../../shared/trading';
+import { pushSensorAlert } from './sensor-alerts';
 
 const ECONOMY_FIELD = 'economy';
 const DEFAULT_STORE: ResourceStore = { ore: 640, food: 640, energy: 640 };
 
 type StoredEconomyProfile = {
   stars: Record<string, StarEconomyState>;
+  homeStar?: number;
 };
 
 function starKey(starIndex: number): string {
   return `s:${starIndex}`;
+}
+
+/** Compute resource richness for a star, boosted if it's the player's home star */
+function starRichness(starIndex: number, economy: StoredEconomyProfile): ResourceStore {
+  const isHome = economy.homeStar === starIndex;
+  return getStarRichness(starIndex, isHome);
 }
 
 function clampStore(store: ResourceStore, cap: number): ResourceStore {
@@ -78,9 +91,10 @@ function normalizeStore(store: ResourceStore): ResourceStore {
   };
 }
 
-function normalizeStarState(star: Partial<StarEconomyState>, now: number): StarEconomyState {
+function normalizeStarState(star: Partial<StarEconomyState>, now: number, richness?: ResourceStore): StarEconomyState {
   const buildings = normalizeStarBuildings(star.buildings as Partial<Record<BuildType, Partial<StarEconomyState['buildings'][BuildType]>>>);
   const cap = computeResourceCapFromBuildings(buildings);
+  const shieldRaised = star.shieldRaised ?? false;
   const rawStore = normalizeStore({
     ore: star.store?.ore ?? DEFAULT_STORE.ore,
     food: star.store?.food ?? DEFAULT_STORE.food,
@@ -88,9 +102,10 @@ function normalizeStarState(star: Partial<StarEconomyState>, now: number): StarE
   });
   return {
     store: clampStore(rawStore, cap),
-    rates: computeResourceRatesFromBuildings(buildings),
+    rates: computeResourceRatesFromBuildings(buildings, shieldRaised, richness),
     cap,
     buildings,
+    shieldRaised,
     lastTickMs: Number.isFinite(star.lastTickMs) ? (star.lastTickMs as number) : now,
   };
 }
@@ -150,6 +165,8 @@ export type RedisGameStore = {
   hGetAll(key: string): Promise<Record<string, string>>;
   hGet(key: string, field: string): Promise<string | undefined>;
   hDel(key: string, fields: string[]): Promise<unknown>;
+  get(key: string): Promise<string | undefined>;
+  set(key: string, value: string): Promise<unknown>;
 };
 
 type StoredPose = PoseUpdateRequest & { ts: number };
@@ -219,6 +236,94 @@ export async function listRoomPoses(
       angle: data.angle,
       shape: normalizeSharedShipShape(data.shape),
     });
+
+    // Bot poses: compute realistic movement from time alone
+    if (sid.startsWith('bot:')) {
+      const last = items[items.length - 1]!;
+      const tier = data.tier ?? 0;
+      const t = now / 1000;
+
+      if (tier === 0) {
+        // Galaxy: patrol between base position and a nearby offset star
+        // 60-second cycle: travel out (0-25s), pause (25-35s), travel back (35-60s)
+        const cycleLen = 60;
+        const phase = t % cycleLen;
+        // Patrol offset — a "destination" ~15 units away in a slowly rotating direction
+        const patrolAngle = Math.floor(t / cycleLen) * 1.8;
+        const destX = data.x + Math.cos(patrolAngle) * 12;
+        const destY = data.y + Math.sin(patrolAngle) * 10;
+
+        let progress: number;
+        if (phase < 25) {
+          // Traveling to destination
+          progress = phase / 25;
+          // ease in-out
+          progress = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+        } else if (phase < 35) {
+          // Lingering at destination
+          progress = 1;
+        } else {
+          // Traveling back
+          progress = 1 - (phase - 35) / 25;
+          progress = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+        }
+        last.x = data.x + (destX - data.x) * progress;
+        last.y = data.y + (destY - data.y) * progress;
+        // Face travel direction
+        last.angle = Math.atan2(destY - data.y, destX - data.x) * (180 / Math.PI);
+        if (phase >= 35) last.angle += 180; // heading back
+
+      } else {
+        // System/Planet: arrive from edge, linger, depart to edge
+        // 45-second cycle: arrive (0-12s), linger (12-25s), depart (25-37s), gone (37-45s)
+        const cycleLen = 45;
+        const phase = t % cycleLen;
+
+        // Determine coordinate space based on tier
+        // System tier (1): 40×40, center at 20. Planet tier (3): ~6×6, center at 0.
+        const isPlanet = (data.tier ?? 0) === 3;
+        const CENTER = isPlanet ? 0 : 20;
+        const EDGE = isPlanet ? 2.5 : 18;
+        const LINGER_RADIUS = isPlanet ? 0.8 : 3;
+
+        // Entry and exit edges (rotate each cycle)
+        const cycleNum = Math.floor(t / cycleLen);
+        const entryAngle = cycleNum * 2.3;
+        const exitAngle = entryAngle + Math.PI * 0.7;
+        const entryX = CENTER + Math.cos(entryAngle) * EDGE;
+        const entryY = CENTER + Math.sin(entryAngle) * EDGE;
+        const exitX = CENTER + Math.cos(exitAngle) * EDGE;
+        const exitY = CENTER + Math.sin(exitAngle) * EDGE;
+        // Linger point — near center with slight offset
+        const lingerX = CENTER + Math.cos(entryAngle + 0.5) * LINGER_RADIUS;
+        const lingerY = CENTER + Math.sin(entryAngle + 0.5) * (LINGER_RADIUS * 0.7);
+
+        if (phase < 12) {
+          // Arriving: edge → linger point
+          let p = phase / 12;
+          p = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+          last.x = entryX + (lingerX - entryX) * p;
+          last.y = entryY + (lingerY - entryY) * p;
+          last.angle = Math.atan2(lingerY - entryY, lingerX - entryX) * (180 / Math.PI);
+        } else if (phase < 25) {
+          // Lingering: slow drift near center
+          const lp = (phase - 12) / 13;
+          last.x = lingerX + Math.cos(lp * Math.PI * 2) * (LINGER_RADIUS * 0.5);
+          last.y = lingerY + Math.sin(lp * Math.PI * 2) * (LINGER_RADIUS * 0.3);
+          last.angle = ((t * 15) % 360);
+        } else if (phase < 37) {
+          // Departing: linger point → exit edge
+          let p = (phase - 25) / 12;
+          p = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+          last.x = lingerX + (exitX - lingerX) * p;
+          last.y = lingerY + (exitY - lingerY) * p;
+          last.angle = Math.atan2(exitY - lingerY, exitX - lingerX) * (180 / Math.PI);
+        } else {
+          // Gone — remove from items
+          items.pop();
+        }
+      }
+    }
   }
 
   if (staleKeys.length > 0) {
@@ -242,6 +347,14 @@ export async function claimPod(
   }
 
   await store.hSet(hashKey, { [field]: body.username });
+
+  // Grant a complete charge for yellow pods
+  if (body.isYellow) {
+    const chargeKey = `complete_charges:${body.username.toLowerCase()}`;
+    const current = parseInt(await store.get(chargeKey) ?? '0', 10);
+    await store.set(chargeKey, String(current + 1));
+  }
+
   return { success: true, podId: body.podId, mine: true };
 }
 
@@ -312,6 +425,11 @@ export async function loadProfile(
       result.discoveredStars = JSON.parse(raw.discoveredStars);
     } catch { /* ignore bad data */ }
   }
+  if (raw.enhancedProbeStars) {
+    try {
+      result.enhancedProbeStars = JSON.parse(raw.enhancedProbeStars);
+    } catch { /* ignore bad data */ }
+  }
   if (raw.journeyDone === '1') {
     result.journeyDone = true;
   }
@@ -326,17 +444,22 @@ export async function loadStarEconomy(
 ): Promise<StarEconomyResponse> {
   const economy = await loadEconomyProfile(store, username);
   const key = starKey(starIndex);
-  const base = normalizeStarState(economy.stars[key] ?? {}, now);
+  const rich = starRichness(starIndex, economy);
+  const base = normalizeStarState(economy.stars[key] ?? {}, now, rich);
   const reconciledBuildings = reconcileStarBuildings(base.buildings, now);
   const reconciledBase: StarEconomyState = {
     ...base,
     buildings: reconciledBuildings,
-    rates: computeResourceRatesFromBuildings(reconciledBuildings),
+    rates: computeResourceRatesFromBuildings(reconciledBuildings, base.shieldRaised, rich),
     cap: computeResourceCapFromBuildings(reconciledBuildings),
   };
   const ticked = tickStarEconomy(reconciledBase, now);
   economy.stars[key] = ticked;
   await saveEconomyProfile(store, username, economy);
+
+  // Load complete charges
+  const chargeKey = `complete_charges:${username.toLowerCase()}`;
+  const charges = parseInt(await store.get(chargeKey) ?? '0', 10);
 
   return {
     starKey: key,
@@ -345,7 +468,48 @@ export async function loadStarEconomy(
     rates: ticked.rates,
     cap: ticked.cap,
     buildings: ticked.buildings,
+    shieldRaised: ticked.shieldRaised,
+    defenseScore: computeDefenseScore(ticked.buildings, ticked.shieldRaised),
     lastTickMs: ticked.lastTickMs,
+    completeCharges: charges,
+    richness: rich,
+  };
+}
+
+export async function toggleShield(
+  store: RedisGameStore,
+  username: string,
+  starIndex: number,
+  now = Date.now(),
+): Promise<ToggleShieldResponse> {
+  const economy = await loadEconomyProfile(store, username);
+  const key = starKey(starIndex);
+  const rich = starRichness(starIndex, economy);
+  const base = normalizeStarState(economy.stars[key] ?? {}, now, rich);
+  const reconciledBuildings = reconcileStarBuildings(base.buildings, now);
+
+  if (reconciledBuildings.shield.level < 1) {
+    throw new Error('No shield generator built');
+  }
+
+  const newShieldRaised = !base.shieldRaised;
+  const rates = computeResourceRatesFromBuildings(reconciledBuildings, newShieldRaised, rich);
+  const updated: StarEconomyState = {
+    ...base,
+    buildings: reconciledBuildings,
+    shieldRaised: newShieldRaised,
+    rates,
+    cap: computeResourceCapFromBuildings(reconciledBuildings),
+  };
+  const ticked = tickStarEconomy(updated, now);
+  economy.stars[key] = ticked;
+  await saveEconomyProfile(store, username, economy);
+
+  return {
+    ok: true,
+    shieldRaised: newShieldRaised,
+    rates: ticked.rates,
+    defenseScore: computeDefenseScore(ticked.buildings, newShieldRaised),
   };
 }
 
@@ -356,12 +520,13 @@ export async function startBuildingUpgrade(
 ): Promise<BuildBuildingResponse> {
   const economy = await loadEconomyProfile(store, body.username);
   const key = starKey(body.starIndex);
-  const base = normalizeStarState(economy.stars[key] ?? {}, now);
+  const rich = starRichness(body.starIndex, economy);
+  const base = normalizeStarState(economy.stars[key] ?? {}, now, rich);
   const reconciledBuildings = reconcileStarBuildings(base.buildings, now);
   const current: StarEconomyState = tickStarEconomy({
     ...base,
     buildings: reconciledBuildings,
-    rates: computeResourceRatesFromBuildings(reconciledBuildings),
+    rates: computeResourceRatesFromBuildings(reconciledBuildings, false, rich),
     cap: computeResourceCapFromBuildings(reconciledBuildings),
   }, now);
 
@@ -398,9 +563,10 @@ export async function startBuildingUpgrade(
   const nextCap = computeResourceCapFromBuildings(nextBuildings);
   const nextState: StarEconomyState = {
     store: clampStore(subtractResources(current.store, cost), nextCap),
-    rates: computeResourceRatesFromBuildings(nextBuildings),
+    rates: computeResourceRatesFromBuildings(nextBuildings, current.shieldRaised, rich),
     cap: nextCap,
     buildings: nextBuildings,
+    shieldRaised: current.shieldRaised ?? false,
     lastTickMs: now,
   };
 
@@ -415,6 +581,8 @@ export async function startBuildingUpgrade(
     rates: nextState.rates,
     cap: nextState.cap,
     buildings: nextState.buildings,
+    shieldRaised: nextState.shieldRaised,
+    defenseScore: computeDefenseScore(nextState.buildings, nextState.shieldRaised),
     lastTickMs: nextState.lastTickMs,
   };
 }
@@ -443,6 +611,7 @@ export async function saveProfile(
   if (body.name !== undefined) fields.name = body.name;
   if (body.lastPosition !== undefined) fields.lastPosition = JSON.stringify(body.lastPosition);
   if (body.discoveredStars !== undefined) fields.discoveredStars = JSON.stringify(body.discoveredStars);
+  if (body.enhancedProbeStars !== undefined) fields.enhancedProbeStars = JSON.stringify(body.enhancedProbeStars);
   if (body.journeyDone !== undefined) fields.journeyDone = body.journeyDone ? '1' : '0';
   if (Object.keys(fields).length > 0) {
     await store.hSet(`profile:${body.username}`, fields);
@@ -460,6 +629,7 @@ type StoredShipsProfile = {
   }>;
   transits?: ShipTransit[];
   freighterRoutes?: FreighterRoute[];
+  raidRoutes?: RaidRoute[];
 };
 
 /** Base transit time in seconds; divided by ship speed. */
@@ -518,14 +688,11 @@ export async function loadStarShips(
   const hadBuilding = !!starData.building;
   reconcileShipBuilding(starData, now);
 
-  // Seed starter Scout only on very first load (entire fleet profile is empty)
-  const hasAnyShips = Object.values(profile.stars).some(
-    (s) => {
-      const d = normalizeStarShipData(s);
-      return d.ships.length > 0 || d.building != null;
-    },
-  );
-  if (!hasAnyShips && starData.ships.length === 0 && !starData.building && (!profile.transits || profile.transits.length === 0)) {
+  // Seed a Scout if no upgrade-path ship exists at this star (Scout is the player's primary ship)
+  const UPGRADE_PATH_IDS = [1, 3, 4, 5, 6, 7];
+  const hasUpgradeShip = starData.ships.some(s => s.count > 0 && UPGRADE_PATH_IDS.includes(s.typeId));
+  const buildingUpgradeShip = starData.building != null && UPGRADE_PATH_IDS.includes(starData.building.typeId);
+  if (!hasUpgradeShip && !buildingUpgradeShip) {
     starData.ships.push({ typeId: 1, count: 1 });
     profile.stars[key] = starData;
     await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
@@ -543,25 +710,37 @@ export async function buyShip(
   now = Date.now(),
 ): Promise<BuyShipResponse> {
   const { username, starIndex, shipTypeId } = body;
+  const useBlueprint = !!(body as { useBlueprint?: boolean }).useBlueprint;
 
   const catalog = SHIP_CATALOG[shipTypeId];
   if (!catalog) throw new Error(`Unknown ship type: ${shipTypeId}`);
 
+  // If using blueprint, verify and deduct a charge
+  if (useBlueprint) {
+    const chargeKey = `complete_charges:${username.toLowerCase()}`;
+    const charges = parseInt(await store.get(chargeKey) ?? '0', 10);
+    if (charges < 1) throw new Error('No blueprint charges available');
+    await store.set(chargeKey, String(charges - 1));
+  }
+
   // Load economy and check dock level
   const economy = await loadEconomyProfile(store, username);
   const key = starKey(starIndex);
-  const base = normalizeStarState(economy.stars[key] ?? {}, now);
+  const rich = starRichness(starIndex, economy);
+  const base = normalizeStarState(economy.stars[key] ?? {}, now, rich);
   const reconciledBuildings = reconcileStarBuildings(base.buildings, now);
   const current: StarEconomyState = tickStarEconomy({
     ...base,
     buildings: reconciledBuildings,
-    rates: computeResourceRatesFromBuildings(reconciledBuildings),
+    rates: computeResourceRatesFromBuildings(reconciledBuildings, false, rich),
     cap: computeResourceCapFromBuildings(reconciledBuildings),
   }, now);
 
-  const dockLevel = current.buildings.dock.level;
-  if (dockLevel < 1) throw new Error('No dock built at this star');
-  if (!canBuildShip(shipTypeId, dockLevel)) throw new Error('Dock level too low for this ship type');
+  if (!useBlueprint) {
+    const dockLevel = current.buildings.dock.level;
+    if (dockLevel < 1) throw new Error('No dock built at this star');
+    if (!canBuildShip(shipTypeId, dockLevel)) throw new Error('Dock level too low for this ship type');
+  }
 
   // Check if already building
   const shipsRaw = await store.hGet(`profile:${username}`, SHIPS_FIELD);
@@ -571,17 +750,20 @@ export async function buyShip(
 
   if (starData.building) throw new Error('Already building a ship at this star');
 
-  // Check resource cost (single unit)
-  if (!hasEnoughResources(current.store, catalog.cost)) throw new Error('Insufficient resources');
+  if (!useBlueprint) {
+    // Check resource cost (single unit)
+    if (!hasEnoughResources(current.store, catalog.cost)) throw new Error('Insufficient resources');
+    // Deduct resources
+    current.store = subtractResources(current.store, catalog.cost);
+  }
 
-  // Deduct resources
-  current.store = subtractResources(current.store, catalog.cost);
   current.lastTickMs = now;
   economy.stars[key] = current;
   await saveEconomyProfile(store, username, economy);
 
-  // Start building
-  starData.building = { typeId: shipTypeId, completeAt: now + catalog.buildSeconds * 1000 };
+  // Start building (instant if blueprint)
+  const completeAt = useBlueprint ? now : now + catalog.buildSeconds * 1000;
+  starData.building = { typeId: shipTypeId, completeAt };
   shipsProfile.stars[key] = starData;
   await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(shipsProfile) });
 
@@ -594,6 +776,7 @@ export async function upgradeShip(
   now = Date.now(),
 ): Promise<UpgradeShipResponse> {
   const { username, starIndex, fromTypeId } = body;
+  const useBlueprint = !!(body as { useBlueprint?: boolean }).useBlueprint;
 
   // Validate upgrade path
   const targetId = getUpgradeTarget(fromTypeId);
@@ -602,21 +785,32 @@ export async function upgradeShip(
   const targetCatalog = SHIP_CATALOG[targetId];
   if (!targetCatalog) throw new Error(`Unknown target ship type: ${targetId}`);
 
+  // If using blueprint, verify and deduct a charge
+  if (useBlueprint) {
+    const chargeKey = `complete_charges:${username.toLowerCase()}`;
+    const charges = parseInt(await store.get(chargeKey) ?? '0', 10);
+    if (charges < 1) throw new Error('No blueprint charges available');
+    await store.set(chargeKey, String(charges - 1));
+  }
+
   // Load economy and check dock level
   const economy = await loadEconomyProfile(store, username);
   const key = starKey(starIndex);
-  const base = normalizeStarState(economy.stars[key] ?? {}, now);
+  const rich = starRichness(starIndex, economy);
+  const base = normalizeStarState(economy.stars[key] ?? {}, now, rich);
   const reconciledBuildings = reconcileStarBuildings(base.buildings, now);
   const current: StarEconomyState = tickStarEconomy({
     ...base,
     buildings: reconciledBuildings,
-    rates: computeResourceRatesFromBuildings(reconciledBuildings),
+    rates: computeResourceRatesFromBuildings(reconciledBuildings, false, rich),
     cap: computeResourceCapFromBuildings(reconciledBuildings),
   }, now);
 
-  const dockLevel = current.buildings.dock.level;
-  if (dockLevel < 1) throw new Error('No dock built at this star');
-  if (!canUpgradeShip(fromTypeId, dockLevel)) throw new Error('Dock level too low for this upgrade');
+  if (!useBlueprint) {
+    const dockLevel = current.buildings.dock.level;
+    if (dockLevel < 1) throw new Error('No dock built at this star');
+    if (!canUpgradeShip(fromTypeId, dockLevel)) throw new Error('Dock level too low for this upgrade');
+  }
 
   // Load ships and check ownership
   const shipsRaw = await store.hGet(`profile:${username}`, SHIPS_FIELD);
@@ -630,11 +824,13 @@ export async function upgradeShip(
   const sourceSlot = starData.ships.find((s) => s.typeId === fromTypeId);
   if (!sourceSlot || sourceSlot.count < 1) throw new Error('You do not own this ship type at this star');
 
-  // Check resource cost
-  if (!hasEnoughResources(current.store, targetCatalog.cost)) throw new Error('Insufficient resources');
+  if (!useBlueprint) {
+    // Check resource cost
+    if (!hasEnoughResources(current.store, targetCatalog.cost)) throw new Error('Insufficient resources');
+    // Deduct resources
+    current.store = subtractResources(current.store, targetCatalog.cost);
+  }
 
-  // Deduct resources
-  current.store = subtractResources(current.store, targetCatalog.cost);
   current.lastTickMs = now;
   economy.stars[key] = current;
   await saveEconomyProfile(store, username, economy);
@@ -643,8 +839,9 @@ export async function upgradeShip(
   sourceSlot.count -= 1;
   starData.ships = starData.ships.filter((s) => s.count > 0);
 
-  // Start building the upgraded ship
-  starData.building = { typeId: targetId, completeAt: now + targetCatalog.buildSeconds * 1000 };
+  // Start building the upgraded ship (instant if blueprint)
+  const completeAt = useBlueprint ? now : now + targetCatalog.buildSeconds * 1000;
+  starData.building = { typeId: targetId, completeAt };
   shipsProfile.stars[key] = starData;
   await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(shipsProfile) });
 
@@ -665,7 +862,9 @@ export async function loadAllFleet(
 
   // Track stars newly discovered by probe arrival
   const PROBE_TYPE_IDS = [11, 12]; // Basic Probe, Enhanced Probe
+  const ENHANCED_PROBE_ID = 12;
   const newlyDiscovered: number[] = [];
+  const newlyEnhanced: number[] = [];
 
   // ── Reconcile completed transits ──
   const pendingTransits: ShipTransit[] = [];
@@ -678,6 +877,9 @@ export async function loadAllFleet(
         // If a probe arrived, mark the star as discovered but consume the probe
         if (PROBE_TYPE_IDS.includes(t.shipTypeId)) {
           newlyDiscovered.push(t.toStarIndex);
+          if (t.shipTypeId === ENHANCED_PROBE_ID) {
+            newlyEnhanced.push(t.toStarIndex);
+          }
         } else {
           // Non-probe ships: add to destination fleet
           const destSlot = toData.ships.find((s) => s.typeId === t.shipTypeId);
@@ -727,6 +929,17 @@ export async function loadAllFleet(
       const merged = [...new Set([...existing, ...newlyDiscovered])];
       await store.hSet(profileKey, { discoveredStars: JSON.stringify(merged) });
     }
+    // If enhanced probes arrived, update enhancedProbeStars on the profile
+    if (newlyEnhanced.length > 0) {
+      const profileKey = `profile:${username}`;
+      let existing: number[] = [];
+      try {
+        const epRaw = await store.hGet(profileKey, 'enhancedProbeStars');
+        if (epRaw) existing = JSON.parse(epRaw);
+      } catch { /* ignore */ }
+      const merged = [...new Set([...existing, ...newlyEnhanced])];
+      await store.hSet(profileKey, { enhancedProbeStars: JSON.stringify(merged) });
+    }
   }
 
   // ── Reconcile freighter routes ──
@@ -740,7 +953,7 @@ export async function loadAllFleet(
           // Arrived at pickup star — load cargo from target star's economy
           const economy = await loadEconomyProfile(store, username);
           const tKey = starKey(route.targetStarIndex);
-          const targetStar = normalizeStarState(economy.stars[tKey] ?? {}, now);
+          const targetStar = normalizeStarState(economy.stars[tKey] ?? {}, now, starRichness(route.targetStarIndex, economy));
           const ticked = tickStarEconomy(targetStar, now);
           const capacity = SHIP_CATALOG[2].transport; // 500
 
@@ -769,7 +982,7 @@ export async function loadAllFleet(
           // Return leg complete — deliver cargo to home star's economy
           const economy = await loadEconomyProfile(store, username);
           const hKey = starKey(route.homeStarIndex);
-          const homeStar = normalizeStarState(economy.stars[hKey] ?? {}, now);
+          const homeStar = normalizeStarState(economy.stars[hKey] ?? {}, now, starRichness(route.homeStarIndex, economy));
           const ticked = tickStarEconomy(homeStar, now);
           ticked.store.ore = Math.min(ticked.cap, ticked.store.ore + route.cargo.ore);
           ticked.store.food = Math.min(ticked.cap, ticked.store.food + route.cargo.food);
@@ -798,14 +1011,57 @@ export async function loadAllFleet(
     await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
   }
 
+  // ── Reconcile raid routes ──
+  const raidResult = await reconcileRaidRoutes(store, username, profile, now);
+  if (raidResult.dirty) {
+    profile.raidRoutes = raidResult.activeRoutes;
+    await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
+  }
+  const activeRaidRoutes = raidResult.activeRoutes;
+
   // Load discovered stars list to send to client
   let discoveredStars: number[] = [];
+  let enhancedProbeStars: number[] = [];
   try {
     const dsRaw = await store.hGet(`profile:${username}`, 'discoveredStars');
     if (dsRaw) discoveredStars = JSON.parse(dsRaw);
+    const epRaw = await store.hGet(`profile:${username}`, 'enhancedProbeStars');
+    if (epRaw) enhancedProbeStars = JSON.parse(epRaw);
   } catch { /* ignore */ }
 
-  return { stars: result, transits: pendingTransits, freighterRoutes: activeRoutes, discoveredStars };
+  // ── Alliance map sharing: merge discovered stars from all alliance members ──
+  try {
+    const allianceIdRaw = await store.get(`player_alliance:${username.toLowerCase()}`);
+    if (allianceIdRaw) {
+      const allianceDataRaw = await store.get(`alliance:${allianceIdRaw}`);
+      if (allianceDataRaw) {
+        const alliance = JSON.parse(allianceDataRaw) as { members: string[] };
+        const allDiscovered = new Set(discoveredStars);
+        const allEnhanced = new Set(enhancedProbeStars);
+        for (const member of alliance.members) {
+          if (member === username) continue;
+          const memberDs = await store.hGet(`profile:${member}`, 'discoveredStars');
+          if (memberDs) {
+            try {
+              const stars = JSON.parse(memberDs) as number[];
+              for (const s of stars) allDiscovered.add(s);
+            } catch { /* ignore */ }
+          }
+          const memberEp = await store.hGet(`profile:${member}`, 'enhancedProbeStars');
+          if (memberEp) {
+            try {
+              const stars = JSON.parse(memberEp) as number[];
+              for (const s of stars) allEnhanced.add(s);
+            } catch { /* ignore */ }
+          }
+        }
+        discoveredStars = [...allDiscovered];
+        enhancedProbeStars = [...allEnhanced];
+      }
+    }
+  } catch { /* alliance sharing is best-effort */ }
+
+  return { stars: result, transits: pendingTransits, freighterRoutes: activeRoutes, raidRoutes: activeRaidRoutes, discoveredStars, enhancedProbeStars };
 }
 
 /** Transfer ships from one star to another (creates in-transit record). */
@@ -951,7 +1207,7 @@ export async function cancelFreighterRoute(
   if (route.leg === 'return' && (route.cargo.ore > 0 || route.cargo.food > 0 || route.cargo.energy > 0)) {
     const economy = await loadEconomyProfile(store, username);
     const hKey = starKey(route.homeStarIndex);
-    const homeStar = normalizeStarState(economy.stars[hKey] ?? {}, now);
+    const homeStar = normalizeStarState(economy.stars[hKey] ?? {}, now, starRichness(route.homeStarIndex, economy));
     const ticked = tickStarEconomy(homeStar, now);
     ticked.store.ore = Math.min(ticked.cap, ticked.store.ore + route.cargo.ore);
     ticked.store.food = Math.min(ticked.cap, ticked.store.food + route.cargo.food);
@@ -964,6 +1220,255 @@ export async function cancelFreighterRoute(
   await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
 
   return { ok: true };
+}
+
+// ── Raid Routes ─────────────────────────────────────────────────────────────
+
+const RAIDER_TYPE_ID: ShipTypeId = 15 as ShipTypeId;
+const RAIDER_BASE_POWER = 40; // per raider (matches offense stat)
+
+/** Dispatch a Raider to an enemy star. One-shot: outbound → raid → return or destroyed. */
+export async function assignRaidRoute(
+  store: RedisGameStore,
+  username: string,
+  homeStarIndex: number,
+  targetStarIndex: number,
+  now = Date.now(),
+): Promise<RaidRouteResponse> {
+  if (homeStarIndex === targetStarIndex) throw new Error('Cannot raid own star');
+
+  const raw = await store.hGet(`profile:${username}`, SHIPS_FIELD);
+  const profile = parseShipsProfile(raw);
+
+  const homeKey = starKey(homeStarIndex);
+  const homeData = normalizeStarShipData(profile.stars[homeKey]);
+  reconcileShipBuilding(homeData, now);
+
+  // Check player has a Raider at the home star
+  const raiderSlot = homeData.ships.find((s) => s.typeId === RAIDER_TYPE_ID);
+  if (!raiderSlot || raiderSlot.count < 1) {
+    throw new Error('No Raider at this star');
+  }
+
+  // Remove one Raider from the home star fleet
+  raiderSlot.count -= 1;
+  homeData.ships = homeData.ships.filter((s) => s.count > 0);
+
+  // Calculate outbound transit time
+  const speed = SHIP_CATALOG[RAIDER_TYPE_ID].speed;
+  const transitMs = Math.round((BASE_TRANSIT_SECONDS / speed) * 1000);
+
+  // Compute success chance at dispatch time so client can display risk
+  const targetDefense = await getStarDefenseScore(store, targetStarIndex);
+  const successChance = targetDefense > 0
+    ? RAIDER_BASE_POWER / (RAIDER_BASE_POWER + targetDefense)
+    : 1.0;
+
+  const route: RaidRoute = {
+    id: `rd_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    homeStarIndex,
+    targetStarIndex,
+    cargo: { ore: 0, food: 0, energy: 0 },
+    departedAt: now,
+    arrivalAt: now + transitMs,
+    leg: 'outbound',
+    status: 'in-transit',
+    successChance,
+  };
+
+  profile.stars[homeKey] = homeData;
+  if (!profile.raidRoutes) profile.raidRoutes = [];
+  profile.raidRoutes.push(route);
+  await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(profile) });
+
+  return { ok: true, route };
+}
+
+/**
+ * Reconcile raid routes that have arrived. Called from loadAllFleet.
+ * - Outbound arrival: resolve combat vs target star defense score.
+ *   Success → steal resources, start return leg.
+ *   Failure → raider destroyed, route removed.
+ * - Return arrival: deliver cargo to home star, return raider to fleet.
+ */
+async function reconcileRaidRoutes(
+  store: RedisGameStore,
+  username: string,
+  profile: { raidRoutes?: RaidRoute[]; stars: Record<string, unknown> },
+  now: number,
+): Promise<{ activeRoutes: RaidRoute[]; dirty: boolean }> {
+  const activeRoutes: RaidRoute[] = [];
+  let dirty = false;
+
+  if (!profile.raidRoutes || profile.raidRoutes.length === 0) {
+    return { activeRoutes: [], dirty: false };
+  }
+
+  for (const route of profile.raidRoutes) {
+    if (route.arrivalAt > now) {
+      activeRoutes.push(route);
+      continue;
+    }
+
+    dirty = true;
+
+    if (route.leg === 'outbound') {
+      // Push sensor alert to the target star owner
+      const targetOwner = await findStarOwner(store, route.targetStarIndex);
+      if (targetOwner && targetOwner !== username) {
+        await pushSensorAlert(store, targetOwner, {
+          type: 'raider',
+          starIndex: route.targetStarIndex,
+          from: username,
+          ts: now,
+        });
+      }
+
+      // Resolve raid at target star
+      const targetDefense = await getStarDefenseScore(store, route.targetStarIndex);
+
+      // Combat resolution: raider power vs defense
+      const raiderPower = RAIDER_BASE_POWER;
+      const successChance = targetDefense > 0
+        ? raiderPower / (raiderPower + targetDefense)
+        : 1.0; // No defenses = guaranteed success
+
+      // Deterministic roll based on route id
+      const roll = (parseInt(route.id.slice(-6), 36) % 100) / 100;
+      const success = roll < successChance;
+
+      if (success) {
+        // Steal resources from target star's owner
+        const stolen = await stealFromStar(store, route.targetStarIndex, SHIP_CATALOG[RAIDER_TYPE_ID].transport, now);
+
+        // Start return leg with stolen cargo
+        const speed = SHIP_CATALOG[RAIDER_TYPE_ID].speed;
+        const transitMs = Math.round((BASE_TRANSIT_SECONDS / speed) * 1000);
+        route.cargo = stolen;
+        route.leg = 'return';
+        route.departedAt = now;
+        route.arrivalAt = now + transitMs;
+        route.status = 'success';
+        activeRoutes.push(route);
+      } else {
+        // Raider destroyed — route removed
+        route.status = 'destroyed';
+      }
+    } else {
+      // Return leg complete — deliver cargo to home star + return raider to fleet
+      const economy = await loadEconomyProfile(store, username);
+      const hKey = starKey(route.homeStarIndex);
+      const homeStar = normalizeStarState(economy.stars[hKey] ?? {}, now, starRichness(route.homeStarIndex, economy));
+      const ticked = tickStarEconomy(homeStar, now);
+      ticked.store.ore = Math.min(ticked.cap, ticked.store.ore + route.cargo.ore);
+      ticked.store.food = Math.min(ticked.cap, ticked.store.food + route.cargo.food);
+      ticked.store.energy = Math.min(ticked.cap, ticked.store.energy + route.cargo.energy);
+      economy.stars[hKey] = ticked;
+      await saveEconomyProfile(store, username, economy);
+
+      // Return raider to home star fleet
+      const homeKey = starKey(route.homeStarIndex);
+      const homeData = normalizeStarShipData(profile.stars[homeKey]);
+      const slot = homeData.ships.find((s) => s.typeId === RAIDER_TYPE_ID);
+      if (slot) {
+        slot.count += 1;
+      } else {
+        homeData.ships.push({ typeId: RAIDER_TYPE_ID, count: 1 });
+      }
+      profile.stars[homeKey] = homeData;
+    }
+  }
+
+  return { activeRoutes, dirty };
+}
+
+/** Get the defense score of whatever player owns a star. Returns 0 if unowned/no defenses. */
+async function getStarDefenseScore(store: RedisGameStore, starIndex: number): Promise<number> {
+  const claimsRaw = await store.hGetAll('star_claims');
+  let owner: string | null = null;
+  for (const [, val] of Object.entries(claimsRaw)) {
+    try {
+      const claims = JSON.parse(val) as Array<{ starIndex: number; username: string }>;
+      const match = claims.find((c) => c.starIndex === starIndex);
+      if (match) { owner = match.username; break; }
+    } catch {
+      try {
+        const claim = JSON.parse(val) as { starIndex: number; username: string };
+        if (claim.starIndex === starIndex) { owner = claim.username; break; }
+      } catch { /* skip */ }
+    }
+  }
+  if (!owner) return 0;
+
+  const economy = await loadEconomyProfile(store, owner);
+  const sKey = starKey(starIndex);
+  const starState = economy.stars[sKey];
+  if (!starState) return 0;
+
+  const normalized = normalizeStarState(starState, Date.now(), starRichness(starIndex, economy));
+  return computeDefenseScore(normalized.buildings, normalized.shieldRaised).total;
+}
+
+/** Find the owner username of a star (null if unclaimed). */
+async function findStarOwner(store: RedisGameStore, starIndex: number): Promise<string | null> {
+  const claimsRaw = await store.hGetAll('star_claims');
+  for (const [, val] of Object.entries(claimsRaw)) {
+    try {
+      const claims = JSON.parse(val) as Array<{ starIndex: number; username: string }>;
+      const match = claims.find((c) => c.starIndex === starIndex);
+      if (match) return match.username;
+    } catch {
+      try {
+        const claim = JSON.parse(val) as { starIndex: number; username: string };
+        if (claim.starIndex === starIndex) return claim.username;
+      } catch { /* skip */ }
+    }
+  }
+  return null;
+}
+
+/** Steal resources from whoever owns a star (deducted from their economy). */
+async function stealFromStar(
+  store: RedisGameStore,
+  starIndex: number,
+  capacity: number,
+  now: number,
+): Promise<ResourceStore> {
+  const claimsRaw = await store.hGetAll('star_claims');
+  let owner: string | null = null;
+  for (const [, val] of Object.entries(claimsRaw)) {
+    try {
+      const claims = JSON.parse(val) as Array<{ starIndex: number; username: string }>;
+      const match = claims.find((c) => c.starIndex === starIndex);
+      if (match) { owner = match.username; break; }
+    } catch {
+      try {
+        const claim = JSON.parse(val) as { starIndex: number; username: string };
+        if (claim.starIndex === starIndex) { owner = claim.username; break; }
+      } catch { /* skip */ }
+    }
+  }
+  if (!owner) return { ore: 0, food: 0, energy: 0 };
+
+  const economy = await loadEconomyProfile(store, owner);
+  const sKey = starKey(starIndex);
+  const starState = normalizeStarState(economy.stars[sKey] ?? {}, now, starRichness(starIndex, economy));
+  const ticked = tickStarEconomy(starState, now);
+
+  // Steal up to capacity split evenly across resources
+  const perResource = Math.floor(capacity / 3);
+  const cargo: ResourceStore = {
+    ore: Math.min(ticked.store.ore, perResource),
+    food: Math.min(ticked.store.food, perResource),
+    energy: Math.min(ticked.store.energy, perResource),
+  };
+  ticked.store.ore -= cargo.ore;
+  ticked.store.food -= cargo.food;
+  ticked.store.energy -= cargo.energy;
+  economy.stars[sKey] = ticked;
+  await saveEconomyProfile(store, owner, economy);
+
+  return cargo;
 }
 
 /**
@@ -979,7 +1484,8 @@ export async function completeAllBuilds(
 
   // Complete building upgrades
   const economy = await loadEconomyProfile(store, username);
-  const base = normalizeStarState(economy.stars[key] ?? {}, now);
+  const rich = starRichness(starIndex, economy);
+  const base = normalizeStarState(economy.stars[key] ?? {}, now, rich);
   for (const type of Object.keys(base.buildings) as Array<keyof typeof base.buildings>) {
     const b = base.buildings[type];
     if (b.status === 'UPGRADING' && b.completeAt != null && b.completeAt > now) {
@@ -995,7 +1501,7 @@ export async function completeAllBuilds(
     const next: StarEconomyState = tickStarEconomy({
       ...base,
       buildings: reconciledBuildings,
-      rates: computeResourceRatesFromBuildings(reconciledBuildings),
+      rates: computeResourceRatesFromBuildings(reconciledBuildings, false, rich),
       cap: computeResourceCapFromBuildings(reconciledBuildings),
     }, now);
     economy.stars[key] = next;
@@ -1038,6 +1544,8 @@ export async function claimHomeStar(
   const registryKey = `stars:${postId}`;
   const allClaims = await store.hGetAll(registryKey);
 
+  console.log(`[CLAIM] claimHomeStar user=${username} postId=${postId} registryKey=${registryKey} existingClaims=${JSON.stringify(allClaims)}`);
+
   // Check if user already has a claim
   for (const [key, owner] of Object.entries(allClaims)) {
     if (owner === username) {
@@ -1046,6 +1554,7 @@ export async function claimHomeStar(
         starIndex: parseInt(k.replace('s:', ''), 10),
         username: v,
       }));
+      console.log(`[CLAIM] user=${username} already has claim at star ${starIndex}`);
       return { homeStar: starIndex, claimed };
     }
   }
@@ -1070,32 +1579,84 @@ export async function claimHomeStar(
         migratedStarIndex = idx;
       }
     }
+    console.log(`[CLAIM] user=${username} migration: existingStarKeys=${existingStarKeys.join(',')} migratedStarIndex=${migratedStarIndex}`);
   }
 
   const stars = generateStarPositions(postId);
   const claimedIndices = Object.keys(allClaims).map((k) => parseInt(k.replace('s:', ''), 10));
 
   let newStarIndex: number;
+  let pickMethod: string;
   if (migratedStarIndex != null) {
-    // Existing player — claim their built-up star
     newStarIndex = migratedStarIndex;
-    // If another user already claimed this star (shouldn't happen normally), still honor the migration
-    // since the economy data proves this player was here first
+    pickMethod = 'migration';
   } else if (claimedIndices.length === 0) {
     newStarIndex = getDefaultHomeStarIndex(stars);
+    pickMethod = 'default (no claims seen)';
   } else {
     newStarIndex = pickNextHomeStar(stars, claimedIndices);
+    pickMethod = `pickNext (excluded=${claimedIndices.join(',')})`;
+  }
+
+  console.log(`[CLAIM] user=${username} picked star ${newStarIndex} via ${pickMethod}`);
+
+  // Double-check the chosen star isn't already claimed (hGetAll can return stale data)
+  const existingOwner = await store.hGet(registryKey, `s:${newStarIndex}`);
+  if (existingOwner && existingOwner !== username) {
+    console.log(`[CLAIM] user=${username} CONFLICT: star ${newStarIndex} already owned by ${existingOwner}, re-picking`);
+    // Star is taken — rebuild claimed list from individual checks and pick again
+    const freshClaims = await store.hGetAll(registryKey);
+    const freshClaimed = Object.keys(freshClaims).map((k) => parseInt(k.replace('s:', ''), 10));
+    if (!freshClaimed.includes(newStarIndex)) freshClaimed.push(newStarIndex);
+    newStarIndex = pickNextHomeStar(stars, freshClaimed);
+    console.log(`[CLAIM] user=${username} re-picked star ${newStarIndex} (freshClaimed=${freshClaimed.join(',')})`);
   }
 
   // Persist the claim
   await store.hSet(registryKey, { [`s:${newStarIndex}`]: username });
 
+  // Verify we won (race-condition guard): re-read and check owner
+  const verifyOwner = await store.hGet(registryKey, `s:${newStarIndex}`);
+  if (verifyOwner && verifyOwner !== username) {
+    console.log(`[CLAIM] user=${username} RACE: star ${newStarIndex} taken by ${verifyOwner} after write, retrying`);
+    const retryAllClaims = await store.hGetAll(registryKey);
+    const retryClaimed = Object.keys(retryAllClaims).map((k) => parseInt(k.replace('s:', ''), 10));
+    newStarIndex = pickNextHomeStar(stars, retryClaimed);
+    await store.hSet(registryKey, { [`s:${newStarIndex}`]: username });
+    console.log(`[CLAIM] user=${username} final star ${newStarIndex}`);
+  }
+
   // Re-read to get consistent snapshot (in case of concurrent writes)
   const updatedClaims = await store.hGetAll(registryKey);
-  const claimed = Object.entries(updatedClaims).map(([k, v]) => ({
+
+  // Deduplicate: if this user ended up with multiple claims (race from two browsers),
+  // keep only the one we just wrote and remove the others.
+  const userEntries = Object.entries(updatedClaims).filter(([, v]) => v === username);
+  if (userEntries.length > 1) {
+    console.log(`[CLAIM] user=${username} has ${userEntries.length} claims — deduplicating, keeping s:${newStarIndex}`);
+    const toRemove = userEntries
+      .filter(([k]) => k !== `s:${newStarIndex}`)
+      .map(([k]) => k);
+    if (toRemove.length > 0) {
+      await store.hDel(registryKey, toRemove);
+    }
+  }
+
+  // Re-read after dedup
+  const finalClaims = await store.hGetAll(registryKey);
+  const claimed = Object.entries(finalClaims).map(([k, v]) => ({
     starIndex: parseInt(k.replace('s:', ''), 10),
     username: v,
   }));
+
+  console.log(`[CLAIM] user=${username} DONE: homeStar=${newStarIndex} totalClaims=${claimed.length} allClaimed=${JSON.stringify(claimed)}`);
+
+  // Persist homeStar on economy profile so richness boost applies
+  const econForHome = await loadEconomyProfile(store, username);
+  if (econForHome.homeStar !== newStarIndex) {
+    econForHome.homeStar = newStarIndex;
+    await saveEconomyProfile(store, username, econForHome);
+  }
 
   return { homeStar: newStarIndex, claimed };
 }
@@ -1192,7 +1753,10 @@ export async function colonizeStar(
       hab: { level: 0, status: 'LOCKED', completeAt: null },
       warehouse: { level: 0, status: 'LOCKED', completeAt: null },
       dock: { level: 1, status: 'ACTIVE', completeAt: null },
+      shield: { level: 0, status: 'LOCKED', completeAt: null },
+      cannon: { level: 0, status: 'LOCKED', completeAt: null },
     },
+    shieldRaised: false,
     lastTickMs: now,
   };
   await saveEconomyProfile(store, username, economy);
@@ -1248,12 +1812,14 @@ export async function getAdminPlayerStats(
     const profileRaw = await store.hGetAll(`profile:${claim.username}`);
     const stats = parseStats(profileRaw[STATS_FIELD]);
 
-    // Economy: sum building levels across all stars
+    // Economy: sum building levels across all stars (reconcile to count completed upgrades)
     const economy = parseEconomy(profileRaw[ECONOMY_FIELD]);
     let totalBuildingLevels = 0;
+    const now = Date.now();
     for (const starData of Object.values(economy.stars)) {
       if (starData?.buildings) {
-        for (const b of Object.values(starData.buildings)) {
+        const reconciled = reconcileStarBuildings(starData.buildings, now);
+        for (const b of Object.values(reconciled)) {
           totalBuildingLevels += (b as { level?: number }).level ?? 0;
         }
       }

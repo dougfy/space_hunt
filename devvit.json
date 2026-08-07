@@ -10,7 +10,8 @@
         "height": "regular"
       },
       "game": {
-        "entry": "play.html"
+        "entry": "play.html",
+        "height": "regular"
       }
     }
   },
@@ -31,6 +32,18 @@
   },
   "triggers": {
     "onAppInstall": "/internal/triggers/on-app-install"
+  },
+  "scheduler": {
+    "tasks": {
+      "weekly-leaderboard": {
+        "endpoint": "/internal/scheduler/weekly-leaderboard",
+        "cron": "0 12 * * 1"
+      },
+      "autobot-tick": {
+        "endpoint": "/internal/scheduler/autobot-tick",
+        "cron": "*/3 * * * *"
+      }
+    }
   },
   "scripts": {
     "dev": "vite build --watch",
