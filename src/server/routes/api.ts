@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { context, redis, reddit } from '@devvit/web/server';
 import { onColonize, onShipBuy, onShipUpgrade, onDockUpgrade, onFirstTransfer } from '../core/achievements';
+import { sendFleetCommandVideo } from './coms';
 import { setActivePostId } from './scheduler';
 import type {
   BuildBuildingRequest,
@@ -68,6 +69,7 @@ import {
   upgradeShip,
   toggleShield,
   assignRaidRoute,
+  refuelShip,
   storePose,
   storeShots,
 } from '../core/game-service';
@@ -84,6 +86,12 @@ type ErrorResponse = {
   status: 'error';
   message: string;
 };
+
+// Audit log — append-only sorted set keyed by postId, scored by timestamp
+function auditLog(postId: string, event: string, data: Record<string, unknown>): void {
+  const entry = JSON.stringify({ t: Date.now(), event, ...data });
+  redis.zAdd(`audit:${postId}`, { member: entry, score: Date.now() }).catch(() => {});
+}
 
 export const api = new Hono();
 
@@ -261,9 +269,11 @@ api.get('/profile', async (c) => {
   // If postId provided, also resolve home star claim
   if (postId) {
     const claim = await claimHomeStar(redis, postId, user);
+    auditLog(postId, 'login', { user, homeStar: claim.homeStar, claimCount: claim.claimed.length });
     return c.json<PlayerProfileResponse>({ ...response, homeStar: claim.homeStar, claimed: claim.claimed, devMode });
   }
 
+  auditLog(postId ?? 'unknown', 'login', { user });
   return c.json<PlayerProfileResponse>({ ...response, devMode });
 });
 
@@ -273,6 +283,26 @@ api.get('/debug/profile-raw', requireDev, async (c) => {
   if (!user) return c.json({ error: 'username required' }, 400);
   const raw = await redis.hGetAll(`profile:${user}`);
   return c.json({ raw });
+});
+
+/** Admin: view audit log. Optional ?since=<ms-timestamp>&limit=<n>&user=<filter> */
+api.get('/debug/audit', requireDev, async (c) => {
+  const { postId } = context;
+  if (!postId) return c.json({ error: 'no postId' }, 400);
+  const since = parseInt(c.req.query('since') ?? '0', 10);
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '200', 10), 1000);
+  const userFilter = c.req.query('user')?.toLowerCase();
+  try {
+    const raw = await redis.zRange(`audit:${postId}`, since, Date.now(), { by: 'score' });
+    const entries = raw
+      .map((m) => { try { return JSON.parse(m.member); } catch { return null; } })
+      .filter((e): e is Record<string, unknown> => e != null)
+      .filter((e) => !userFilter || String(e.user ?? '').toLowerCase() === userFilter)
+      .slice(-limit);
+    return c.json({ count: entries.length, entries });
+  } catch (err) {
+    return c.json({ error: 'zRange failed', detail: String(err), key: `audit:${postId}` }, 500);
+  }
 });
 
 /** Admin: toggle dev mode (controls visibility of debug UI for all users). */
@@ -301,7 +331,7 @@ api.post('/stars/reset', requireDev, async (c) => {
   const allClaims = await redis.hGetAll(`stars:${body.postId}`);
 
   // Also clear ships/economy/stats/position for all claimed users
-  const users = new Set(Object.values(allClaims));
+  const users = new Set(Object.values(allClaims).map(v => v.split(':')[0]));
   for (const user of users) {
     try {
       await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition', 'journeyDone']);
@@ -315,43 +345,114 @@ api.post('/stars/reset', requireDev, async (c) => {
   return c.json({ ok: true, cleared: keys.length });
 });
 
-/** Admin: full reset — clear claims, economy, and ships for all users of a post. */
+/** Admin: full reset — clear ALL game state for all users of a post back to initial. */
 api.post('/admin/reset-all', requireDev, async (c) => {
   const body = await c.req.json<{ postId: string; adminUser: string }>();
   if (!body.postId || !body.adminUser) return c.json<ErrorResponse>({ status: 'error', message: 'postId and adminUser required' }, 400);
 
+  const postId = body.postId;
+
   // Get all claims to find users
-  const registryKey = `stars:${body.postId}`;
+  const registryKey = `stars:${postId}`;
   const allClaims = await redis.hGetAll(registryKey);
   const users = new Set(Object.values(allClaims));
   // Also include the admin user themselves (in case they aren't in claims)
   users.add(body.adminUser);
 
-  // Clear each user's game data (economy, ships, stats, discoveredStars, lastPosition, achievements)
+  // ── Per-user data ──
   let cleared = 0;
   for (const user of users) {
     try {
-      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition', 'journeyDone']);
-      // Clear achievements so they can fire again
+      // Profile fields: economy, ships, stats, discoveredStars, enhancedProbeStars, lastPosition, journeyDone
+      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'enhancedProbeStars', 'lastPosition', 'journeyDone']);
+
+      // Achievements
       const achKeys = Object.keys(await redis.hGetAll(`achievements:${user}`));
       if (achKeys.length > 0) await redis.hDel(`achievements:${user}`, achKeys);
+
+      // Achievement scores
+      try { await redis.del(`score:${user}`); } catch { /* ignore */ }
+
+      // Blueprint complete charges
+      await redis.del(`complete_charges:${user.toLowerCase()}`);
+
+      // Sensor alerts
+      try { await redis.del(`sensor_alerts:${user}`); } catch { /* ignore */ }
+
+      // Fleet share cooldown
+      try { await redis.del(`share:fleet:${user}`); } catch { /* ignore */ }
+
+      // Explored planets: explored:{user}:{starIndex}:{bodyIndex} (up to 100 stars × 8 bodies)
+      for (let si = 0; si < 100; si++) {
+        for (let bi = 0; bi < 8; bi++) {
+          try { await redis.del(`explored:${user}:${si}:${bi}`); } catch { /* ignore */ }
+        }
+      }
+
       cleared++;
     } catch { /* ignore */ }
   }
 
-  // Clear star claims
-  const keys = Object.keys(allClaims);
-  if (keys.length > 0) {
-    await redis.hDel(registryKey, keys);
+  // ── Star claims ──
+  const claimKeys = Object.keys(allClaims);
+  if (claimKeys.length > 0) {
+    await redis.hDel(registryKey, claimKeys);
   }
 
-  // Clear poses and shots
+  // ── Poses ──
   try {
-    const poseKeys = Object.keys(await redis.hGetAll(`poses:${body.postId}`));
-    if (poseKeys.length > 0) await redis.hDel(`poses:${body.postId}`, poseKeys);
+    const poseKeys = Object.keys(await redis.hGetAll(`poses:${postId}`));
+    if (poseKeys.length > 0) await redis.hDel(`poses:${postId}`, poseKeys);
   } catch { /* ignore */ }
 
-  // Clear alliance data for each user
+  // ── Shots ──
+  try {
+    const shotKeys = Object.keys(await redis.hGetAll(`shots:${postId}`));
+    if (shotKeys.length > 0) await redis.hDel(`shots:${postId}`, shotKeys);
+  } catch { /* ignore */ }
+
+  // ── Pods ──
+  try {
+    const podKeys = Object.keys(await redis.hGetAll(`pods:${postId}`));
+    if (podKeys.length > 0) await redis.hDel(`pods:${postId}`, podKeys);
+  } catch { /* ignore */ }
+
+  // ── Trading stations: tradeStation:{postId}:s:{starIndex} ──
+  for (let si = 0; si < 100; si++) {
+    if (isTradingStation(postId, si)) {
+      try { await redis.del(`tradeStation:${postId}:s:${si}`); } catch { /* ignore */ }
+    }
+  }
+
+  // ── Coms: lastSeen ──
+  try {
+    const comsKeys = Object.keys(await redis.hGetAll(`coms:lastSeen:${postId}`));
+    if (comsKeys.length > 0) await redis.hDel(`coms:lastSeen:${postId}`, comsKeys);
+  } catch { /* ignore */ }
+
+  // ── Reports ──
+  try { await redis.del(`reports:${postId}`); } catch { /* ignore */ }
+  try { await redis.del(`reports:${postId}:details`); } catch { /* ignore */ }
+
+  // ── Pending echoes ──
+  try { await redis.del(`pending_echoes:${postId}`); } catch { /* ignore */ }
+
+  // ── DMs between all known users: dm:{postId}:{user1}:{user2} ──
+  const userList = [...users].map(u => u.toLowerCase()).sort();
+  for (let i = 0; i < userList.length; i++) {
+    for (let j = i + 1; j < userList.length; j++) {
+      try { await redis.del(`dm:${postId}:${userList[i]}:${userList[j]}`); } catch { /* ignore */ }
+    }
+    // Also clear DM channels with built-in NPCs
+    for (const npc of ['enemy', 'valcordia_probe']) {
+      const pair = [userList[i], npc].sort();
+      try { await redis.del(`dm:${postId}:${pair[0]}:${pair[1]}`); } catch { /* ignore */ }
+    }
+    // Unread DM notifications
+    try { await redis.del(`dm:unread:${postId}:${userList[i]}`); } catch { /* ignore */ }
+  }
+
+  // ── Alliance data ──
   const allianceIds = new Set<string>();
   for (const user of users) {
     try {
@@ -363,15 +464,35 @@ api.post('/admin/reset-all', requireDev, async (c) => {
       await redis.del(`alliance_invites:${user.toLowerCase()}`);
     } catch { /* ignore */ }
   }
-  // Clear alliance records and chat
   for (const aid of allianceIds) {
-    try {
-      await redis.del(`alliance:${aid}`);
-      await redis.del(`alliance_chat:${aid}`);
-    } catch { /* ignore */ }
+    try { await redis.del(`alliance:${aid}`); } catch { /* ignore */ }
+    try { await redis.del(`alliance_chat:${aid}`); } catch { /* ignore */ }
   }
 
-  return c.json({ ok: true, usersCleared: cleared, claimsCleared: keys.length });
+  // ── Bot data ──
+  try { await redis.del('bots:registry'); } catch { /* ignore */ }
+  try { await redis.del('bots:last_tick'); } catch { /* ignore */ }
+  try { await redis.del('autobot:VALCORDIA_PROBE'); } catch { /* ignore */ }
+  try { await redis.del('bots:state:VALCORDIA_PROBE'); } catch { /* ignore */ }
+  try { await redis.del('bots:admin_test'); } catch { /* ignore */ }
+
+  // ── Player count ──
+  try { await redis.del('count'); } catch { /* ignore */ }
+
+  // ── Set reset timestamp for all affected users (blocks stale saves) ──
+  const resetTs = Date.now().toString();
+  for (const user of users) {
+    try { await redis.set(`reset_guard:${user}`, resetTs); } catch { /* ignore */ }
+  }
+
+  // ── Verify reset worked (log remaining profile data for admin user) ──
+  const verifyProfile = await redis.hGetAll(`profile:${body.adminUser}`);
+  const verifyClaims = await redis.hGetAll(registryKey);
+  console.log(`[RESET-VERIFY] profile:${body.adminUser} remaining keys: ${JSON.stringify(Object.keys(verifyProfile))}`);
+  console.log(`[RESET-VERIFY] profile:${body.adminUser} remaining data: ${JSON.stringify(verifyProfile)}`);
+  console.log(`[RESET-VERIFY] ${registryKey} remaining claims: ${JSON.stringify(verifyClaims)}`);
+
+  return c.json({ ok: true, usersCleared: cleared, claimsCleared: claimKeys.length, verify: { profileKeys: Object.keys(verifyProfile), claims: Object.keys(verifyClaims) } });
 });
 
 /** Save a user's profile (ship name + shape). */
@@ -379,6 +500,20 @@ api.post('/profile', async (c) => {
   const body = await c.req.json<SaveProfileRequest>();
   console.log('[SERVER-SAVE] profile request:', JSON.stringify(body));
   if (!body.username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+
+  // Block stale saves within 30s of a reset (pagehide race condition)
+  const resetGuard = await redis.get(`reset_guard:${body.username}`).catch(() => null);
+  if (resetGuard) {
+    const resetAge = Date.now() - parseInt(resetGuard, 10);
+    if (resetAge < 30_000 && (body.discoveredStars !== undefined || body.lastPosition !== undefined || body.enhancedProbeStars !== undefined)) {
+      console.log(`[SERVER-SAVE] BLOCKED stale save for ${body.username} — reset was ${resetAge}ms ago`);
+      return c.json<OkResponse>({ ok: true }); // silent success so client doesn't retry
+    }
+    // Clear expired guard
+    if (resetAge >= 30_000) {
+      await redis.del(`reset_guard:${body.username}`).catch(() => {});
+    }
+  }
 
   await saveProfile(redis, body);
   console.log('[SERVER-SAVE] profile saved for', body.username);
@@ -417,6 +552,16 @@ api.get('/buildings', async (c) => {
   return c.json<StarEconomyResponse>(response);
 });
 
+/** Debit fuel from a star when a ship refuels at dock. */
+api.post('/refuel', async (c) => {
+  const { username, starIndex, amount } = await c.req.json<{ username: string; starIndex: number; amount: number }>();
+  if (!username || !Number.isInteger(starIndex) || starIndex < 0 || !amount || amount <= 0) {
+    return c.json({ status: 'error', message: 'invalid params' }, 400);
+  }
+  const result = await refuelShip(redis, username, starIndex, amount);
+  return c.json(result);
+});
+
 /** Start a building purchase/upgrade for the given star. */
 api.post('/buildings/buy', async (c) => {
   const body = await c.req.json<BuildBuildingRequest>();
@@ -427,6 +572,8 @@ api.post('/buildings/buy', async (c) => {
 
   try {
     const response = await buyBuilding(redis, body);
+    const { postId } = context;
+    if (postId) auditLog(postId, 'build', { user: body.username, starIndex: body.starIndex, type: body.buildType });
     return c.json<BuildBuildingResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to start building purchase';
@@ -509,9 +656,17 @@ api.post('/ships/buy', async (c) => {
     const response = await buyShip(redis, body);
     // Fire-and-forget: first ship achievement
     const { postId } = context;
+    if (postId) auditLog(postId, 'ship_buy', { user: body.username, starIndex: body.starIndex, shipTypeId: body.shipTypeId });
     console.log(`[ACHIEVEMENTS-DEBUG] /ships/buy postId=${postId} username=${body.username}`);
     if (postId) {
       onShipBuy(redis, postId, body.username, 1).catch((e) => console.error('[ACHIEVEMENTS] onShipBuy error:', e));
+      // Send Fleet Command colonize video when colony ship is built
+      if (body.shipTypeId === 8) {
+        sendFleetCommandVideo(
+          postId, body.username, 'colonize',
+          'Commander — colony ship constructed. Review this briefing on star colonization procedures.',
+        ).catch(() => {});
+      }
     } else {
       console.warn('[ACHIEVEMENTS] no postId in context — cannot post achievement');
     }
@@ -647,7 +802,8 @@ api.post('/colonize', async (c) => {
     return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
   }
   try {
-    const response = await colonizeStar(redis, body.postId, body.username, body.starIndex);
+    const response = await colonizeStar(redis, body.postId, body.username, body.starIndex, Date.now(), body.bodyIndex ?? 0);
+    auditLog(body.postId, 'colonize', { user: body.username, starIndex: body.starIndex, bodyIndex: body.bodyIndex ?? 0 });
     // Fire-and-forget: count stars owned and trigger achievements
     getClaimedStars(redis, body.postId).then((claims) => {
       const userStars = claims.filter((c) => c.username === body.username).length;
@@ -760,6 +916,23 @@ api.get('/fleet/foreign', async (c) => {
         result[starKey] = { owner: claim.username, ships: starShips };
       }
     }
+
+    // Include autobot if it's roaming at a player star
+    try {
+      const botRaw = await redis.get('autobot:VALCORDIA_PROBE');
+      if (botRaw) {
+        const botState = JSON.parse(botRaw) as { currentStarIndex: number; roamTicksRemaining: number; homeStarIndex: number; name: string };
+        if (botState.roamTicksRemaining > 0 && botState.currentStarIndex >= 0 && botState.currentStarIndex !== botState.homeStarIndex) {
+          const botStarKey = `s:${botState.currentStarIndex}`;
+          // Only show if it's at a star the requesting player owns
+          const playerOwnsThisStar = claims.some(cl => cl.starIndex === botState.currentStarIndex && cl.username === excludeUser);
+          if (playerOwnsThisStar) {
+            result[botStarKey] = { owner: botState.name, ships: [{ typeId: 11, count: 1 }] };
+          }
+        }
+      }
+    } catch { /* ignore bot state read errors */ }
+
     return c.json({ stars: result });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to load foreign fleet';
@@ -998,10 +1171,10 @@ api.post('/explore', async (c) => {
     const result = rollDiscovery(galaxySeed, starIndex, bodyIndex);
 
     // Grant resources to the star the player is exploring
-    if (result.kind === 'ore' || result.kind === 'food' || result.kind === 'energy') {
+    if (result.kind === 'ore' || result.kind === 'food' || result.kind === 'energy' || result.kind === 'fuel') {
       const profileKey = `profile:${username}`;
       const economyRaw = await redis.hGet(profileKey, 'economy');
-      const economy = economyRaw ? JSON.parse(economyRaw) as { stars: Record<string, { store?: { ore: number; food: number; energy: number } }> } : { stars: {} };
+      const economy = economyRaw ? JSON.parse(economyRaw) as { stars: Record<string, { store?: { ore: number; food: number; energy: number; fuel: number } }> } : { stars: {} };
       const sKey = `s:${starIndex}`;
       const star = economy.stars[sKey];
       if (star?.store) {

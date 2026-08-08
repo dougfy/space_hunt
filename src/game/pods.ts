@@ -3,7 +3,7 @@
 import type { Asteroid, FuelPod, GameState } from './types';
 import {
   POD_COUNT_PER_ASTEROID, POD_SURFACE_OFFSET, POD_COLLECT_RADIUS,
-  FUEL_MAX, POD_TYPES, POD_TOTAL_WEIGHT,
+  FUEL_CAPACITY_BY_SHAPE, POD_TYPES, POD_TOTAL_WEIGHT,
 } from './constants';
 import type { PodKind } from './constants';
 import {
@@ -128,13 +128,18 @@ export function applyPodCollected(state: GameState, podId: number, mine: boolean
   if (mine) {
     const entry = POD_TYPES.find(t => t.kind === pod.kind);
     const fuelBonus = entry?.fuelBonus ?? 0;
+    const capacity = FUEL_CAPACITY_BY_SHAPE[state.shipShape];
     if (pod.kind === 'refuel') {
-      state.fuelPercent = FUEL_MAX;
-      console.log('[PODS] REFUEL pod id=', podId, 'fuel=', state.fuelPercent);
+      state.fuelUnits = capacity;
+      console.log('[PODS] REFUEL pod id=', podId, 'fuel=', state.fuelUnits);
     } else if (fuelBonus > 0) {
-      state.fuelPercent = Math.min(FUEL_MAX, state.fuelPercent + fuelBonus);
-      console.log(`[PODS] ${pod.kind.toUpperCase()} pod id=`, podId, 'fuel=', state.fuelPercent);
+      state.fuelUnits = Math.min(capacity, state.fuelUnits + fuelBonus);
+      console.log(`[PODS] ${pod.kind.toUpperCase()} pod id=`, podId, 'fuel=', state.fuelUnits);
     }
     state.docksCollected++;
+    // Floating text feedback
+    const label = entry?.label ?? pod.kind.toUpperCase();
+    const color = entry?.color ?? '#FFFFFF';
+    state.floatTexts.push({ text: `+${label}`, color, x: pod.pos.x, y: pod.pos.y, age: 0 });
   }
 }

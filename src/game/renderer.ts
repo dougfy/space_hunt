@@ -16,6 +16,7 @@ import { getAsteroidSurfaceInfo } from './asteroids';
 import type { StarVisualTone } from './ownership-contracts';
 import { playSound } from './audio';
 import { getJourneyPulseAlpha } from './journey';
+import { FLEET_COMMAND_SENDER } from '../shared/feature-flags';
 
 export interface Renderer {
   canvas: HTMLCanvasElement;
@@ -407,15 +408,16 @@ export function drawForeignShipsAtStar(
 }
 
 /** Draw compact fuel/shields in the upper-left corner. Used across all tiers. */
-export function drawShipStatus(r: Renderer, fuelPercent: number, shieldPercent: number): void {
+export function drawShipStatus(r: Renderer, fuelUnits: number, fuelCapacity: number, shieldPercent: number): void {
   const { ctx } = r;
   ctx.save();
   ctx.font = 'bold 12px monospace';
   ctx.textBaseline = 'top';
   const y0 = 52; // below system info panel
-  const fuelColor = fuelPercent <= 25 ? '#FF5A3D' : '#4fffb0';
+  const fuelPct = fuelCapacity > 0 ? (fuelUnits / fuelCapacity) * 100 : 0;
+  const fuelColor = fuelPct <= 25 ? '#FF5A3D' : '#4fffb0';
   ctx.fillStyle = fuelColor;
-  ctx.fillText(`FUEL: ${Math.round(fuelPercent)}%`, 12, y0);
+  ctx.fillText(`FUEL: ${Math.round(fuelPct)}% [${Math.round(fuelCapacity)}]`, 12, y0);
   const shieldColor = shieldPercent <= 33 ? '#FF5A3D' : '#4fffb0';
   ctx.fillStyle = shieldColor;
   ctx.fillText(`SHIELDS: ${Math.round(shieldPercent)}%`, 12, y0 + 14);
@@ -424,7 +426,8 @@ export function drawShipStatus(r: Renderer, fuelPercent: number, shieldPercent: 
 
 export function drawHUD(
   r: Renderer,
-  fuelPercent: number,
+  fuelUnits: number,
+  fuelCapacity: number,
   fuelCollected: number,
   fuelTotal: number,
   lowFuelBlink: boolean,
@@ -439,10 +442,11 @@ export function drawHUD(
   ctx.textBaseline = 'top';
 
   // Fuel display
+  const fuelPercent = fuelCapacity > 0 ? (fuelUnits / fuelCapacity) * 100 : 0;
   const isLow = fuelPercent <= 25;
   const fuelColor = isLow ? '#FF5A3D' : '#FFD24A';
   ctx.fillStyle = fuelColor;
-  ctx.fillText(`FUEL: ${Math.round(fuelPercent)}%`, 12, 12);
+  ctx.fillText(`FUEL: ${Math.round(fuelPercent)}% [${Math.round(fuelCapacity)}]`, 12, 12);
 
   ctx.fillStyle = '#FFD24A';
   ctx.fillText(`DOCKS: ${fuelCollected} / ${fuelTotal}`, 12, 30);
@@ -905,7 +909,7 @@ export function hitTestGalaxyZoomButtons(r: Renderer, screenX: number, screenY: 
 
 // ── Admin Skin Toggle Button ────────────────────────────────────────────────
 
-function toggleSkin(): void {
+export function toggleSkin(): void {
   if (getActiveSkinId() === 'procedural') {
     preloadRasterSprites();
     setActiveSkin(rasterSkin);
@@ -978,9 +982,10 @@ import type { GalaxyStar, GalaxyState, FeatureType, PlanetFeature, SystemBody } 
 import { generateSystem } from './galaxy';
 import { buildGalaxyViewModel, getGalaxyStarTone } from './galaxy-view-model';
 import { getEnabledResources, getFeatureResourceIds as _getFeatureResourceIds, getFeatureResourceNames } from './economy-catalog';
-import { BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, FEATURE_LABELS, STAR_NAMES } from './constants';
+import { BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, FEATURE_LABELS, STAR_NAMES, PROBE_BASIC_RANGE, PROBE_ENHANCED_RANGE, PROBE_MIN_FUEL_COST } from './constants';
 // ComsMessage type removed — DM system replaces old reddit-comment-based coms
 import { isTradingStation } from '../shared/trading';
+import { BUILDING_CATALOG } from '../shared/buildings';
 import { getActiveDrawFeatureIcon, getActiveSkinId, setActiveSkin } from './skin';
 import { proceduralSkin } from './skins/procedural';
 import { rasterSkin, preloadRasterSprites, getPlanetSprite } from './skins/raster';
@@ -999,7 +1004,7 @@ function drawStarburst(
   coreR: number,
   rayLen: number,
   brightness: number, // 0-1
-  palette: 'green' | 'blue' | 'white' | 'red' | 'orange' | 'yellow' | 'cyan' = 'green',
+  palette: 'green' | 'blue' | 'white' | 'red' | 'orange' | 'yellow' | 'cyan' | 'dim' = 'green',
   cardinalBoost = 1,
 ) {
   // Guard against non-finite values (can happen on first frame after tier change)
@@ -1017,7 +1022,9 @@ function drawStarburst(
             ? '255, 230, 60'
             : palette === 'cyan'
               ? '100, 220, 240'
-              : '79, 255, 176';
+              : palette === 'dim'
+                ? '60, 80, 70'
+                : '79, 255, 176';
   const cMid = palette === 'blue'
     ? '150, 215, 255'
     : palette === 'white'
@@ -1030,7 +1037,9 @@ function drawStarburst(
             ? '255, 240, 120'
             : palette === 'cyan'
               ? '150, 230, 245'
-              : '150, 255, 210';
+              : palette === 'dim'
+                ? '50, 65, 55'
+                : '150, 255, 210';
   const cSoft = palette === 'blue'
     ? '30, 70, 120'
     : palette === 'white'
@@ -1043,7 +1052,9 @@ function drawStarburst(
             ? '120, 110, 10'
             : palette === 'cyan'
               ? '20, 90, 110'
-              : '30, 120, 80';
+              : palette === 'dim'
+                ? '20, 30, 25'
+                : '30, 120, 80';
   const cBloom = palette === 'blue'
     ? '180, 220, 255'
     : palette === 'white'
@@ -1056,7 +1067,9 @@ function drawStarburst(
             ? '255, 245, 150'
             : palette === 'cyan'
               ? '180, 240, 250'
-              : '180, 255, 220';
+              : palette === 'dim'
+                ? '50, 65, 55'
+                : '180, 255, 220';
   const cCore = palette === 'blue'
     ? '170, 220, 255'
     : palette === 'white'
@@ -1069,7 +1082,9 @@ function drawStarburst(
             ? '255, 240, 120'
             : palette === 'cyan'
               ? '170, 235, 250'
-              : '150, 255, 200';
+              : palette === 'dim'
+                ? '50, 65, 55'
+                : '150, 255, 200';
 
   // ── 1. Wide soft green halo ──
   ctx.save();
@@ -1182,6 +1197,15 @@ let _transferCancelButton: { x: number; y: number; w: number; h: number } | null
 
 /** Enter transfer mode (called from fleet panel SEND button). */
 export function enterTransferMode(fromStarIndex: number, shipTypeId: number): void {
+  // Probes require base fuel
+  if (shipTypeId === 11 || shipTypeId === 12) {
+    const available = getBaseFuel(fromStarIndex);
+    if (available < PROBE_MIN_FUEL_COST) {
+      _lockFlash = { action: `NEED ${PROBE_MIN_FUEL_COST} FUEL (HAVE ${Math.floor(available)})`, expireMs: Date.now() + 3000 };
+      playSound('click');
+      return;
+    }
+  }
   _transferMode = { fromStarIndex, shipTypeId };
 }
 
@@ -1477,8 +1501,8 @@ export function drawGalaxyView(
         }
       }
 
-      // ── Foreign fleet badge (red) ──
-      const foreignFleet = _foreignShipsByStarIndex.get(star.index);
+      // ── Foreign fleet badge (red) — only show if star is discovered ──
+      const foreignFleet = star.discoveryLevel !== 'none' ? _foreignShipsByStarIndex.get(star.index) : undefined;
       if (foreignFleet && foreignFleet.ships.length > 0) {
         const totalForeign = foreignFleet.ships.reduce((sum, s) => sum + s.count, 0);
         if (totalForeign > 0) {
@@ -1596,9 +1620,18 @@ export function drawGalaxyView(
       if (_transferMode.shipTypeId === 8) {
         if (s.star.discoveryLevel === 'none' || s.star.owner === 'player') continue;
       }
-      // Probes (11, 12): only unvisited or foreign-owned
+      // Probes (11, 12): only unvisited or foreign-owned, within range
       if (_transferMode.shipTypeId === 11 || _transferMode.shipTypeId === 12) {
         if (s.star.discoveryLevel !== 'none' && s.star.owner !== 'foreign') continue;
+        // Range check
+        const srcStar2 = galaxy.stars[_transferMode.fromStarIndex];
+        if (srcStar2) {
+          const dx2 = s.star.pos.x - srcStar2.pos.x;
+          const dy2 = s.star.pos.y - srcStar2.pos.y;
+          const dist = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+          const maxRange = _transferMode.shipTypeId === 12 ? PROBE_ENHANCED_RANGE : PROBE_BASIC_RANGE;
+          if (dist > maxRange) continue;
+        }
       }
       // Raider (15): only foreign-owned stars (claimed by other players)
       if (_transferMode.shipTypeId === 15) {
@@ -1637,11 +1670,14 @@ export function drawGalaxyView(
     ctx.fillStyle = G_BRIGHT;
     const isFreighter = _transferMode!.shipTypeId === 2;
     const isRaider = _transferMode!.shipTypeId === 15;
+    const isProbe = _transferMode!.shipTypeId === 11 || _transferMode!.shipTypeId === 12;
     const bannerText = isFreighter
       ? `ASSIGN TRADE ROUTE — TAP PICKUP STAR`
       : isRaider
         ? `RAID TARGET — TAP ENEMY STAR`
-        : `SENDING ${shipName.toUpperCase()} — TAP DESTINATION STAR`;
+        : isProbe
+          ? `SENDING ${shipName.toUpperCase()} (⛽${PROBE_MIN_FUEL_COST}) — TAP DESTINATION`
+          : `SENDING ${shipName.toUpperCase()} — TAP DESTINATION STAR`;
     ctx.fillText(bannerText, screenW / 2, screenH - bannerH / 2 - 2);
 
     // Cancel button
@@ -1711,7 +1747,7 @@ export function drawGalaxyView(
       ctx.textBaseline = 'middle';
       ctx.fillText('✕', xBtnX + xBtnSize / 2, xBtnY + xBtnSize / 2);
 
-      // Star name
+      // Star name (hide for undiscovered)
       ctx.font = 'bold 11px monospace';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
@@ -2339,7 +2375,7 @@ function getEffectiveFeatures(body: SystemBody, starIndex: number): PlanetFeatur
   const builtExtensions: PlanetFeature[] = [];
   const rng = createRng(body.seed + 12345);
 
-  const extensionTypes: Array<{ key: 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon'; featureType: FeatureType; label: string }> = [
+  const extensionTypes: Array<{ key: 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' | 'refinery'; featureType: FeatureType; label: string }> = [
     { key: 'mine', featureType: 'mine', label: 'Mine' },
     { key: 'solar', featureType: 'solar_array', label: 'Solar Array' },
     { key: 'hab', featureType: 'colony', label: 'Hab' },
@@ -2347,6 +2383,7 @@ function getEffectiveFeatures(body: SystemBody, starIndex: number): PlanetFeatur
     { key: 'dock', featureType: 'dock', label: 'Space Dock' },
     { key: 'shield', featureType: 'shield', label: 'Shield Gen' },
     { key: 'cannon', featureType: 'cannon', label: 'Ion Cannon' },
+    { key: 'refinery', featureType: 'refinery', label: 'Refinery' },
   ];
 
   // Space extensions evenly around orbit, offset from station
@@ -2380,7 +2417,8 @@ export function drawPlanetView(
   camera: Camera,
   galaxy: GalaxyState,
   _shipPos: Vec2,
-  fuelPercent: number,
+  fuelUnits: number,
+  fuelCapacity: number,
   shieldPercent: number,
   docked = false,
 ) {
@@ -2598,7 +2636,8 @@ export function drawPlanetView(
   }
 
   // Blank-line separation between planet info and ship status.
-  ctx.fillText(`SHIP FUEL: ${Math.round(fuelPercent)}%`, 14, 120);
+  const shipFuelPct = fuelCapacity > 0 ? (fuelUnits / fuelCapacity) * 100 : 0;
+  ctx.fillText(`SHIP FUEL: ${Math.round(shipFuelPct)}% [${Math.round(fuelCapacity)}]`, 14, 120);
   ctx.fillText(`SHIP SHIELDS: ${Math.round(shieldPercent)}%`, 14, 132);
   ctx.restore();
 
@@ -2635,7 +2674,7 @@ export function drawPlanetView(
   }
 
   // ── 8. Bottom-right stub panels ──
-  const statusRows = buildMockPlanetStatusRows(galaxy.currentStarIndex, fuelPercent, shieldPercent, docked);
+  const statusRows = buildMockPlanetStatusRows(galaxy.currentStarIndex, fuelUnits, fuelCapacity, shieldPercent, docked);
   drawPlanetPanels(ctx, screenW, screenH, statusRows);
 }
 
@@ -2659,12 +2698,14 @@ const PANEL_TABS: PanelTab[] = [
 
 function buildMockPlanetStatusRows(
   starIndex: number,
-  fuelPercent: number,
+  fuelUnits: number,
+  fuelCapacity: number,
   shieldPercent: number,
   docked: boolean,
 ): string[] {
   const rows: string[] = [];
-  void fuelPercent;
+  void fuelUnits;
+  void fuelCapacity;
   void shieldPercent;
 
   // Show trading station label in status
@@ -2680,9 +2721,12 @@ function buildMockPlanetStatusRows(
     rows.push('RESOURCES');
     for (const resource of enabledResources) {
       const id = resource.id;
-      const amount = id === 'ore' ? serverEcon.store.ore : id === 'food' ? serverEcon.store.food : serverEcon.store.energy;
-      const rate = id === 'ore' ? serverEcon.rates.ore : id === 'food' ? serverEcon.rates.food : serverEcon.rates.energy;
-      const rich = serverEcon.richness ? (id === 'ore' ? serverEcon.richness.ore : id === 'food' ? serverEcon.richness.food : serverEcon.richness.energy) : 0;
+      const storeMap: Record<string, number> = { ore: serverEcon.store.ore, food: serverEcon.store.food, energy: serverEcon.store.energy, fuel: serverEcon.store.fuel };
+      const rateMap: Record<string, number> = { ore: serverEcon.rates.ore, food: serverEcon.rates.food, energy: serverEcon.rates.energy, fuel: serverEcon.rates.fuel };
+      const richMap: Record<string, number> = serverEcon.richness ? { ore: serverEcon.richness.ore, food: serverEcon.richness.food, energy: serverEcon.richness.energy, fuel: serverEcon.richness.fuel } : {};
+      const amount = storeMap[id] ?? 0;
+      const rate = rateMap[id] ?? 0;
+      const rich = richMap[id] ?? 0;
       const richLabel = rich > 0 ? ` [${rich}]` : '';
       rows.push(`${resource.shortName}: ${Math.floor(amount)}/${serverEcon.cap} (+${rate}/m)${richLabel}`);
     }
@@ -2839,9 +2883,11 @@ let _lastPanelBodyY = 0;
 // Track docked state for greying out tabs
 let _panelsDocked = false;
 let _panelsStarIndex: number | null = null;
+let _panelsBodyIndex: number = 0;
 let _panelsTier: 'galaxy' | 'system' | 'local' | 'planet' = 'planet';
 let _panelsShipShape: string = 'scout';
 let _panelsOwned = false; // whether player owns the current star
+let _panelsForeign = false; // whether star is owned by an opponent
 let _isAdmin = false; // whether current player is an admin
 let _completeCharges = 0; // auto-complete charges from yellow pods
 
@@ -3118,7 +3164,7 @@ export function setAllianceUsername(name: string): void {
 }
 
 /** Called before drawing to set panel context */
-export function setPanelContext(docked: boolean, starIndex: number | null, tier: 'galaxy' | 'system' | 'local' | 'planet' = 'planet', shipShape?: string, owned?: boolean): void {
+export function setPanelContext(docked: boolean, starIndex: number | null, tier: 'galaxy' | 'system' | 'local' | 'planet' = 'planet', shipShape?: string, owned?: boolean, foreign?: boolean, bodyIndex?: number): void {
   // Auto-close dock-required panels when undocking or leaving planet tier
   if (!docked && _panelsDocked && _openPanel >= 0 && PANEL_TABS[_openPanel]?.requiresDock) {
     _openPanel = -1;
@@ -3132,6 +3178,8 @@ export function setPanelContext(docked: boolean, starIndex: number | null, tier:
   _panelsTier = tier;
   if (shipShape !== undefined) _panelsShipShape = shipShape;
   if (owned !== undefined) _panelsOwned = owned;
+  if (foreign !== undefined) _panelsForeign = foreign;
+  if (bodyIndex !== undefined) _panelsBodyIndex = bodyIndex;
 }
 
 // Pending galaxy jump from fleet panel MAP button
@@ -3177,6 +3225,9 @@ function hitTestBuildPanel(sx: number, sy: number): void {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
       if (btn.enabled) {
         _pendingExtensionAction = btn.action;
+        playSound('click');
+      } else if (btn.lockReason) {
+        _lockFlash = { action: btn.action, expireMs: Date.now() + 3000 };
         playSound('click');
       }
       return;
@@ -3461,13 +3512,19 @@ function drawTradePanelBody(
     return bodyH;
   }
 
-  const trades: { give: 'ore' | 'food' | 'energy'; receive: 'ore' | 'food' | 'energy'; rateKey: keyof typeof _tradeStationInfo.rates }[] = [
+  const trades: { give: 'ore' | 'food' | 'energy' | 'fuel'; receive: 'ore' | 'food' | 'energy' | 'fuel'; rateKey: keyof typeof _tradeStationInfo.rates }[] = [
     { give: 'ore', receive: 'food', rateKey: 'ore_food' },
     { give: 'ore', receive: 'energy', rateKey: 'ore_energy' },
+    { give: 'ore', receive: 'fuel', rateKey: 'ore_fuel' },
     { give: 'food', receive: 'ore', rateKey: 'food_ore' },
     { give: 'food', receive: 'energy', rateKey: 'food_energy' },
+    { give: 'food', receive: 'fuel', rateKey: 'food_fuel' },
     { give: 'energy', receive: 'ore', rateKey: 'energy_ore' },
     { give: 'energy', receive: 'food', rateKey: 'energy_food' },
+    { give: 'energy', receive: 'fuel', rateKey: 'energy_fuel' },
+    { give: 'fuel', receive: 'ore', rateKey: 'fuel_ore' },
+    { give: 'fuel', receive: 'food', rateKey: 'fuel_food' },
+    { give: 'fuel', receive: 'energy', rateKey: 'fuel_energy' },
   ];
   const btnH = 16;
   const btnGap = 3;
@@ -3480,7 +3537,7 @@ function drawTradePanelBody(
   ctx.fillStyle = G_MED;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.fillText(`STOCK O:${Math.floor(_tradeStationInfo.stock.ore)} F:${Math.floor(_tradeStationInfo.stock.food)} E:${Math.floor(_tradeStationInfo.stock.energy)}`, x + PANEL_PAD, y + 28);
+  ctx.fillText(`STOCK O:${Math.floor(_tradeStationInfo.stock.ore)} F:${Math.floor(_tradeStationInfo.stock.food)} E:${Math.floor(_tradeStationInfo.stock.energy)} \u26FD:${Math.floor(_tradeStationInfo.stock.fuel)}`, x + PANEL_PAD, y + 28);
 
   // Trade buttons
   for (let i = 0; i < trades.length; i++) {
@@ -3500,7 +3557,7 @@ function drawTradePanelBody(
     ctx.stroke();
 
     // Label
-    const shortNames = { ore: 'ORE', food: 'FOOD', energy: 'ENRG' };
+    const shortNames: Record<string, string> = { ore: 'ORE', food: 'FOOD', energy: 'ENRG', fuel: 'FUEL' };
     ctx.font = 'bold 7px monospace';
     ctx.fillStyle = G_BRIGHT;
     ctx.textAlign = 'left';
@@ -3529,7 +3586,7 @@ function drawBuildPanelBody(
   // Calculate height: header + resource row + extension grid (2 rows of 3)
   const extBtnH = 52;
   const extGap = 6;
-  const gridRows = 2;
+  const gridRows = 3;
   const bodyH = 28 + 16 + gridRows * (extBtnH + extGap) + 20;
 
   drawPanelFrame(ctx, x, y, w, bodyH, 'BUILD', '\u2302');
@@ -3538,12 +3595,13 @@ function drawBuildPanelBody(
   const oreNow = Math.floor(serverEcon?.store.ore ?? 0);
   const foodNow = Math.floor(serverEcon?.store.food ?? 0);
   const energyNow = Math.floor(serverEcon?.store.energy ?? 0);
+  const fuelNow = Math.floor(serverEcon?.store.fuel ?? 0);
   const stationLevel = serverEcon?.buildings.station.level ?? 1;
   ctx.font = '7px monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_MED;
-  ctx.fillText(`STATION LV ${toRoman(stationLevel)}  O:${oreNow} F:${foodNow} E:${energyNow}`, x + PANEL_PAD, y + 28);
+  ctx.fillText(`LV${toRoman(stationLevel)} O:${oreNow} F:${foodNow} E:${energyNow} Fu:${fuelNow}`, x + PANEL_PAD, y + 28);
 
   // COMPLETE button (if any build in progress)
   const hasActiveBuild = serverEcon
@@ -3621,7 +3679,30 @@ function drawBuildPanelBody(
     const enabled = stationReady && canAfford && !isActive && !isMaxLevel && !isLocked && activeBuildCount === 0;
     const tierLabel = `${ext.label} ${toRoman(nextLevel)}`;
 
-    _lastExtensionButtons.push({ action: ext.action, label: tierLabel, x: bx, y: by, w: extBtnW, h: extBtnH, enabled });
+    // Compute lock reason from prereqs or station-cap
+    let lockReason: string | undefined;
+    if (isLocked && serverEcon) {
+      const catalog = BUILDING_CATALOG[ext.key as keyof typeof BUILDING_CATALOG];
+      if (catalog) {
+        const missing: string[] = [];
+        for (const [prereqType, requiredLevel] of Object.entries(catalog.prereqs)) {
+          const prereqState = serverEcon.buildings[prereqType as keyof typeof serverEcon.buildings];
+          if (!prereqState || prereqState.level < (requiredLevel ?? 0)) {
+            const prereqLabel = BUILDING_CATALOG[prereqType as keyof typeof BUILDING_CATALOG]?.label ?? prereqType;
+            missing.push(`${prereqLabel} ${toRoman(requiredLevel ?? 1)}`);
+          }
+        }
+        if (missing.length > 0) lockReason = `NEED ${missing.join(', ')}`;
+      }
+    } else if (!isStationUpgrade && isMaxLevel && !isLocked && serverEcon) {
+      // Building is capped by station level, not truly at catalog max
+      const catalogMax = BUILDING_CATALOG[ext.key as keyof typeof BUILDING_CATALOG]?.maxLevel ?? MAX_STATION_LEVEL;
+      if (level < catalogMax) {
+        lockReason = `NEED Station ${toRoman(level + 1)}`;
+      }
+    }
+
+    _lastExtensionButtons.push({ action: ext.action, label: tierLabel, x: bx, y: by, w: extBtnW, h: extBtnH, enabled, ...(lockReason !== undefined ? { lockReason } : {}) });
 
     roundedRect(ctx, bx, by, extBtnW, extBtnH, 3);
     ctx.fillStyle = enabled ? 'rgba(20, 80, 60, 0.6)' : 'rgba(20, 35, 30, 0.5)';
@@ -3641,6 +3722,13 @@ function drawBuildPanelBody(
     if (isMaxLevel) {
       ctx.fillStyle = G_MED;
       ctx.fillText(isStationUpgrade ? 'MAX' : `LV ${toRoman(level)}`, bx + extBtnW / 2, by + 18);
+      // Show flash message if station-capped
+      if (lockReason && _lockFlash && _lockFlash.action === ext.action && _lockFlash.expireMs > Date.now()) {
+        ctx.fillStyle = '#ffb84d';
+        ctx.font = '5px monospace';
+        ctx.fillText(lockReason, bx + extBtnW / 2, by + 30);
+        ctx.font = '6px monospace';
+      }
     } else if (isActive) {
       ctx.fillStyle = G_MED;
       ctx.fillText(`${progress}%`, bx + extBtnW / 2, by + 18);
@@ -3656,13 +3744,18 @@ function drawBuildPanelBody(
       ctx.fillStyle = G_DIM;
       ctx.fillText(`${effectiveCost.ore}/${effectiveCost.food}/${effectiveCost.energy}`, bx + extBtnW / 2, by + 18);
       const isBusy = activeBuildCount > 0 && !isActive;
-      const statusLabel = enabled
-        ? (level >= 1 ? 'UPGRADE' : 'BUILD')
-        : isBusy
-          ? (level >= 1 ? `LV ${toRoman(level)}` : 'BUSY')
-          : isLocked ? 'LOCKED' : 'NEED RES';
-      ctx.fillStyle = enabled ? G_BRIGHT : G_MED;
+      const isFlashing = isLocked && _lockFlash && _lockFlash.action === ext.action && _lockFlash.expireMs > Date.now();
+      const statusLabel = isFlashing && lockReason
+        ? lockReason
+        : enabled
+          ? (level >= 1 ? 'UPGRADE' : 'BUILD')
+          : isBusy
+            ? (level >= 1 ? `LV ${toRoman(level)}` : 'BUSY')
+            : isLocked ? 'LOCKED' : 'NEED RES';
+      ctx.fillStyle = isFlashing ? '#ffb84d' : enabled ? G_BRIGHT : G_MED;
+      ctx.font = isFlashing ? '5px monospace' : '6px monospace';
       ctx.fillText(statusLabel, bx + extBtnW / 2, by + 30);
+      ctx.font = '6px monospace';
     }
   }
 
@@ -3688,8 +3781,8 @@ function drawShipsPanelBody(
     (s) => s.count > 0 && UPGRADE_PATH.includes(s.typeId as ShipTypeId),
   );
 
-  // Show Basic Probe (11), Colony Ship (8), Freighter (2) — Scout is always seeded as primary ship
-  const SHOWN_BUILD_IDS = hasUpgradePathShip ? [2, 11, 8] : [2, 11, 8];
+  // Show Basic Probe (11), Enhanced Probe (12), Colony Ship (8), Freighter (2)
+  const SHOWN_BUILD_IDS = hasUpgradePathShip ? [2, 11, 12, 8] : [2, 11, 12, 8];
   const availableShips = Object.values(SHIP_CATALOG).filter(
     (entry) => SHOWN_BUILD_IDS.includes(entry.id),
   );
@@ -3797,7 +3890,7 @@ function drawShipsPanelBody(
         ? serverEcon.store.ore >= ue.to.cost.ore && serverEcon.store.food >= ue.to.cost.food && serverEcon.store.energy >= ue.to.cost.energy
         : false;
       const isBuilding = buildingShip != null && buildingShip.completeAt > nowMs;
-      const blueprintOverride = _completeCharges > 0 && !isBuilding && (ue.dockLocked || !canAfford);
+      const blueprintOverride = _completeCharges > 0 && dockLevel > 0 && !isBuilding && (ue.dockLocked || !canAfford);
       const enabled = !isBuilding && (canAfford && !ue.dockLocked || blueprintOverride);
       const disableReason = isBuilding ? 'already building' : ue.dockLocked && !blueprintOverride ? 'dock level too low' : !canAfford && !blueprintOverride ? 'insufficient resources' : undefined;
 
@@ -3893,7 +3986,7 @@ function drawShipsPanelBody(
       const canAfford = serverEcon
         ? serverEcon.store.ore >= entry.cost.ore && serverEcon.store.food >= entry.cost.food && serverEcon.store.energy >= entry.cost.energy
         : false;
-      const blueprintOverride = _completeCharges > 0 && !isBuilding && (dockLocked || !canAfford);
+      const blueprintOverride = _completeCharges > 0 && dockLevel > 0 && !isBuilding && (dockLocked || !canAfford);
       const enabled = !isBuilding && (!dockLocked && canAfford || blueprintOverride);
       const disableReason = isBuilding ? 'already building' : dockLocked && !blueprintOverride ? 'dock level too low' : !canAfford && !blueprintOverride ? 'insufficient resources' : undefined;
 
@@ -4063,19 +4156,22 @@ function drawFleetGalaxyView(
         ctx.fillStyle = G_MED;
         ctx.fillText(`  ${entry.name} x${s.count}`, x + PANEL_PAD, cy);
 
-        // [SEND] button
+        // [SEND] or [FUEL] button
+        const isProbe = s.typeId === 11 || s.typeId === 12;
+        const probeFuel = isProbe ? getBaseFuel(e.starIndex) : 0;
+        const needsFuel = isProbe && probeFuel < PROBE_MIN_FUEL_COST;
         const btnW = 28;
         const btnH = 10;
         const btnX = x + w - PANEL_PAD - btnW;
         const btnY = cy;
-        ctx.strokeStyle = G_MED;
+        ctx.strokeStyle = needsFuel ? 'rgba(255, 184, 77, 0.6)' : G_MED;
         ctx.lineWidth = 0.5;
         roundedRect(ctx, btnX, btnY, btnW, btnH, 2);
         ctx.stroke();
-        ctx.fillStyle = G_BRIGHT;
+        ctx.fillStyle = needsFuel ? '#ffb84d' : G_BRIGHT;
         ctx.font = '7px monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('SEND', btnX + btnW / 2, btnY + 1.5);
+        ctx.fillText(needsFuel ? 'FUEL' : 'SEND', btnX + btnW / 2, btnY + 1.5);
         ctx.textAlign = 'left';
         ctx.font = '8px monospace';
         _fleetSendButtons.push({ x: btnX, y: btnY, w: btnW, h: btnH, starIndex: e.starIndex, shipTypeId: s.typeId });
@@ -4205,6 +4301,15 @@ function drawFleetGalaxyView(
   // Total
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText(`TOTAL: ${totalSP} SP`, x + PANEL_PAD, cy);
+
+  // Flash message (e.g. "NEED 500 FUEL (HAVE 0)")
+  if (_lockFlash && _lockFlash.expireMs > Date.now() && _lockFlash.action.startsWith('NEED')) {
+    cy += ROW_H;
+    ctx.fillStyle = '#ffb84d';
+    ctx.font = '7px monospace';
+    ctx.fillText(_lockFlash.action, x + PANEL_PAD, cy);
+    ctx.font = '8px monospace';
+  }
 
   // POST button (share fleet to comments)
   _fleetShareButton = null;
@@ -4404,20 +4509,22 @@ function drawLeaderboardBody(
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('NO PLAYER DATA', x + w / 2, y + headerH + 14);
-    // Seed button
-    const btnW = 80;
-    const btnH = 14;
-    const btnX = x + (w - btnW) / 2;
-    const btnY = y + bodyH - PANEL_PAD - btnH;
-    ctx.fillStyle = 'rgba(128, 0, 255, 0.15)';
-    ctx.fillRect(btnX, btnY, btnW, btnH);
-    ctx.strokeStyle = '#a060ff';
-    ctx.lineWidth = 0.5;
-    ctx.strokeRect(btnX, btnY, btnW, btnH);
-    ctx.font = 'bold 6px monospace';
-    ctx.fillStyle = '#c090ff';
-    ctx.fillText('SEED TEST DATA', btnX + btnW / 2, btnY + btnH / 2);
-    _leaderboardSeedButton = { x: btnX, y: btnY, w: btnW, h: btnH };
+    // Seed button (admin only)
+    if (_isAdmin) {
+      const btnW = 80;
+      const btnH = 14;
+      const btnX = x + (w - btnW) / 2;
+      const btnY = y + bodyH - PANEL_PAD - btnH;
+      ctx.fillStyle = 'rgba(128, 0, 255, 0.15)';
+      ctx.fillRect(btnX, btnY, btnW, btnH);
+      ctx.strokeStyle = '#a060ff';
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(btnX, btnY, btnW, btnH);
+      ctx.font = 'bold 6px monospace';
+      ctx.fillStyle = '#c090ff';
+      ctx.fillText('SEED TEST DATA', btnX + btnW / 2, btnY + btnH / 2);
+      _leaderboardSeedButton = { x: btnX, y: btnY, w: btnW, h: btnH };
+    }
     return bodyH;
   }
   _leaderboardSeedButton = null;
@@ -4485,22 +4592,24 @@ function drawLeaderboardBody(
     ctx.fillText(`${entry.power}`, colX.power, ry + rowH / 2);
   }
 
-  // Seed button at bottom
-  const seedBtnW = 80;
-  const seedBtnH = 14;
-  const seedBtnX = x + (w - seedBtnW) / 2;
-  const seedBtnY = y + bodyH - PANEL_PAD - seedBtnH;
-  ctx.fillStyle = 'rgba(128, 0, 255, 0.15)';
-  ctx.fillRect(seedBtnX, seedBtnY, seedBtnW, seedBtnH);
-  ctx.strokeStyle = '#a060ff';
-  ctx.lineWidth = 0.5;
-  ctx.strokeRect(seedBtnX, seedBtnY, seedBtnW, seedBtnH);
-  ctx.font = 'bold 6px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#c090ff';
-  ctx.fillText('SEED TEST DATA', seedBtnX + seedBtnW / 2, seedBtnY + seedBtnH / 2);
-  _leaderboardSeedButton = { x: seedBtnX, y: seedBtnY, w: seedBtnW, h: seedBtnH };
+  // Seed button at bottom (admin only)
+  if (_isAdmin) {
+    const seedBtnW = 80;
+    const seedBtnH = 14;
+    const seedBtnX = x + (w - seedBtnW) / 2;
+    const seedBtnY = y + bodyH - PANEL_PAD - seedBtnH;
+    ctx.fillStyle = 'rgba(128, 0, 255, 0.15)';
+    ctx.fillRect(seedBtnX, seedBtnY, seedBtnW, seedBtnH);
+    ctx.strokeStyle = '#a060ff';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(seedBtnX, seedBtnY, seedBtnW, seedBtnH);
+    ctx.font = 'bold 6px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#c090ff';
+    ctx.fillText('SEED TEST DATA', seedBtnX + seedBtnW / 2, seedBtnY + seedBtnH / 2);
+    _leaderboardSeedButton = { x: seedBtnX, y: seedBtnY, w: seedBtnW, h: seedBtnH };
+  }
 
   return bodyH;
 }
@@ -5119,6 +5228,7 @@ function drawDMConversation(
   _comsContactButtons = [];
   _allianceButtons = [];
   _allianceChatPageButtons = [];
+  _videoPlayButtons = [];
   const headerH = 28;
   const maxMsgs = 5;
   const msgH = 24;
@@ -5175,18 +5285,20 @@ function drawDMConversation(
       const my = y + headerH + rowIdx * msgH;
       const isMe = msg.from.toLowerCase() !== _dmPeer!.toLowerCase();
       const isSystem = msg.body.startsWith('[ALLIANCE]');
+      const isFleetCommand = msg.from === FLEET_COMMAND_SENDER;
+      const videoMatch = msg.body.match(/^\[VIDEO:([^\]]+)\]\s*/);
 
       // Author + time
       ctx.font = 'bold 6px monospace';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      ctx.fillStyle = isSystem ? '#fc0' : isMe ? '#4af' : G_BRIGHT;
+      ctx.fillStyle = isFleetCommand ? '#c090ff' : isSystem ? '#fc0' : isMe ? '#4af' : G_BRIGHT;
       const timeStr = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const label = isSystem ? '\u2694\uFE0F ALLIANCE' : isMe ? 'YOU' : msg.from;
+      const label = isFleetCommand ? '\u2605 FLEET CMD' : isSystem ? '\u2694\uFE0F ALLIANCE' : isMe ? 'YOU' : msg.from;
       ctx.fillText(`${label}  ${timeStr}`, x + PANEL_PAD, my + 2);
 
-      // Report flag for peer messages (not your own, not system)
-      if (!isMe && !isSystem) {
+      // Report flag for peer messages (not your own, not system, not Fleet Command)
+      if (!isMe && !isSystem && !isFleetCommand) {
         const flagW = 14;
         const flagH = 10;
         const flagX = x + w - PANEL_PAD - flagW;
@@ -5202,34 +5314,67 @@ function drawDMConversation(
       }
 
       // Message body
-      ctx.font = '7px monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      ctx.fillStyle = isSystem ? 'rgba(255, 204, 0, 0.8)' : isMe ? 'rgba(68, 170, 255, 0.7)' : G_MED;
-      const maxChars = Math.floor((w - PANEL_PAD * 2) / 4.2);
-      const displayBody = isSystem ? msg.body.slice(11) : msg.body;
-      const bodyText = displayBody.length > maxChars ? displayBody.slice(0, maxChars - 1) + '\u2026' : displayBody;
-      ctx.fillText(bodyText, x + PANEL_PAD, my + 12);
+      if (videoMatch) {
+        // Video message — show PLAY button
+        const videoId = videoMatch[1]!;
+        const btnW = 50;
+        const btnH = 12;
+        const btnX = x + PANEL_PAD;
+        const btnY = my + 11;
+        const pulse = 0.7 + 0.3 * Math.sin(performance.now() * 0.003);
+        ctx.fillStyle = `rgba(192, 144, 255, ${0.15 * pulse})`;
+        ctx.fillRect(btnX, btnY, btnW, btnH);
+        ctx.strokeStyle = `rgba(192, 144, 255, ${0.6 * pulse})`;
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(btnX, btnY, btnW, btnH);
+        ctx.font = 'bold 7px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = `rgba(192, 144, 255, ${0.9 * pulse})`;
+        ctx.fillText('\u25B6 PLAY', btnX + btnW / 2, btnY + btnH / 2);
+        _videoPlayButtons.push({ x: btnX, y: btnY, w: btnW, h: btnH, videoId });
+        // Show text after video tag
+        const textAfter = msg.body.slice(videoMatch[0].length);
+        if (textAfter) {
+          ctx.font = '6px monospace';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = 'rgba(192, 144, 255, 0.6)';
+          ctx.fillText(textAfter.slice(0, 30), btnX + btnW + 4, btnY + btnH / 2);
+        }
+      } else {
+        ctx.font = '7px monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = isFleetCommand ? 'rgba(192, 144, 255, 0.8)' : isSystem ? 'rgba(255, 204, 0, 0.8)' : isMe ? 'rgba(68, 170, 255, 0.7)' : G_MED;
+        const maxChars = Math.floor((w - PANEL_PAD * 2) / 4.2);
+        const displayBody = isSystem ? msg.body.slice(11) : msg.body;
+        const bodyText = displayBody.length > maxChars ? displayBody.slice(0, maxChars - 1) + '\u2026' : displayBody;
+        ctx.fillText(bodyText, x + PANEL_PAD, my + 12);
+      }
     }
     ctx.restore();
   }
 
-  // Send button at bottom
+  // Send button at bottom (hide for Fleet Command — system sender, no replies)
+  const isFleetCommandPeer = _dmPeer?.toLowerCase() === FLEET_COMMAND_SENDER.toLowerCase();
   const sendY = y + bodyH - inputH - PANEL_PAD;
   const sendW = w - PANEL_PAD * 2;
   const sendH = inputH;
   const sendX = x + PANEL_PAD;
-  ctx.fillStyle = 'rgba(0, 255, 128, 0.12)';
-  ctx.fillRect(sendX, sendY, sendW, sendH);
-  ctx.strokeStyle = G_MED;
-  ctx.lineWidth = 0.5;
-  ctx.strokeRect(sendX, sendY, sendW, sendH);
-  ctx.font = 'bold 8px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = G_BRIGHT;
-  ctx.fillText('\u{1F4E8} SEND MESSAGE', sendX + sendW / 2, sendY + sendH / 2);
-  _comsSendButton = { x: sendX, y: sendY, w: sendW, h: sendH };
+  if (!isFleetCommandPeer) {
+    ctx.fillStyle = 'rgba(0, 255, 128, 0.12)';
+    ctx.fillRect(sendX, sendY, sendW, sendH);
+    ctx.strokeStyle = G_MED;
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(sendX, sendY, sendW, sendH);
+    ctx.font = 'bold 8px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = G_BRIGHT;
+    ctx.fillText('\u{1F4E8} SEND MESSAGE', sendX + sendW / 2, sendY + sendH / 2);
+    _comsSendButton = { x: sendX, y: sendY, w: sendW, h: sendH };
+  }
 
   // Report confirmation flash
   const reportRemaining = _dmReportConfirmUntil - Date.now();
@@ -5671,6 +5816,14 @@ export function hitTestComsPanel(sx: number, sy: number): boolean {
       return true;
     }
   }
+  // Video play buttons
+  for (const btn of _videoPlayButtons) {
+    if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      _pendingVideoPlay = btn.videoId;
+      playSound('click');
+      return true;
+    }
+  }
   // Contact buttons
   for (const btn of _comsContactButtons) {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
@@ -5806,7 +5959,7 @@ interface DockButton {
 
 let _lastDockButtons: DockButton[] = [];
 
-type DockExtensionAction = 'upgrade_station' | 'extend_habitat' | 'extend_ore' | 'extend_defense' | 'extend_warehouse' | 'extend_dock' | 'extend_shield' | 'extend_cannon';
+type DockExtensionAction = 'upgrade_station' | 'extend_habitat' | 'extend_ore' | 'extend_defense' | 'extend_warehouse' | 'extend_dock' | 'extend_shield' | 'extend_cannon' | 'extend_refinery';
 export type DockPanelAction = DockAction | DockExtensionAction | 'buy_ships' | 'debug_complete' | 'toggle_shield';
 
 let _completeButton: { x: number; y: number; w: number; h: number } | null = null;
@@ -5819,12 +5972,13 @@ type ExtensionButton = {
   w: number;
   h: number;
   enabled: boolean;
+  lockReason?: string;
 };
 
 type MockExtensionState = {
   action: DockExtensionAction;
   label: string;
-  key: 'mine' | 'solar' | 'hab' | 'station' | 'warehouse' | 'dock' | 'shield' | 'cannon';
+  key: 'mine' | 'solar' | 'hab' | 'station' | 'warehouse' | 'dock' | 'shield' | 'cannon' | 'refinery';
   cost: { ore: number; food: number; energy: number };
   buildMs: number;
 };
@@ -5838,14 +5992,16 @@ const MOCK_EXTENSION_DEFS: MockExtensionState[] = [
   { action: 'extend_dock', label: 'DOCK', key: 'dock', cost: { ore: 500, food: 300, energy: 400 }, buildMs: 600_000 },
   { action: 'extend_shield', label: 'SHIELD', key: 'shield', cost: { ore: 400, food: 300, energy: 350 }, buildMs: 300_000 },
   { action: 'extend_cannon', label: 'CANNON', key: 'cannon', cost: { ore: 500, food: 250, energy: 450 }, buildMs: 300_000 },
+  { action: 'extend_refinery', label: 'REFINERY', key: 'refinery', cost: { ore: 300, food: 100, energy: 200 }, buildMs: 300_000 },
 ];
 
 let _lastExtensionButtons: ExtensionButton[] = [];
+let _lockFlash: { action: string; expireMs: number } | null = null;
 
 type ServerEconomySnapshot = {
   starIndex: number;
-  store: { ore: number; food: number; energy: number };
-  rates: { ore: number; food: number; energy: number };
+  store: { ore: number; food: number; energy: number; fuel: number };
+  rates: { ore: number; food: number; energy: number; fuel: number };
   cap: number;
   shieldRaised: boolean;
   defenseScore: { shield: number; cannon: number; total: number };
@@ -5858,20 +6014,23 @@ type ServerEconomySnapshot = {
     dock: { level: number; status: string; completeAt: number | null };
     shield: { level: number; status: string; completeAt: number | null };
     cannon: { level: number; status: string; completeAt: number | null };
+    refinery: { level: number; status: string; completeAt: number | null };
   };
   completeCharges?: number;
-  richness?: { ore: number; food: number; energy: number };
+  richness?: { ore: number; food: number; energy: number; fuel: number };
 };
 
 const _serverEconomyByStarIndex = new Map<number, ServerEconomySnapshot>();
 let _lastEconomyStarIndex: number | null = null;
-let _pendingBuildRequest: { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' } | null = null;
+let _pendingBuildRequest: { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' | 'refinery' } | null = null;
 let _pendingBuyShipRequest: { shipTypeId: number; quantity: number; useBlueprint?: boolean } | null = null;
 let _pendingUpgradeShipRequest: { fromTypeId: number; useBlueprint?: boolean } | null = null;
 let _pendingCompleteBuilds = false;
-let _pendingColonizeRequest: { starIndex: number } | null = null;
+let _pendingColonizeRequest: { starIndex: number; bodyIndex: number } | null = null;
 let _pendingToggleShield = false;
 let _pendingExplore: { starIndex: number; bodyIndex: number } | null = null;
+let _pendingVideoPlay: string | null = null; // video ID to play (from Fleet Command DM)
+let _videoPlayButtons: Array<{ x: number; y: number; w: number; h: number; videoId: string }> = [];
 let _lastExploreResult: { kind: string; label: string; icon: string; amount: number; showUntil: number } | null = null;
 let _colonizeButton: { x: number; y: number; w: number; h: number } | null = null;
 let _shieldToggleButton: { x: number; y: number; w: number; h: number } | null = null;
@@ -5906,6 +6065,19 @@ export function setServerStarEconomy(snapshot: ServerEconomySnapshot): void {
   if (snapshot.completeCharges != null) {
     _completeCharges = snapshot.completeCharges;
   }
+}
+
+/** Deduct fuel from a star's local economy snapshot (optimistic client-side update). */
+export function deductBaseFuel(starIndex: number, amount: number): void {
+  const econ = _serverEconomyByStarIndex.get(starIndex);
+  if (econ) {
+    econ.store.fuel = Math.max(0, econ.store.fuel - amount);
+  }
+}
+
+/** Get available fuel at a star's base. */
+export function getBaseFuel(starIndex: number): number {
+  return _serverEconomyByStarIndex.get(starIndex)?.store.fuel ?? 0;
 }
 
 type ServerShipSnapshot = {
@@ -5946,11 +6118,11 @@ export function getTradeStationInfo(): TradeStationInfoResponse | null {
 }
 
 // Trade buttons state
-type TradeButtonDef = { x: number; y: number; w: number; h: number; giveType: 'ore' | 'food' | 'energy'; receiveType: 'ore' | 'food' | 'energy' };
+type TradeButtonDef = { x: number; y: number; w: number; h: number; giveType: 'ore' | 'food' | 'energy' | 'fuel'; receiveType: 'ore' | 'food' | 'energy' | 'fuel' };
 let _tradeButtons: TradeButtonDef[] = [];
-let _pendingTrade: { giveType: 'ore' | 'food' | 'energy'; receiveType: 'ore' | 'food' | 'energy' } | null = null;
+let _pendingTrade: { giveType: 'ore' | 'food' | 'energy' | 'fuel'; receiveType: 'ore' | 'food' | 'energy' | 'fuel' } | null = null;
 
-export function consumePendingTrade(): { giveType: 'ore' | 'food' | 'energy'; receiveType: 'ore' | 'food' | 'energy' } | null {
+export function consumePendingTrade(): { giveType: 'ore' | 'food' | 'energy' | 'fuel'; receiveType: 'ore' | 'food' | 'energy' | 'fuel' } | null {
   const t = _pendingTrade;
   _pendingTrade = null;
   return t;
@@ -5960,7 +6132,7 @@ type FreighterRouteRecord = {
   id: string;
   homeStarIndex: number;
   targetStarIndex: number;
-  cargo: { ore: number; food: number; energy: number };
+  cargo: { ore: number; food: number; energy: number; fuel: number };
   departedAt: number;
   arrivalAt: number;
   leg: 'outbound' | 'return';
@@ -5971,7 +6143,7 @@ type RaidRouteRecord = {
   id: string;
   homeStarIndex: number;
   targetStarIndex: number;
-  cargo: { ore: number; food: number; energy: number };
+  cargo: { ore: number; food: number; energy: number; fuel: number };
   departedAt: number;
   arrivalAt: number;
   leg: 'outbound' | 'return';
@@ -6052,7 +6224,7 @@ export function consumePendingCancelRoute(): string | null {
   return id;
 }
 
-export function consumePendingBuildRequest(): { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' } | null {
+export function consumePendingBuildRequest(): { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' | 'refinery' } | null {
   const next = _pendingBuildRequest;
   _pendingBuildRequest = null;
   return next;
@@ -6076,7 +6248,7 @@ export function consumePendingCompleteBuilds(): boolean {
   return next;
 }
 
-export function consumePendingColonizeRequest(): { starIndex: number } | null {
+export function consumePendingColonizeRequest(): { starIndex: number; bodyIndex: number } | null {
   const next = _pendingColonizeRequest;
   _pendingColonizeRequest = null;
   return next;
@@ -6098,6 +6270,12 @@ export function consumePendingExplore(): { starIndex: number; bodyIndex: number 
   return next;
 }
 
+export function consumePendingVideoPlay(): string | null {
+  const next = _pendingVideoPlay;
+  _pendingVideoPlay = null;
+  return next;
+}
+
 export function showExploreResult(kind: string, label: string, icon: string, amount: number): void {
   _lastExploreResult = { kind, label, icon, amount, showUntil: performance.now() + 4000 };
 }
@@ -6106,7 +6284,7 @@ export function triggerExplore(starIndex: number, bodyIndex: number): void {
   _pendingExplore = { starIndex, bodyIndex };
 }
 
-function mapDockActionToBuildType(action: DockExtensionAction): 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' {
+function mapDockActionToBuildType(action: DockExtensionAction): 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' | 'refinery' {
   if (action === 'upgrade_station') return 'station';
   if (action === 'extend_ore') return 'mine';
   if (action === 'extend_defense') return 'solar';
@@ -6114,6 +6292,7 @@ function mapDockActionToBuildType(action: DockExtensionAction): 'station' | 'min
   if (action === 'extend_dock') return 'dock';
   if (action === 'extend_shield') return 'shield';
   if (action === 'extend_cannon') return 'cannon';
+  if (action === 'extend_refinery') return 'refinery';
   return 'hab';
 }
 
@@ -6131,7 +6310,7 @@ function isDockedAtStation(dock?: DockState): boolean {
 }
 
 export function triggerDockPanelAction(action: DockPanelAction, dock?: DockState): boolean {
-  if (action === 'upgrade_station' || action === 'extend_habitat' || action === 'extend_ore' || action === 'extend_defense' || action === 'extend_warehouse' || action === 'extend_dock' || action === 'extend_shield' || action === 'extend_cannon') {
+  if (action === 'upgrade_station' || action === 'extend_habitat' || action === 'extend_ore' || action === 'extend_defense' || action === 'extend_warehouse' || action === 'extend_dock' || action === 'extend_shield' || action === 'extend_cannon' || action === 'extend_refinery') {
     const serverEcon = _lastEconomyStarIndex == null ? null : _serverEconomyByStarIndex.get(_lastEconomyStarIndex);
     if (!serverEcon || !isDockedAtStation(dock)) return false;
     const buildType = mapDockActionToBuildType(action);
@@ -6216,6 +6395,30 @@ export function drawDockPanel(
   ctx.textBaseline = 'middle';
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText(`\u25CF ORBIT: ${dock.targetName.toUpperCase()}`, barX + 10, barY + barH / 2);
+
+  // NO INTERCHANGE indicator at opponent stations (no resource transfer available)
+  const isForeignStation = _panelsForeign && dock.targetType === 'feature' && dock.targetLabel === 'Station';
+  if (isForeignStation && dock.docked) {
+    const adText = '\u26D4 NO INTERCHANGE';
+    const adW = 130;
+    const adH = 20;
+    const adX = (screenW - adW) / 2;
+    const adY = barY - adH - 8;
+
+    ctx.fillStyle = 'rgba(60, 10, 10, 0.9)';
+    roundedRect(ctx, adX, adY, adW, adH, 3);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 80, 60, 0.8)';
+    ctx.lineWidth = 1;
+    roundedRect(ctx, adX, adY, adW, adH, 3);
+    ctx.stroke();
+
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgb(255, 100, 80)';
+    ctx.fillText(adText, adX + adW / 2, adY + adH / 2);
+  }
 
   // Action buttons on right side of bar
   const btnW = 48;
@@ -6400,7 +6603,7 @@ export function hitTestDockPanel(screenPos: Vec2): DockPanelAction | null {
     if (screenPos.x >= b.x && screenPos.x <= b.x + b.w &&
         screenPos.y >= b.y && screenPos.y <= b.y + b.h) {
       if (_panelsStarIndex != null) {
-        _pendingColonizeRequest = { starIndex: _panelsStarIndex };
+        _pendingColonizeRequest = { starIndex: _panelsStarIndex, bodyIndex: _panelsBodyIndex };
         playSound('click');
       }
       return null; // consumed internally

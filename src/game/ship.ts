@@ -174,7 +174,7 @@ export function updateShip(state: GameState, dt: number, safeZone: { minX: numbe
       ship.ang += state.keyTurnRate * TURN_SPEED * dt;
     }
 
-    if (state.keyThrust && state.fuelPercent > 0) {
+    if (state.keyThrust && state.fuelUnits > 0) {
       // Thrust in facing direction
       const forwardDir = vec2(Math.cos(ship.ang), Math.sin(ship.ang));
       let desiredVel = scale(forwardDir, maxSpeed);
@@ -203,7 +203,7 @@ export function updateShip(state: GameState, dt: number, safeZone: { minX: numbe
       const tgtInSafe = state.tgtPos.x > safeZone.minX && state.tgtPos.x < safeZone.maxX &&
         state.tgtPos.y > safeZone.minY && state.tgtPos.y < safeZone.maxY;
 
-      let desiredSpeed = state.fuelPercent > 0 ? maxSpeed : 0;
+      let desiredSpeed = state.fuelUnits > 0 ? maxSpeed : 0;
       // Scale arrive radius with tier speed so the ship decelerates proportionally
       const arriveR = SHIP_ARRIVE_RADIUS * (maxSpeed / SHIP_MAX_SPEED);
       // In Planet tier, don't decelerate near target if target is near visible edge

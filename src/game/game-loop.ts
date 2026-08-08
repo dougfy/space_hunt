@@ -3,10 +3,10 @@
 import type { GameState, ShipShape } from './types';
 import { ZoomState } from './types';
 import {
-  CANVAS_W, CANVAS_H, FUEL_MAX,
+  CANVAS_W, CANVAS_H, FUEL_CAPACITY_BY_SHAPE,
   FUEL_DRAIN_PER_SECOND, LOW_FUEL_THRESHOLD, LOW_FUEL_BLINK_PERIOD,
   SHIP_IMPACT_BUFFER, SYSTEM_SIZE, SHIP_SIZE, PLAYER_MAX_HP, GALAXY_SIZE,
-  STAR_ENTER_RADIUS,
+  STAR_ENTER_RADIUS, WARP_FUEL_COST_PER_UNIT, WARP_FUEL_MIN_COST,
 } from './constants';
 import { vec2 } from './math';
 import { generateAsteroids, generateRingAsteroids } from './asteroids';
@@ -28,7 +28,7 @@ import {
   setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert,
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
   drawGalaxyZoomButtons, hitTestGalaxyZoomButtons,
-  drawSkinToggleButton, hitTestSkinToggle,
+
   selectGalaxyStar, deselectGalaxyStar, getSelectedStarIndex, hitTestStarInfoDismiss, hitTestStarInfoVisit,
   drawGalaxyModeToggle, drawGalaxyModeBanner, hitTestGalaxyModeBtn, toggleGalaxyMode, setGalaxyMode, getGalaxyMode,
   setGalaxyJumpReturnTier, isFleetPanelOpen, closeFleetPanel,
@@ -65,6 +65,19 @@ const POSE_INTERVAL = 1; // 1Hz pose reporting (1 request/sec)
 let _scoutWarningTimer = 0;
 const SCOUT_WARNING_DURATION = 3.5; // seconds
 
+// ── Warp fuel warning (Phase 14d) ──
+let _warpFuelWarningTimer = 0;
+const WARP_FUEL_WARNING_DURATION = 3.0; // seconds
+
+// ── Dock refuel request (to debit star fuel supply) ──
+let _pendingRefuel: { starIndex: number; amount: number } | null = null;
+
+export function consumePendingRefuel(): { starIndex: number; amount: number } | null {
+  const r = _pendingRefuel;
+  _pendingRefuel = null;
+  return r;
+}
+
 // ── Known players (discovered via probes/visits) ──
 const _knownPlayers = new Set<string>();
 
@@ -81,11 +94,12 @@ export function getGameState(): GameState | null {
 }
 
 /** After colonization succeeds, regenerate the system so the new station appears. */
-export function onColonizeSuccess(starIndex: number): void {
+export function onColonizeSuccess(starIndex: number, bodyIndex = 0): void {
   if (!gameState) return;
   const star = gameState.galaxy.stars[starIndex];
   if (!star) return;
   star.owner = 'player';
+  star.stationBodyIndex = bodyIndex;
   // Regenerate system bodies so station feature is created
   if (gameState.galaxy.currentStarIndex === starIndex) {
     gameState.galaxy.bodies = generateSystem(star, getPostId());
@@ -101,12 +115,15 @@ export function refreshGalaxyStarNames(): void {
  * Mark stars as owned by other players (foreign).
  * Called after profile load with the claimed stars list.
  */
-export function setStarClaims(claims: Array<{ starIndex: number; username: string }>, myUsername: string): void {
+export function setStarClaims(claims: Array<{ starIndex: number; username: string; bodyIndex?: number }>, myUsername: string): void {
   if (!gameState) return;
   let playerClaimCount = 0;
   for (const claim of claims) {
     const star = gameState.galaxy.stars[claim.starIndex];
     if (!star) continue;
+    if (claim.bodyIndex != null) {
+      star.stationBodyIndex = claim.bodyIndex;
+    }
     if (claim.username === myUsername) {
       star.owner = 'player';
       star.discovered = true;
@@ -284,6 +301,26 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
     const edgeDist = 20; // SYSTEM_EXIT_RADIUS - 2, near outer boundary
     gameState.ship.pos = vec2(center, center + edgeDist);
     gameState.dock = null; // Clear dock state from startGame
+  } else if (tier === NavigationTier.Local) {
+    // At local orbit ring — generate system + ring asteroids for the body
+    gameState.galaxy.bodies = generateSystem(star, getPostId());
+    const bi = Math.min(bodyIndex, gameState.galaxy.bodies.length - 1);
+    gameState.galaxy.currentBodyIndex = bi;
+    gameState.galaxy.tier = NavigationTier.Local;
+    gameState.dock = null;
+    const body = gameState.galaxy.bodies[bi];
+    if (body) {
+      const center = SYSTEM_SIZE / 2;
+      const localSeed = getLocalSeed(body);
+      const { asteroids, names } = generateRingAsteroids(localSeed, center, center, body.orbitDist);
+      gameState.asteroids = asteroids;
+      gameState.asteroidNames = names;
+      gameState.pods = generateFuelPods(asteroids, localSeed);
+      gameState.docksCollected = 0;
+      gameState.totalDocks = gameState.pods.filter(p => !p.refuels).length;
+      // Place ship at orbit distance
+      gameState.ship.pos = vec2(center + body.orbitDist, center);
+    }
   } else {
     // Planet tier — generate system, go to specific body
     gameState.galaxy.bodies = generateSystem(star, getPostId());
@@ -355,7 +392,7 @@ export function startGame(
     inputMode: 'mouse',
     keyThrust: false,
     keyTurnRate: 0,
-    fuelPercent: FUEL_MAX,
+    fuelUnits: FUEL_CAPACITY_BY_SHAPE[shipShape],
     docksCollected: 0,
     totalDocks: 0,
     zoomState: ZoomState.Normal,
@@ -373,6 +410,7 @@ export function startGame(
     galaxyZoom: 20,
     galaxyCamPos: { x: 50, y: 50 },
     galaxyZoomCooldown: 0,
+    floatTexts: [],
   };
 
   // Splash mode: drop into a self-contained asteroid field immediately
@@ -497,6 +535,7 @@ function update(dt: number): void {
 
   // Tick down scout warning timer
   if (_scoutWarningTimer > 0) _scoutWarningTimer = Math.max(0, _scoutWarningTimer - dt);
+  if (_warpFuelWarningTimer > 0) _warpFuelWarningTimer = Math.max(0, _warpFuelWarningTimer - dt);
 
   // Intercept UI clicks BEFORE processInput sets ship target
 
@@ -524,7 +563,7 @@ function update(dt: number): void {
         undock(gameState);
         journeyAction();
       } else if (dockAction === 'scan') {
-        playSound('click');
+        playSound('begin_scan');
         // Trigger planet exploration
         triggerExplore(gameState.galaxy.currentStarIndex, gameState.galaxy.currentBodyIndex);
         console.log('[DOCK] SCAN triggered at star', gameState.galaxy.currentStarIndex, 'body', gameState.galaxy.currentBodyIndex);
@@ -623,12 +662,7 @@ function update(dt: number): void {
     }
   }
 
-  // Handle skin toggle button tap (admin only, planet tier)
-  if (gameState.galaxy.tier === NavigationTier.Planet && inputState.pointerDown && inputState.pointerPos) {
-    if (hitTestSkinToggle(renderer, inputState.pointerPos.x, inputState.pointerPos.y)) {
-      inputState.pointerDown = false;
-    }
-  }
+
 
   // Handle galaxy mode toggle button tap
   if (gameState.galaxy.tier === NavigationTier.Galaxy && inputState.pointerDown && inputState.pointerPos) {
@@ -830,10 +864,21 @@ function update(dt: number): void {
     gameState.ship.vel = vec2(0, 0);
     gameState.ship.thrust = false;
 
-    // Refill resources at station/starbase
+    // Refill resources at station/starbase — only at player-owned or unclaimed stars
     if (gameState.dock.targetType === 'feature' && gameState.dock.targetLabel === 'Station') {
-      gameState.fuelPercent = FUEL_MAX;
-      gameState.shooting.hp = PLAYER_MAX_HP;
+      const dockStar = gameState.galaxy.currentStarIndex >= 0
+        ? gameState.galaxy.stars[gameState.galaxy.currentStarIndex] : null;
+      const starOwner = dockStar?.owner ?? 'none';
+      const isHome = gameState.galaxy.currentStarIndex === gameState.galaxy.homeStarIndex;
+      if (starOwner !== 'foreign' || isHome) {
+        const cap = FUEL_CAPACITY_BY_SHAPE[gameState.shipShape];
+        const needed = cap - gameState.fuelUnits;
+        if (needed > 0 && !_pendingRefuel) {
+          _pendingRefuel = { starIndex: gameState.galaxy.currentStarIndex, amount: Math.ceil(needed) };
+        }
+        gameState.fuelUnits = cap;
+        gameState.shooting.hp = PLAYER_MAX_HP;
+      }
     }
   } else if (gameState.dock && !gameState.dock.docked) {
     // Docking approach animation in progress
@@ -859,15 +904,18 @@ function update(dt: number): void {
   updateShooting(gameState, dt);
 
   // Fuel drain
-  if (gameState.fuelPercent > 0 && gameState.ship.thrust) {
-    const prevFuel = gameState.fuelPercent;
-    gameState.fuelPercent -= FUEL_DRAIN_PER_SECOND * dt;
-    if (gameState.fuelPercent < 0) gameState.fuelPercent = 0;
-    // Play fuel warnings once when crossing thresholds
-    if (prevFuel > LOW_FUEL_THRESHOLD && gameState.fuelPercent <= LOW_FUEL_THRESHOLD) {
+  const fuelCapacity = FUEL_CAPACITY_BY_SHAPE[gameState.shipShape];
+  if (gameState.fuelUnits > 0 && gameState.ship.thrust) {
+    const prevFuel = gameState.fuelUnits;
+    gameState.fuelUnits -= FUEL_DRAIN_PER_SECOND * dt;
+    if (gameState.fuelUnits < 0) gameState.fuelUnits = 0;
+    // Play fuel warnings once when crossing thresholds (percentage-based)
+    const prevPct = (prevFuel / fuelCapacity) * 100;
+    const curPct = (gameState.fuelUnits / fuelCapacity) * 100;
+    if (prevPct > LOW_FUEL_THRESHOLD && curPct <= LOW_FUEL_THRESHOLD) {
       playSound('low_fuel');
     }
-    if (prevFuel > 10 && gameState.fuelPercent <= 10) {
+    if (prevPct > 10 && curPct <= 10) {
       playSound('fuel_critical');
     }
   }
@@ -883,6 +931,10 @@ function update(dt: number): void {
       devvitCb.onClaimPod(podId, pod ? !pod.refuels : false);
     }
   }
+
+  // Update floating texts (age + cull expired)
+  for (const ft of gameState.floatTexts) ft.age += dt;
+  gameState.floatTexts = gameState.floatTexts.filter(ft => ft.age < 1.5);
 
   // Safety: dock state should only exist at Planet tier. Clear if stale.
   if (gameState.dock && gameState.galaxy.tier !== NavigationTier.Planet) {
@@ -953,8 +1005,40 @@ function update(dt: number): void {
       _scoutWarningTimer = SCOUT_WARNING_DURATION;
       playSound('scout_range_exceeded');
       // Don't apply transition
-    } else {
-    console.log('[TRANSITION] from tier=', gameState.galaxy.tier, 'to=', transition.newTier, 'shipPos=', gameState.ship.pos, 'worldShipPos=', worldShipPos, 'starIdx=', transition.starIndex, 'bodyIdx=', transition.bodyIndex);
+    } else if (transition.newTier === NavigationTier.System && tier === NavigationTier.Galaxy) {
+      // ── Phase 14d: Warp fuel cost ──────────────────────────────────────────
+      const star = gameState.galaxy.stars[transition.starIndex];
+      const dist = star ? Math.sqrt(
+        (gameState.ship.pos.x - star.pos.x) ** 2 + (gameState.ship.pos.y - star.pos.y) ** 2,
+      ) : 0;
+      // Use distance from the previous star (or origin) to the target star
+      const prevStar = gameState.galaxy.currentStarIndex >= 0
+        ? gameState.galaxy.stars[gameState.galaxy.currentStarIndex] : null;
+      const warpDist = prevStar && star ? Math.sqrt(
+        (prevStar.pos.x - star.pos.x) ** 2 + (prevStar.pos.y - star.pos.y) ** 2,
+      ) : dist;
+      const warpCost = Math.max(WARP_FUEL_MIN_COST, Math.ceil(warpDist * WARP_FUEL_COST_PER_UNIT));
+      if (gameState.fuelUnits < warpCost) {
+        // Insufficient fuel — bounce back
+        const center = star ? star.pos : gameState.ship.pos;
+        const dx2 = gameState.ship.pos.x - center.x;
+        const dy2 = gameState.ship.pos.y - center.y;
+        const d2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+        if (d2 > 0) {
+          gameState.ship.pos = vec2(
+            gameState.ship.pos.x + (dx2 / d2) * 0.5,
+            gameState.ship.pos.y + (dy2 / d2) * 0.5,
+          );
+        }
+        gameState.ship.vel = vec2(0, 0);
+        gameState.tgtActive = false;
+        _warpFuelWarningTimer = WARP_FUEL_WARNING_DURATION;
+        playSound('low_fuel');
+      } else {
+        // Deduct warp fuel and proceed with Galaxy→System transition
+        gameState.fuelUnits -= warpCost;
+        console.log('[WARP] cost=', warpCost, 'remaining=', gameState.fuelUnits);
+    console.log('[TRANSITION] Galaxy→System shipPos=', gameState.ship.pos, 'starIdx=', transition.starIndex);
     const newPos = applyTransition(gameState.galaxy, transition, gameState.ship.pos, getPostId());
     gameState.ship.pos = newPos;
     gameState.worldOffset = vec2(0, 0);
@@ -966,38 +1050,50 @@ function update(dt: number): void {
       addKnownPlayer(foreignOwner);
     }
 
-    // Entering a system from galaxy → close fleet panel so it doesn't force us back
-    if (transition.newTier === NavigationTier.System && tier === NavigationTier.Galaxy) {
-      closeFleetPanel();
+    closeFleetPanel();
+    gameState.ship.vel = vec2(0, 0);
+
+    // Galaxy→System never spawns local content
+    gameState.asteroids = [];
+    gameState.asteroidNames = [];
+    gameState.pods = [];
+      } // end warp fuel else
+    } else {
+    // Non-warp transitions (System↔Local, Local→Planet, System→Galaxy, etc.)
+    console.log('[TRANSITION] from tier=', gameState.galaxy.tier, 'to=', transition.newTier, 'shipPos=', gameState.ship.pos, 'worldShipPos=', worldShipPos, 'starIdx=', transition.starIndex, 'bodyIdx=', transition.bodyIndex);
+    const newPos2 = applyTransition(gameState.galaxy, transition, gameState.ship.pos, getPostId());
+    gameState.ship.pos = newPos2;
+    gameState.worldOffset = vec2(0, 0);
+    gameState.tgtActive = false;
+
+    const foreignOwner2 = consumeVisitForeignOwner();
+    if (foreignOwner2) {
+      addKnownPlayer(foreignOwner2);
     }
 
-    // Exiting a system → galaxy = NAV mode
     if (transition.newTier === NavigationTier.Galaxy) {
       setGalaxyMode('nav');
     }
 
-    // Belt transitions (Local↔System): don't reset velocity — ship keeps moving
-    const isBeltTransition = (
+    const isBeltTransition2 = (
       (tier === NavigationTier.System && transition.newTier === NavigationTier.Local) ||
       (tier === NavigationTier.Local && transition.newTier === NavigationTier.System)
     );
-    if (!isBeltTransition) {
+    if (!isBeltTransition2) {
       gameState.ship.vel = vec2(0, 0);
     }
 
-    // Regenerate world content for new tier
     if (transition.newTier === NavigationTier.Local) {
-      const body = gameState.galaxy.bodies[transition.bodyIndex];
-      if (!body) return;
-      const localSeed = getLocalSeed(body);
-      const center = SYSTEM_SIZE / 2;
-      const { asteroids, names } = generateRingAsteroids(localSeed, center, center, body.orbitDist);
-      gameState.asteroids = asteroids;
-      gameState.asteroidNames = names;
-      gameState.pods = generateFuelPods(asteroids, localSeed);
+      const body2 = gameState.galaxy.bodies[transition.bodyIndex];
+      if (!body2) return;
+      const localSeed2 = getLocalSeed(body2);
+      const center2 = SYSTEM_SIZE / 2;
+      const { asteroids: ast2, names: nm2 } = generateRingAsteroids(localSeed2, center2, center2, body2.orbitDist);
+      gameState.asteroids = ast2;
+      gameState.asteroidNames = nm2;
+      gameState.pods = generateFuelPods(ast2, localSeed2);
       gameState.docksCollected = 0;
       gameState.totalDocks = gameState.pods.filter(p => !p.refuels).length;
-      console.log('[RING] Local tier entered. asteroids=', asteroids.length, 'pods=', gameState.pods.length, 'docks=', gameState.totalDocks, 'orbitDist=', body.orbitDist);
     } else if (transition.newTier === NavigationTier.Planet) {
       gameState.asteroids = [];
       gameState.asteroidNames = [];
@@ -1007,7 +1103,7 @@ function update(dt: number): void {
       gameState.asteroidNames = [];
       gameState.pods = [];
     }
-    } // end else (non-scout gate)
+    } // end non-warp else
   }
   } // end splash mode guard
 
@@ -1031,6 +1127,8 @@ function render(): void {
   const tier = gameState.galaxy.tier;
   const screenW = renderer.width / (window.devicePixelRatio || 1);
   const screenH = renderer.height / (window.devicePixelRatio || 1);
+  const fuelCap = FUEL_CAPACITY_BY_SHAPE[gameState.shipShape];
+  const fuelPct = (gameState.fuelUnits / fuelCap) * 100;
   clearScreen(renderer);
 
   // ── Galaxy tier ──
@@ -1068,7 +1166,23 @@ function render(): void {
     // Draw side panels (not docked at galaxy level)
     setPanelContext(false, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'galaxy', gameState.shipShape);
     drawPlanetPanels(renderer.ctx, screenW, screenH, ['TIER: GALAXY']);
-    drawShipStatus(renderer, gameState.fuelPercent, (gameState.shooting.hp / PLAYER_MAX_HP) * 100);
+    drawShipStatus(renderer, gameState.fuelUnits, fuelCap, (gameState.shooting.hp / PLAYER_MAX_HP) * 100);
+
+    // Warp fuel warning overlay
+    if (_warpFuelWarningTimer > 0) {
+      const ctx = renderer.ctx;
+      const alpha = Math.min(1, _warpFuelWarningTimer / 0.5);
+      ctx.save();
+      ctx.font = 'bold 13px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = `rgba(255, 160, 40, ${alpha})`;
+      ctx.fillText('INSUFFICIENT FUEL FOR WARP', screenW / 2, screenH * 0.18);
+      ctx.font = '11px monospace';
+      ctx.fillStyle = `rgba(200, 220, 210, ${alpha * 0.85})`;
+      ctx.fillText('Refuel at a station before traveling', screenW / 2, screenH * 0.18 + 20);
+      ctx.restore();
+    }
     return;
   }
 
@@ -1122,7 +1236,7 @@ function render(): void {
       ctx.fillText('Upgrade ship at station to leave system', screenW / 2, screenH * 0.18 + 20);
       ctx.restore();
     }
-    drawShipStatus(renderer, gameState.fuelPercent, (gameState.shooting.hp / PLAYER_MAX_HP) * 100);
+    drawShipStatus(renderer, gameState.fuelUnits, fuelCap, (gameState.shooting.hp / PLAYER_MAX_HP) * 100);
     return;
   }
 
@@ -1131,14 +1245,16 @@ function render(): void {
     const shieldPercent = (gameState.shooting.hp / PLAYER_MAX_HP) * 100;
     const isDocked = gameState.dock?.docked === true;
     const currentStar = gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.stars[gameState.galaxy.currentStarIndex] : null;
-    const isOwned = currentStar?.owner === 'player';
-    setPanelContext(isDocked, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'planet', gameState.shipShape, isOwned);
+    const isOwned = currentStar?.owner === 'player' || gameState.galaxy.currentStarIndex === gameState.galaxy.homeStarIndex;
+    const isForeign = currentStar?.owner === 'foreign' && gameState.galaxy.currentStarIndex !== gameState.galaxy.homeStarIndex;
+    setPanelContext(isDocked, gameState.galaxy.currentStarIndex >= 0 ? gameState.galaxy.currentStarIndex : null, 'planet', gameState.shipShape, isOwned, isForeign, gameState.galaxy.currentBodyIndex);
     drawPlanetView(
       renderer,
       camera,
       gameState.galaxy,
       gameState.ship.pos,
-      gameState.fuelPercent,
+      gameState.fuelUnits,
+      fuelCap,
       shieldPercent,
       isDocked,
     );
@@ -1186,7 +1302,6 @@ function render(): void {
 
     // Planet tier info is in the planet view itself (top-left), no separate HUD needed
     drawControlButtons(renderer, false, false, _debugBounds);
-    drawSkinToggleButton(renderer);
 
     // Draw dock panel only when fully docked
     if (gameState.dock?.docked) {
@@ -1227,6 +1342,19 @@ function render(): void {
     }
   }
 
+  // Draw floating collection texts
+  for (const ft of gameState.floatTexts) {
+    const scr = worldToScreen({ x: ft.x, y: ft.y + ft.age * 0.5 }, camera, screenW, screenH);
+    const alpha = Math.max(0, 1 - ft.age / 1.5);
+    renderer.ctx.save();
+    renderer.ctx.globalAlpha = alpha;
+    renderer.ctx.font = 'bold 14px monospace';
+    renderer.ctx.fillStyle = ft.color;
+    renderer.ctx.textAlign = 'center';
+    renderer.ctx.fillText(ft.text, scr.x, scr.y);
+    renderer.ctx.restore();
+  }
+
   // Draw target reticle
   if (gameState.tgtActive) {
     drawTargetReticle(renderer, camera, gameState.tgtPos);
@@ -1252,11 +1380,12 @@ function render(): void {
   drawPlayerLabel(renderer, camera, gameState.ship.pos, gameState.playerName);
 
   // Draw HUD
-  const lowBlink = gameState.fuelPercent <= LOW_FUEL_THRESHOLD &&
+  const lowBlink = fuelPct <= LOW_FUEL_THRESHOLD &&
     Math.floor(gameState.elapsedTime / LOW_FUEL_BLINK_PERIOD) % 2 === 0;
   drawHUD(
     renderer,
-    gameState.fuelPercent,
+    gameState.fuelUnits,
+    fuelCap,
     gameState.docksCollected,
     gameState.totalDocks,
     lowBlink,

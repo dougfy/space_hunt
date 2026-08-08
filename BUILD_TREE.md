@@ -4,8 +4,9 @@
 
 - **Rates are per minute** (continuous accumulation)
 - **Base rate** (Station ≥ 1): 84 ore/min, 84 food/min, 84 energy/min
+- **Fuel base rate**: `richness × 2.5` per minute (planet-dependent, no building bonus)
 - **Bonus per producer level**: `21 × (level × (level+1) / 2)` added to base
-- **Starting resources**: 640 ore, 640 food, 640 energy
+- **Starting resources**: 640 ore, 640 food, 640 energy, 0 fuel
 - **Base cap**: 1600 (all resources share same cap)
 - **Warehouse bonus**: +400 per warehouse level
 
@@ -18,7 +19,32 @@
 | 4 | +210 | 294 |
 | 5 | +315 | 399 |
 
-> Mine → ore, Hab → food, Solar → energy
+> Mine → ore, Hab → food, Solar → energy, Refinery → fuel (from ore + energy)
+
+### Fuel Production
+
+Fuel is produced by two sources:
+1. **Planet richness**: `fuelRichness × 2.5` per minute (passive, no building needed)
+2. **Refinery**: Converts ore + energy into fuel (consumes 1 ore + 1 energy per fuel produced)
+
+| Refinery Level | Fuel/min | Ore Drain/min | Energy Drain/min |
+|:-:|:-:|:-:|:-:|
+| 1 | 1 | 1 | 1 |
+| 2 | 2.5 | 2.5 | 2.5 |
+| 3 | 5 | 5 | 5 |
+
+### Ship Fuel Capacity
+
+| Ship Shape | Fuel Capacity |
+|:----------:|:------------:|
+| Scout | 100 |
+| Destroyer | 150 |
+| Frigate | 200 |
+| Battleship | 250 |
+| Cruiser | 350 |
+| Dreadnought | 500 |
+
+Fuel is consumed during warp travel (distance-based cost). Refueling occurs automatically when docked at a colonized star.
 
 ---
 
@@ -36,6 +62,7 @@
 | Space Dock | 5 | 10 min | Station 2 |
 | Shield Gen | 5 | 5 min | Station 2 |
 | Ion Cannon | 5 | 5 min | Station 3 |
+| Refinery | 3 | 5 min | Station 2, Mine 1 |
 
 ### Cost Formulas
 
@@ -58,6 +85,7 @@
 | Dock | 500 | 300 | 400 |
 | Shield | 400 | 300 | 350 |
 | Cannon | 500 | 250 | 450 |
+| Refinery | 300 | 100 | 200 |
 
 Example: Dock 3 = 1500/900/1200
 
@@ -128,6 +156,8 @@ graph TD
     S2 --> WH1["📦 Warehouse 1<br/>240/180/180 · 5min<br/><b>cap → 2000</b>"]
     S2 --> SH1["🛡️ Shield Gen 1<br/>400/300/350 · 5min"]
     S2 --> D1["🚀 DOCK 1<br/>500/300/400 · 10min"]
+    S2 --> REF["⚗️ REFINERY 1<br/>300/100/200 · 5min<br/><b>needs Mine 1</b>"]
+    MINE1 --> REF
 
     %% Dock chain
     D1 --> D2["🚀 DOCK 2<br/>1000/600/800 · 10min"]
@@ -173,7 +203,26 @@ graph TD
     style SHIPS_T1B fill:#0a2a2a,stroke:#0aa,color:#0aa
     style SHIPS_T2 fill:#0a2a2a,stroke:#0aa,color:#0aa
     style SHIPS_T3 fill:#0a2a2a,stroke:#0aa,color:#0aa
+    style REF fill:#2a1a00,stroke:#f80,color:#f80
 ```
+
+---
+
+## Trading Stations
+
+Certain stars host trading stations where players can exchange resources at dynamic rates.
+
+### Mechanics
+
+- **Resources tradeable**: ore, food, energy, fuel (all 12 pairwise combinations)
+- **Max per transaction**: 200 units
+- **Station stock**: equilibrium 1000, cap 2000 per resource
+- **Exchange rates**: supply/demand based — giving a resource the station has less of yields better rates
+- **Restocking**: Stations gradually restock toward equilibrium over time
+
+### Fuel Trading
+
+Fuel can be bought/sold at trading stations like any other resource. This provides an alternative to refinery production for acquiring fuel. Exchange rates fluctuate based on station supply.
 
 ---
 
@@ -257,6 +306,48 @@ When colonized, the new star begins with:
 - 640/640/640 starting resources
 - Cap: 1000 (note: lower than home star's 1600 base — this appears to be a hardcoded override)
 - All other buildings locked/ready per normal rules
+
+---
+
+## Colony Ship Transit & Deployment Flow
+
+### Overview
+
+The Colony Ship is a one-use vessel that transforms into a starbase (Station + Dock) at the destination. The player's primary ship (scout/destroyer/etc.) exists only at the home star.
+
+### Step-by-Step
+
+1. **Build Colony Ship** at home star (Dock 3 required, cost: 600/400/500, 10 min build)
+2. **Send Colony Ship** to a discovered, unclaimed star via FLEET transfer
+   - Colony Ship transits at speed 3 → `300/3 = 100s` transit time
+   - Colony Ship is removed from home star fleet during transit
+3. **Colony Ship arrives** at destination star
+   - Server reconciles transit on next `/api/fleet/all` poll
+   - Colony Ship appears in destination star's ship list
+   - **No scout is seeded at the destination** — only the colony ship is there
+4. **Player travels** to destination star (via galaxy map)
+5. **COLONIZE button** appears when player is docked at an unowned star with a Colony Ship present
+6. **Deploy** — player taps COLONIZE:
+   - Colony Ship is consumed (removed from fleet)
+   - Star is claimed for the player (first-write-wins race guard)
+   - Station lv1 + Dock lv1 are seeded (the "starbase")
+   - Starting resources: 640/640/640, cap 1000
+7. **Star is now a colony** — player can build, produce, and transfer ships to/from it
+
+### Key Rules
+
+- **Scout seeding is home-star-only**: The server only seeds a scout at the player's home star (prevents phantom ships at colony destinations)
+- **Colony Ship is non-upgrade-path**: It does not affect ship shape (your visual ship stays scout/destroyer/etc.)
+- **One colony ship per colonization**: Each colonization consumes exactly one Colony Ship
+- **Transit delivery is atomic**: The `loadAllFleet()` reconciliation adds arrived ships to destination in a single write, protected by a re-entrancy guard on the client poll
+
+### Ship Shape (Visual Identity)
+
+The player's ship shape is determined by their **home star fleet only**:
+- `getFleetShape()` checks the upgrade path `[Scout→Destroyer→Frigate→Battleship→Cruiser→Dreadnought]`
+- Returns the highest upgrade-path ship with `count > 0` at the home star
+- Colony Ships, Freighters, Probes, Raiders etc. do NOT affect ship shape
+- If no upgrade-path ship exists at home, shape defaults to `'scout'`
 
 ---
 

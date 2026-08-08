@@ -71,21 +71,29 @@ export const BUILDING_CATALOG: Record<BuildType, BuildingCatalogEntry> = {
     durationSeconds: 300,
     prereqs: { station: 3 },
   },
+  refinery: {
+    id: 'refinery',
+    label: 'Refinery',
+    maxLevel: 3,
+    durationSeconds: 300,
+    prereqs: { station: 2, mine: 1 },
+  },
 };
 
-const BUILDING_ORDER: BuildType[] = ['station', 'mine', 'solar', 'hab', 'warehouse', 'dock', 'shield', 'cannon'];
+const BUILDING_ORDER: BuildType[] = ['station', 'mine', 'solar', 'hab', 'warehouse', 'dock', 'shield', 'cannon', 'refinery'];
 const BASE_RESOURCE_CAP = 1600;
 const WAREHOUSE_CAP_BONUS = 400;
-const STATION_COST_BASE: ResourceStore = { ore: 420, food: 420, energy: 420 };
-const STATION_COST_STEP: ResourceStore = { ore: 180, food: 180, energy: 180 };
+const STATION_COST_BASE: ResourceStore = { ore: 420, food: 420, energy: 420, fuel: 0 };
+const STATION_COST_STEP: ResourceStore = { ore: 180, food: 180, energy: 180, fuel: 0 };
 const BUILD_COST_BASE: Record<Exclude<BuildType, 'station'>, ResourceStore> = {
-  mine: { ore: 260, food: 120, energy: 180 },
-  solar: { ore: 300, food: 180, energy: 260 },
-  hab: { ore: 180, food: 220, energy: 120 },
-  warehouse: { ore: 240, food: 180, energy: 180 },
-  dock: { ore: 500, food: 300, energy: 400 },
-  shield: { ore: 400, food: 300, energy: 350 },
-  cannon: { ore: 500, food: 250, energy: 450 },
+  mine: { ore: 260, food: 120, energy: 180, fuel: 0 },
+  solar: { ore: 300, food: 180, energy: 260, fuel: 0 },
+  hab: { ore: 180, food: 220, energy: 120, fuel: 0 },
+  warehouse: { ore: 240, food: 180, energy: 180, fuel: 0 },
+  dock: { ore: 500, food: 300, energy: 400, fuel: 0 },
+  shield: { ore: 400, food: 300, energy: 350, fuel: 0 },
+  cannon: { ore: 500, food: 250, energy: 450, fuel: 0 },
+  refinery: { ore: 300, food: 100, energy: 200, fuel: 0 },
 };
 const BUILD_RATE_STEP = 21;
 
@@ -103,6 +111,7 @@ export function createInitialStarBuildings(): StarBuildingsState {
     dock: makeBuildingState(0, 'LOCKED'),
     shield: makeBuildingState(0, 'LOCKED'),
     cannon: makeBuildingState(0, 'LOCKED'),
+    refinery: makeBuildingState(0, 'LOCKED'),
   };
 }
 
@@ -166,6 +175,7 @@ export function getBuildingCost(type: BuildType, targetLevel: number): ResourceS
       ore: STATION_COST_BASE.ore + STATION_COST_STEP.ore * step,
       food: STATION_COST_BASE.food + STATION_COST_STEP.food * step,
       energy: STATION_COST_BASE.energy + STATION_COST_STEP.energy * step,
+      fuel: 0,
     };
   }
 
@@ -174,11 +184,13 @@ export function getBuildingCost(type: BuildType, targetLevel: number): ResourceS
     ore: base.ore * level,
     food: base.food * level,
     energy: base.energy * level,
+    fuel: 0,
   };
 }
 
-export function getBuildingDurationSeconds(type: BuildType): number {
-  return BUILDING_CATALOG[type].durationSeconds;
+export function getBuildingDurationSeconds(_type: BuildType, targetLevel = 1): number {
+  // 2 min base + 1 min per additional level
+  return 120 + (targetLevel - 1) * 60;
 }
 
 export function reconcileStarBuildings(buildings: StarBuildingsState, now: number): StarBuildingsState {
@@ -201,7 +213,7 @@ function bonusForLevel(level: number): number {
 // ── Per-Star Richness ────────────────────────────────────────────────────────
 
 const RATE_PER_RICHNESS = 17; // base rate = richness * this (richness 5→85/min ≈ old 84, richness 10→170/min)
-const DEFAULT_RICHNESS: ResourceStore = { ore: 5, food: 5, energy: 5 };
+const DEFAULT_RICHNESS: ResourceStore = { ore: 5, food: 5, energy: 5, fuel: 0 };
 
 /** Simple deterministic hash for per-star seeding */
 function starRichnessHash(starIndex: number, offset: number): number {
@@ -220,6 +232,7 @@ export function getStarRichness(starIndex: number, isHomeStar = false): Resource
     ore:    min + (starRichnessHash(starIndex, 1) % range),
     food:   min + (starRichnessHash(starIndex, 2) % range),
     energy: min + (starRichnessHash(starIndex, 3) % range),
+    fuel:   min + (starRichnessHash(starIndex, 4) % range),
   };
 }
 
@@ -231,14 +244,26 @@ export function computeResourceRatesFromBuildings(
   const normalized = normalizeStarBuildings(buildings);
   const hasStation = normalized.station.level > 0;
   if (!hasStation) {
-    return { ore: 0, food: 0, energy: 0 };
+    return { ore: 0, food: 0, energy: 0, fuel: 0 };
   }
+
+  // Refinery fuel production: 1/2.5/5 fuel per minute at lv1/2/3
+  const REFINERY_FUEL_RATES = [0, 1, 2.5, 5];
+  const refineryLevel = normalized.refinery.level;
+  const fuelRate = REFINERY_FUEL_RATES[refineryLevel] ?? 0;
+  // Baseline fuel production from planet richness (lower multiplier than other resources)
+  const FUEL_RATE_PER_RICHNESS = 2.5; // richness 5→12.5/min, richness 10→25/min
+  const baseFuel = richness.fuel * FUEL_RATE_PER_RICHNESS;
+  // Refinery consumes ore and energy to produce fuel (1 ore + 1 energy per fuel)
+  const refineryOreDrain = fuelRate;
+  const refineryEnergyDrain = fuelRate;
 
   const energyDrain = shieldRaised ? SHIELD_ENERGY_DRAIN * normalized.shield.level : 0;
   return {
-    ore: richness.ore * RATE_PER_RICHNESS + Math.round(bonusForLevel(normalized.mine.level) * richness.ore / 5),
+    ore: richness.ore * RATE_PER_RICHNESS + Math.round(bonusForLevel(normalized.mine.level) * richness.ore / 5) - refineryOreDrain,
     food: richness.food * RATE_PER_RICHNESS + Math.round(bonusForLevel(normalized.hab.level) * richness.food / 5),
-    energy: richness.energy * RATE_PER_RICHNESS + Math.round(bonusForLevel(normalized.solar.level) * richness.energy / 5) - energyDrain,
+    energy: richness.energy * RATE_PER_RICHNESS + Math.round(bonusForLevel(normalized.solar.level) * richness.energy / 5) - energyDrain - refineryEnergyDrain,
+    fuel: baseFuel + fuelRate,
   };
 }
 

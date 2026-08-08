@@ -127,7 +127,8 @@ async function anyPlayerOnline(store: RedisGameStore, postId: string): Promise<{
   let newestSeen = 0;
   let playerCount = 0;
 
-  for (const [, username] of Object.entries(allClaims)) {
+  for (const [, claimValue] of Object.entries(allClaims)) {
+    const username = claimValue.split(':')[0];
     // Skip the bot itself
     if (username === BOT_NAME) continue;
     playerCount++;

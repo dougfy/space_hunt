@@ -23,6 +23,7 @@ function defaultState(now: number): TradeStationState {
       ore: TRADE_STATION_EQUILIBRIUM,
       food: TRADE_STATION_EQUILIBRIUM,
       energy: TRADE_STATION_EQUILIBRIUM,
+      fuel: TRADE_STATION_EQUILIBRIUM,
     },
     lastTickMs: now,
   };
@@ -91,10 +92,16 @@ export async function getTradeStationInfo(
     rates: {
       ore_food: getExchangeRate(state.stock, 'ore', 'food'),
       ore_energy: getExchangeRate(state.stock, 'ore', 'energy'),
+      ore_fuel: getExchangeRate(state.stock, 'ore', 'fuel'),
       food_ore: getExchangeRate(state.stock, 'food', 'ore'),
       food_energy: getExchangeRate(state.stock, 'food', 'energy'),
+      food_fuel: getExchangeRate(state.stock, 'food', 'fuel'),
       energy_ore: getExchangeRate(state.stock, 'energy', 'ore'),
       energy_food: getExchangeRate(state.stock, 'energy', 'food'),
+      energy_fuel: getExchangeRate(state.stock, 'energy', 'fuel'),
+      fuel_ore: getExchangeRate(state.stock, 'fuel', 'ore'),
+      fuel_food: getExchangeRate(state.stock, 'fuel', 'food'),
+      fuel_energy: getExchangeRate(state.stock, 'fuel', 'energy'),
     },
   };
 }

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { context, redis, reddit } from '@devvit/web/server';
 import type { ComsMessage, ComsResponse, ComsReplyRequest, ComsUnreadResponse, DirectMessage, DMListResponse, DMSendRequest, DMUnreadResponse, DMReportRequest, PublicComment, PublicCommentsResponse, PublicCommentPostRequest } from '../../shared/api';
+import { ENABLE_VIDEO_COMS, FLEET_COMMAND_SENDER } from '../../shared/feature-flags';
 
 const coms = new Hono();
 
@@ -491,3 +492,39 @@ coms.post('/public/post', async (c) => {
 });
 
 export default coms;
+
+// ── Fleet Command Video DM Injection ────────────────────────────────────────
+
+/**
+ * Send a video com from Fleet Command to a player.
+ * @param postId - The post context ID
+ * @param username - Recipient player
+ * @param videoId - Key from VIDEO_CATALOG (e.g. 'colonize')
+ * @param text - Accompanying message text shown in the DM
+ */
+export async function sendFleetCommandVideo(
+  postId: string,
+  username: string,
+  videoId: string,
+  text: string,
+): Promise<void> {
+  if (!ENABLE_VIDEO_COMS) return;
+
+  const now = Date.now();
+  const id = `fc-${now}-${Math.random().toString(36).slice(2, 8)}`;
+  const msg: DirectMessage = {
+    id,
+    from: FLEET_COMMAND_SENDER,
+    to: username,
+    body: `[VIDEO:${videoId}] ${text}`,
+    createdAt: now,
+  };
+
+  const sorted = [FLEET_COMMAND_SENDER.toLowerCase(), username.toLowerCase()].sort();
+  const channelKey = `dm:${postId}:${sorted[0]}:${sorted[1]}`;
+  await redis.zAdd(channelKey, { member: JSON.stringify(msg), score: now });
+
+  // Mark unread for recipient
+  const unreadKey = `dm:unread:${postId}:${username.toLowerCase()}`;
+  await redis.zAdd(unreadKey, { member: FLEET_COMMAND_SENDER.toLowerCase(), score: now });
+}

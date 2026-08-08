@@ -313,7 +313,7 @@
       #admin-results-panel {
         position: absolute;
         top: 56px;
-        right: 286px;
+        left: 8px;
         z-index: 101;
         display: none;
         flex-direction: column;
@@ -418,6 +418,8 @@
         <button id="admin-autobot-tick" class="admin-btn" style="background:rgba(20,60,80,0.6);border-color:#66ccff;color:#66ccff">Bot Tick</button>
         <button id="admin-autobot-flyby" class="admin-btn" style="background:rgba(20,80,60,0.6);border-color:#44ff88;color:#44ff88">Bot Fly-By</button>
         <button id="admin-autobot-reset" class="admin-btn danger" style="border-color:#ff6644">Bot Reset</button>
+        <button id="admin-play-video" class="admin-btn" style="background:rgba(80,20,120,0.6);border-color:#c090ff;color:#c090ff">&#x25B6; Play Video</button>
+        <button id="admin-audit-log" class="admin-btn" style="background:rgba(20,40,80,0.6);border-color:#88aaff;color:#88aaff">Audit Log</button>
       </div>
       <div id="admin-status"></div>
     </div>
@@ -570,6 +572,9 @@
     <div id="settings-panel">
       <h3>Ship Name</h3>
       <input id="ship-name-input" type="text" maxlength="16" placeholder="pilot" autocomplete="off" />
+      <div id="wire-toggle-row" style="display:none;margin-top:10px">
+        <button id="wire-toggle-btn" style="width:100%;background:rgba(80,20,120,0.85);border:1px solid #c090ff;color:#c090ff;font:bold 11px monospace;padding:6px 10px;border-radius:4px;cursor:pointer">WIRE</button>
+      </div>
       <h3 style="margin-top:10px">Nearby Ships</h3>
       <div id="ghost-list"><span class="ghost-empty">none</span></div>
       <div id="ghost-pager"></div>
@@ -580,6 +585,7 @@
       <div id="version-display"></div>
     </div>
     <div id="overlay" class="visible">
+      <div id="idle-msg" style="display:none;color:#4fffb0;font:bold 11px monospace;text-align:center;margin-bottom:14px;margin-top:48px;opacity:0.85">Session timed out after 30 min idle</div>
       <div id="btn-row">
         <button id="play-here" class="play-btn">&#9654; Join Inline</button>
         <button id="play-full" class="play-btn">&#x29C9; Join Full Size</button>
@@ -594,6 +600,13 @@
           <button id="dm-input-send" style="flex:1;background:#0a3;border:1px solid #0f6;color:#fff;font:bold 9px monospace;padding:6px;border-radius:2px;cursor:pointer">SEND</button>
           <button id="dm-input-cancel" style="flex:1;background:#1a0a0a;border:1px solid #633;color:#f66;font:bold 9px monospace;padding:6px;border-radius:2px;cursor:pointer">CANCEL</button>
         </div>
+      </div>
+    </div>
+    <!-- Video Overlay -->
+    <div id="video-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;align-items:center;justify-content:center">
+      <div style="position:relative;max-width:90%;max-height:90%">
+        <video id="video-player" style="max-width:100%;max-height:80vh;border:1px solid #c090ff;border-radius:4px" controls></video>
+        <button id="video-close" style="position:absolute;top:-12px;right:-12px;background:#501478;border:1px solid #c090ff;color:#c090ff;font:bold 14px monospace;width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center">&#x2715;</button>
       </div>
     </div>
     <script type="module" src="loader.ts"></script>

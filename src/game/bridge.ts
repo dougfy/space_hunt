@@ -4,6 +4,7 @@
 
 import type { Projectile, ShipShape } from './types';
 import { startGame, stopGame, getGameState, setGameCallbacks, relocateToHomeStar, restorePosition, getDiscoveredStars, setDiscoveredStars, getStarOwnership, applyStarOwnership } from './game-loop';
+import { NavigationTier } from './galaxy';
 import { setRemotePoses, RemotePoseItem } from './ghosts';
 import { applyPodCollected } from './pods';
 import { normalizeShipShape } from './ship';
@@ -105,9 +106,10 @@ export function createDevvitBridge(
         if (savedDiscovered.length > 0) {
           setDiscoveredStars(savedDiscovered);
         }
-        // Restore position if it differs from home star default
+        // Restore position if it was explicitly set during splash (profile lastPosition restore).
+        // Skip if tier is still the splash default (Local=2) — that means no real position was saved.
         const gs = getGameState();
-        if (gs && (savedStarIndex !== savedHomeStar || savedTier !== 3 || savedBodyIndex !== 0)) {
+        if (gs && savedTier !== NavigationTier.Local && (savedStarIndex !== savedHomeStar || savedTier !== NavigationTier.Planet || savedBodyIndex !== 0)) {
           restorePosition(savedStarIndex, savedTier, savedBodyIndex);
         }
         console.log(`[BRIDGE] beginPlay: transitioned from splash to play, tier=${getGameState()?.galaxy.tier} homeStar=${getGameState()?.galaxy.homeStarIndex}`);

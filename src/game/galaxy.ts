@@ -33,6 +33,7 @@ export interface GalaxyStar {
   discovered: boolean;
   discoveryLevel: 'none' | 'probed' | 'visited';
   claimedBy?: string;  // username of foreign owner (revealed by enhanced probe or visit)
+  stationBodyIndex?: number;  // body where station was placed during colonization (default 0)
 }
 
 export type FeatureType = 'mine' | 'relay' | 'refinery' | 'station' | 'outpost' | 'colony' | 'solar_array' | 'mine_l2' | 'solar_array_l2' | 'warehouse' | 'dock' | 'shield' | 'cannon';
@@ -187,7 +188,8 @@ export function generateSystem(star: GalaxyStar, postId?: string): SystemBody[] 
     // Station appears on player-owned stars, foreign-owned stars, OR trading station stars.
     const features: PlanetFeature[] = [];
     const isTrading = postId ? isTradingStation(postId, star.index) : false;
-    if (type === 'planet' && i === 0 && (star.owner === 'player' || star.owner === 'foreign' || isTrading)) {
+    const stationBody = star.stationBodyIndex ?? 0;
+    if (type === 'planet' && i === stationBody && (star.owner === 'player' || star.owner === 'foreign' || isTrading)) {
       const featRng = createRng(bodySeed + 777);
       // Constrain angle to upper half of screen (avoid bottom where UI panels sit)
       // World +Y = screen top, so angles in upper semicircle: -π/4 to 5π/4

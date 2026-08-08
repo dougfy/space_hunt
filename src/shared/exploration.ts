@@ -12,6 +12,7 @@ export type DiscoveryKind =
   | 'ore'           // resource cache: ore
   | 'food'          // resource cache: food
   | 'energy'        // resource cache: energy
+  | 'fuel'          // resource cache: fuel
   | 'artifact'      // lore collectible (achievement fuel)
   | 'blueprint'     // ship upgrade discount/unlock
   | 'anomaly';      // rare temporary buff
@@ -36,10 +37,11 @@ interface DiscoveryEntry {
 }
 
 const DISCOVERY_TABLE: DiscoveryEntry[] = [
-  { kind: 'nothing',   weight: 35, minAmount: 0,   maxAmount: 0,   label: 'Barren surface — nothing of interest', icon: '—' },
+  { kind: 'nothing',   weight: 30, minAmount: 0,   maxAmount: 0,   label: 'Barren surface — nothing of interest', icon: '—' },
   { kind: 'ore',       weight: 18, minAmount: 100, maxAmount: 300, label: 'Ore deposit discovered',               icon: '�ite' },
   { kind: 'food',      weight: 14, minAmount: 100, maxAmount: 250, label: 'Organic matter found',                 icon: 'bio' },
   { kind: 'energy',    weight: 14, minAmount: 100, maxAmount: 250, label: 'Energy crystal cache',                 icon: 'nrg' },
+  { kind: 'fuel',      weight: 5,  minAmount: 50,  maxAmount: 150, label: 'Fuel source discovered',               icon: 'fuel' },
   { kind: 'artifact',  weight: 10, minAmount: 1,   maxAmount: 1,   label: 'Ancient artifact recovered',           icon: 'art' },
   { kind: 'blueprint', weight: 6,  minAmount: 1,   maxAmount: 1,   label: 'Ship blueprint found',                 icon: 'bpt' },
   { kind: 'anomaly',   weight: 3,  minAmount: 1,   maxAmount: 1,   label: 'Anomalous signal detected',            icon: 'anm' },

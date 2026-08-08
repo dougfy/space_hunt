@@ -1,6 +1,8 @@
 // ── Game Constants ──────────────────────────────────────────────────────────
 // Ported from DotsDemoRuntime.cs
 
+import type { ShipShape } from './types';
+
 export const CANVAS_W = 9.6;
 export const CANVAS_H = 6.4;
 export const SAFE_INSET = 0.25;
@@ -37,9 +39,40 @@ export const TARGET_LINE_WIDTH = 0.018;
 export const TARGET_RING_RADIUS = 0.12;
 export const POD_LINE_WIDTH = 0.016;
 
+/** Per-ship fuel tank capacities (units) indexed by player ship shape. */
+export const FUEL_CAPACITY_BY_SHAPE: Record<ShipShape, number> = {
+  scout: 100,
+  destroyer: 150,
+  frigate: 200,
+  battleship: 250,
+  cruiser: 350,
+  dreadnought: 500,
+};
+
+/** @deprecated Use FUEL_CAPACITY_BY_SHAPE[shipShape] instead. Kept for fallback. */
 export const FUEL_MAX = 100;
 export const FUEL_PER_WORLD_UNIT = 2;
 export const FUEL_DRAIN_PER_SECOND = 0.8;
+
+// ── Warp fuel costs (Phase 14d) ─────────────────────────────────────────────
+/** Fuel cost multiplier per galaxy-distance unit when warping to a star. */
+export const WARP_FUEL_COST_PER_UNIT = 0.2;
+/** Minimum warp fuel cost regardless of distance. */
+export const WARP_FUEL_MIN_COST = 5;
+/** Fuel cost for System→Local tier transitions. */
+export const TIER_TRANSITION_FUEL_COST = 2;
+
+// ── Probe fuel costs & range ────────────────────────────────────────────────
+/** Max galaxy-distance a Basic Probe (id 11) can travel. */
+export const PROBE_BASIC_RANGE = 12;
+/** Max galaxy-distance an Enhanced Probe (id 12) can travel. */
+export const PROBE_ENHANCED_RANGE = 35;
+/** Fuel cost per galaxy-distance unit for a Basic Probe. */
+export const PROBE_BASIC_FUEL_PER_UNIT = 0.5;
+/** Fuel cost per galaxy-distance unit for an Enhanced Probe. */
+export const PROBE_ENHANCED_FUEL_PER_UNIT = 0.3;
+/** Minimum fuel cost to launch any probe. */
+export const PROBE_MIN_FUEL_COST = 500;
 
 export const POD_COUNT_PER_ASTEROID = 1;
 export const POD_CHANCE = 0.75;
@@ -68,11 +101,11 @@ export interface PodTypeEntry {
 
 /** Pod type catalog — weights sum to 100 for easy percentage reasoning */
 export const POD_TYPES: PodTypeEntry[] = [
-  { kind: 'refuel',  color: '#FF5A3D', weight: 15, fuelBonus: 100, label: 'REFUEL' },
-  { kind: 'dock',    color: '#FFD24A', weight: 10, fuelBonus: 15,  label: 'DOCK' },
-  { kind: 'energy',  color: '#66CCFF', weight: 25, fuelBonus: 5,   label: 'ENERGY' },
-  { kind: 'ore',     color: '#FF9933', weight: 25, fuelBonus: 5,   label: 'ORE' },
-  { kind: 'food',    color: '#66FF66', weight: 20, fuelBonus: 5,   label: 'FOOD' },
+  { kind: 'refuel',  color: '#FF5A3D', weight: 15, fuelBonus: -1,  label: 'REFUEL' },  // -1 = fill to capacity
+  { kind: 'dock',    color: '#FFD24A', weight: 10, fuelBonus: 30,  label: 'DOCK' },
+  { kind: 'energy',  color: '#66CCFF', weight: 25, fuelBonus: 10,  label: 'ENERGY' },
+  { kind: 'ore',     color: '#FF9933', weight: 25, fuelBonus: 10,  label: 'ORE' },
+  { kind: 'food',    color: '#66FF66', weight: 20, fuelBonus: 10,  label: 'FOOD' },
   { kind: 'upgrade', color: '#CC66FF', weight: 5,  fuelBonus: 0,   label: 'UPGRADE' },
 ];
 

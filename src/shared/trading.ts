@@ -38,9 +38,9 @@ export function isTradingStation(postId: string, starIndex: number): boolean {
   return hash === 0;
 }
 
-export type ResourceType = 'ore' | 'food' | 'energy';
+export type ResourceType = 'ore' | 'food' | 'energy' | 'fuel';
 
-export const RESOURCE_TYPES: ResourceType[] = ['ore', 'food', 'energy'];
+export const RESOURCE_TYPES: ResourceType[] = ['ore', 'food', 'energy', 'fuel'];
 
 /**
  * Calculate exchange rate for trading `giveType` to receive `receiveType`.

@@ -121,17 +121,19 @@ export type ResourceStore = {
   ore: number;
   food: number;
   energy: number;
+  fuel: number;
 };
 
 export type ResourceRates = {
   ore: number;
   food: number;
   energy: number;
+  fuel: number;
 };
 
 export type BuildStatus = 'LOCKED' | 'READY' | 'UPGRADING' | 'ACTIVE';
 
-export type BuildType = 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon';
+export type BuildType = 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' | 'refinery';
 
 export type StarBuildingState = {
   level: number;
@@ -335,6 +337,7 @@ export type FleetTransferResponse = {
   ok: true;
   from: { starIndex: number; ships: StarShipsState };
   transit: ShipTransit;
+  fuelCost?: number;
 };
 
 // ── Colonization ────────────────────────────────────────────────────────────
@@ -343,6 +346,7 @@ export type ColonizeRequest = {
   username: string;
   postId: string;
   starIndex: number;
+  bodyIndex?: number;  // body where colony ship is docked (station placed here)
 };
 
 export type ColonizeResponse = {
@@ -471,18 +475,24 @@ export type TradeStationInfoResponse = {
   rates: {
     ore_food: number;
     ore_energy: number;
+    ore_fuel: number;
     food_ore: number;
     food_energy: number;
+    food_fuel: number;
     energy_ore: number;
     energy_food: number;
+    energy_fuel: number;
+    fuel_ore: number;
+    fuel_food: number;
+    fuel_energy: number;
   };
 };
 
 export type TradeRequest = {
   username: string;
   starIndex: number;
-  giveType: 'ore' | 'food' | 'energy';
-  receiveType: 'ore' | 'food' | 'energy';
+  giveType: 'ore' | 'food' | 'energy' | 'fuel';
+  receiveType: 'ore' | 'food' | 'energy' | 'fuel';
   giveAmount: number;
 };
 
@@ -490,8 +500,8 @@ export type TradeResponse = {
   ok: true;
   gave: number;
   received: number;
-  giveType: 'ore' | 'food' | 'energy';
-  receiveType: 'ore' | 'food' | 'energy';
+  giveType: 'ore' | 'food' | 'energy' | 'fuel';
+  receiveType: 'ore' | 'food' | 'energy' | 'fuel';
   playerStore: ResourceStore;
   stationStock: ResourceStore;
 };

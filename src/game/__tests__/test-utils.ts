@@ -107,7 +107,7 @@ export function createTestGameState(galaxyOverride?: Partial<GalaxyState>): Game
     pods: [],
     ghosts: [],
     camera: { pos: vec2(center, center), orthoSize: 3.2, aspect: 1.5 },
-    fuelPercent: 100,
+    fuelUnits: 100,
     docksCollected: 0,
     totalDocks: 0,
     zoomState: ZoomState.Normal,
@@ -124,6 +124,7 @@ export function createTestGameState(galaxyOverride?: Partial<GalaxyState>): Game
     galaxyZoom: 1,
     galaxyCamPos: vec2(0, 0),
     galaxyZoomCooldown: 0,
+    floatTexts: [],
     galaxy,
   };
 }

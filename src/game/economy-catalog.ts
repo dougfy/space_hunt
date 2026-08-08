@@ -15,6 +15,7 @@ export const RESOURCE_CATALOG: readonly ResourceDefinition[] = [
   { id: 'ore', name: 'Ore', shortName: 'ORE', order: 10, enabled: true },
   { id: 'food', name: 'Food', shortName: 'FOOD', order: 20, enabled: true },
   { id: 'energy', name: 'Energy', shortName: 'ENERGY', order: 30, enabled: true },
+  { id: 'fuel', name: 'Fuel', shortName: 'FUEL', order: 35, enabled: true },
   { id: 'atomics', name: 'Atomics', shortName: 'ATOM', order: 40, enabled: false },
 ] as const;
 
@@ -28,7 +29,7 @@ export interface FeatureResourceMapping {
 export const FEATURE_RESOURCE_MAPPINGS: readonly FeatureResourceMapping[] = [
   { featureType: 'mine', produces: ['ore'], stores: [] },
   { featureType: 'colony', produces: ['food'], stores: [] },
-  { featureType: 'refinery', produces: ['energy'], stores: [] },
+  { featureType: 'refinery', produces: ['fuel'], stores: [] },
   { featureType: 'station', produces: [], stores: ['ore', 'food', 'energy'] },
   { featureType: 'relay', produces: [], stores: [] },
   { featureType: 'solar_array', produces: ['energy'], stores: [] },

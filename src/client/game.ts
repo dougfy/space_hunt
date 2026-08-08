@@ -5,12 +5,14 @@
 import { context, requestExpandedMode } from '@devvit/web/client';
 import { telemetry } from '@devvit/analytics/client/reddit';
 import versionJson from '../../version.json';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingSeedBots, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingSeedBots, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, toggleSkin, consumePendingRefuel, deductBaseFuel, consumePendingVideoPlay } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
-import { initSkins } from '../game/skin';
+import { initSkins, getActiveSkinId } from '../game/skin';
+import { VIDEO_CATALOG, FLEET_COMMAND_SENDER } from '../shared/feature-flags';
 import { proceduralSkin } from '../game/skins/procedural';
+import { PROBE_MIN_FUEL_COST } from '../game/constants';
 import type {
   BuildBuildingRequest,
   ClaimPodResponse,
@@ -233,6 +235,20 @@ function loadPlayerProfile(): Promise<void> {
         playerHomeStarIndex = profile.homeStar;
         relocateToHomeStar(profile.homeStar);
         journeyProgress(0.10, 'home_star_claimed');
+        // Immediately fetch ship shape from home star fleet
+        fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${profile.homeStar}`)
+          .then(r => r.ok ? r.json() : null)
+          .then((data: { ships: Array<{ typeId: number; count: number }> } | null) => {
+            if (data) {
+              const fleetShape = getFleetShape(data.ships);
+              if (fleetShape !== currentShape) {
+                currentShape = fleetShape;
+                bridge.setShipShape(fleetShape);
+                console.log(`[PROFILE] restored ship shape: ${fleetShape}`);
+              }
+            }
+          })
+          .catch(() => {});
       }
       // Restore discovered stars BEFORE claims (claims check discoveryLevel)
       if (profile.discoveredStars && profile.discoveredStars.length > 0) {
@@ -281,6 +297,7 @@ let ghostPollInterval: ReturnType<typeof setInterval> | null = null;
 let shotPollInterval: ReturnType<typeof setInterval> | null = null;
 let economyPollInterval: ReturnType<typeof setInterval> | null = null;
 let ghostListInterval: ReturnType<typeof setInterval> | null = null;
+let _savePositionInterval: ReturnType<typeof setInterval> | null = null;
 
 async function pollGhosts() {
   try {
@@ -469,6 +486,10 @@ async function pollDMUnread() {
       }
       _prevDMUnreadCount = data.unreadFrom.length;
       setDMUnread(data.unreadFrom);
+      // Auto-add Fleet Command as a contact if they have unread messages
+      if (data.unreadFrom.some((f: string) => f.toLowerCase() === FLEET_COMMAND_SENDER.toLowerCase())) {
+        addKnownPlayer(FLEET_COMMAND_SENDER);
+      }
     }
   } catch (_e) { /* ignore */ }
 }
@@ -569,19 +590,23 @@ async function explorePlanet(starIndex: number, bodyIndex: number, isStation: bo
     if (res.ok) {
       const data = await res.json() as { explored: boolean; result: { kind: string; label: string; icon: string; amount: number } };
       showExploreResult(data.result.kind, data.result.label, data.result.icon, data.result.amount);
-      if (data.explored) {
-        const kind = data.result.kind;
-        if (kind === 'nothing') {
-          playSound(isStation ? 'scan_nothing_station' : 'scan_nothing_planet');
-        } else if (kind === 'blueprint') {
-          playSound('scan_blueprint');
-        } else if (kind === 'artifact') {
-          playSound('scan_artifact');
-        } else if (kind === 'anomaly') {
-          playSound('scan_anomaly');
-        } else {
-          playSound('scan_ore');
-        }
+      const kind = data.result.kind;
+      if (kind === 'nothing') {
+        playSound(isStation ? 'scan_nothing_station' : 'scan_nothing_planet');
+      } else if (kind === 'blueprint') {
+        playSound('scan_blueprint');
+      } else if (kind === 'artifact') {
+        playSound('scan_artifact');
+      } else if (kind === 'anomaly') {
+        playSound('scan_anomaly');
+      } else if (kind === 'ore') {
+        playSound('scan_ore');
+      } else if (kind === 'food') {
+        playSound('scan_food');
+      } else if (kind === 'energy') {
+        playSound('scan_energy');
+      } else if (kind === 'fuel') {
+        playSound('scan_fuel');
       }
     }
   } catch (_e) { /* ignore */ }
@@ -652,12 +677,45 @@ async function pollSensorAlerts() {
     const res = await fetch(`/api/sensors?username=${encodeURIComponent(username)}`);
     if (res.ok) {
       const data = await res.json() as { alerts: Array<{ type: string; starIndex: number; from: string; ts: number }> };
+      let hadAlert = false;
       for (const alert of data.alerts) {
         console.log(`[SENSOR] type=${alert.type} star=${alert.starIndex} from=${alert.from} age=${Math.round((Date.now() - alert.ts) / 1000)}s`);
         if (alert.type === 'raider') {
           playSound('hostile_raider');
+          hadAlert = true;
         } else if (alert.type === 'unidentified') {
           playSound('unidentified_ship');
+          hadAlert = true;
+        }
+      }
+      // Refresh foreign fleet immediately so the probe/raider icon appears with the sound
+      if (hadAlert) {
+        void refreshForeignFleet();
+      }
+    }
+  } catch (_e) { /* ignore */ }
+}
+
+async function refreshForeignFleet() {
+  try {
+    const foreignRes = await fetch(`/api/fleet/foreign?postId=${encodeURIComponent(postId)}&username=${encodeURIComponent(username)}`);
+    if (foreignRes.ok) {
+      const foreignData = await foreignRes.json() as { stars: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }> }> };
+      setForeignFleet(foreignData.stars);
+      const gs = getGameState();
+      if (gs) {
+        for (const [key, val] of Object.entries(foreignData.stars)) {
+          const idx = parseInt(key.replace('s:', ''), 10);
+          if (!Number.isNaN(idx) && gs.galaxy.stars[idx]) {
+            const star = gs.galaxy.stars[idx];
+            if (star.discoveryLevel !== 'none') {
+              star.owner = 'foreign';
+              if (star.discoveryLevel === 'visited') {
+                star.claimedBy = val.owner;
+                addKnownPlayer(val.owner);
+              }
+            }
+          }
         }
       }
     }
@@ -811,7 +869,10 @@ function processBotCopy() {
   });
 }
 
+let _pollEconomyRunning = false;
 async function pollEconomy() {
+  if (_pollEconomyRunning || _resetPerformed) return; // prevent re-entrancy / overlapping polls
+  _pollEconomyRunning = true;
   // Piggyback bot tick (server self-limits to once per 10s)
   void fetch('/api/bots/tick', { method: 'POST' }).catch(() => {});
 
@@ -867,6 +928,11 @@ async function pollEconomy() {
             console.warn('[FLEET] raid route error:', e);
           }
         } else {
+          // Optimistic base-fuel deduction for probes (server enforces the real cost)
+          if (transfer.shipTypeId === 11 || transfer.shipTypeId === 12) {
+            deductBaseFuel(transfer.fromStarIndex, PROBE_MIN_FUEL_COST);
+            console.log(`[PROBE] optimistic base fuel deduct: ${PROBE_MIN_FUEL_COST} from star ${transfer.fromStarIndex}`);
+          }
           try {
             const transferRes = await fetch('/api/fleet/transfer', {
               method: 'POST',
@@ -988,6 +1054,20 @@ async function pollEconomy() {
       void explorePlanet(exploreReq.starIndex, exploreReq.bodyIndex, isStation);
     }
 
+    // Process pending video play from coms
+    const videoId = consumePendingVideoPlay();
+    if (videoId) {
+      const entry = VIDEO_CATALOG[videoId];
+      const vOverlay = document.getElementById('video-overlay');
+      const vPlayer = document.getElementById('video-player') as HTMLVideoElement | null;
+      if (entry && vOverlay && vPlayer) {
+        vPlayer.src = entry.path;
+        vPlayer.currentTime = 0;
+        vOverlay.style.display = 'flex';
+        vPlayer.play().catch(() => {});
+      }
+    }
+
     // Process pending trade
     const pendingTrade = consumePendingTrade();
     if (pendingTrade) {
@@ -1033,18 +1113,19 @@ async function pollEconomy() {
             username,
             postId,
             starIndex: pendingColonize.starIndex,
+            bodyIndex: pendingColonize.bodyIndex,
           }),
         });
         if (colonizeRes.ok) {
           // Regenerate system with station, mark star owned
-          onColonizeSuccess(pendingColonize.starIndex);
+          onColonizeSuccess(pendingColonize.starIndex, pendingColonize.bodyIndex);
           // Remove colony ship from local fleet display
           setServerShipState(pendingColonize.starIndex,
             [], // server consumed the colony ship; next fleet poll will refresh
             null,
           );
           playSound('colonize');
-          console.log('[COLONIZE] Success! Star colonized:', pendingColonize.starIndex);
+          console.log('[COLONIZE] Success! Star colonized:', pendingColonize.starIndex, 'body:', pendingColonize.bodyIndex);
           journeyProgress(0.60, 'first_colony');
           journeyEnd(true);
         } else {
@@ -1080,6 +1161,14 @@ async function pollEconomy() {
           playSound('low_fuel');
         }
       } catch (_e) { /* ignore */ }
+    }
+    const pendingRefuel = consumePendingRefuel();
+    if (pendingRefuel) {
+      void fetch('/api/refuel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, starIndex: pendingRefuel.starIndex, amount: pendingRefuel.amount }),
+      }).catch(() => {});
     }
     const pendingShieldToggle = consumePendingToggleShield();
     if (pendingShieldToggle) {
@@ -1262,15 +1351,19 @@ async function pollEconomy() {
     }
   } catch (_e) {
     // Ignore temporary network errors.
+  } finally {
+    _pollEconomyRunning = false;
   }
 }
 
-// ── Save position periodically ──────────────────────────────────────────────
+// ── Save position periodically ────────────────────────────────────────────────
 let _lastSavedPosition = '';
 let _lastSavedDiscovered = '';
 let _lastSavedVisited = '';
 let _lastSavedJourneyDone = false;
+let _resetPerformed = false;
 function savePositionIfChanged() {
+  if (_resetPerformed) return; // block saves after admin reset
   const gs = getGameState();
   if (!gs) return;
   // When in galaxy view, starIndex is -1; save homeStarIndex so restore has a valid reference
@@ -1368,7 +1461,10 @@ function resetIdleTimer() {
     void telemetry.endJourney({ complete: false, game: { win: false, score: 0 } })
       .then(() => console.log('[TELEMETRY] journey ended — idle timeout'))
       .catch(() => {})
-      .finally(() => location.reload());
+      .finally(() => {
+        location.hash = 'idle';
+        location.reload();
+      });
   }, IDLE_TIMEOUT_MS);
 }
 window.addEventListener('pointerdown', resetIdleTimer, { passive: true });
@@ -1400,7 +1496,7 @@ function startMultiplayer() {
   ghostPollInterval = setInterval(pollGhosts, 1000);
   shotPollInterval = setInterval(pollShots, 1000);
   economyPollInterval = setInterval(pollEconomy, 5000);
-  setInterval(savePositionIfChanged, 5000);
+  _savePositionInterval = setInterval(savePositionIfChanged, 5000);
   setInterval(sendStatsHeartbeat, STATS_HEARTBEAT_MS);
   setInterval(pollComsLoop, 2000); // fast detection, rate-limited fetches
   setInterval(pollSensorAlerts, 30_000); // sensor alerts every 30s
@@ -1703,6 +1799,20 @@ if (adminBtn && adminPanel && ADMIN_USERS.some(u => u.toLowerCase() === username
   console.log('[ADMIN] button shown');
 }
 
+// Skin toggle in settings panel
+const wireToggleRow = document.getElementById('wire-toggle-row');
+const wireToggleBtn = document.getElementById('wire-toggle-btn');
+if (wireToggleRow && wireToggleBtn) {
+  wireToggleRow.style.display = 'block';
+  wireToggleBtn.textContent = getActiveSkinId() === 'procedural' ? 'WIRE' : 'RASTER';
+  wireToggleBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  wireToggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleSkin();
+    wireToggleBtn.textContent = getActiveSkinId() === 'procedural' ? 'WIRE' : 'RASTER';
+  });
+}
+
 adminBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 adminBtn.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -1755,8 +1865,19 @@ function adminOutput(title: string, text: string, html?: string): void {
     adminResultsPanel.classList.add('visible');
     adminStatus.textContent = title;
   } else {
-    void navigator.clipboard.writeText(text).then(() => {
+    navigator.clipboard.writeText(text).then(() => {
       adminStatus.textContent = `${title} — copied to clipboard`;
+    }).catch(() => {
+      // Clipboard blocked in iframe — fall back to results panel
+      if (adminResultsPanel && adminResultsTitle && adminResultsContent) {
+        adminResultsTitle.textContent = title;
+        adminResultsContent.innerHTML = html ?? text.split('\n').map(l => `<div class="admin-result-row">${l}</div>`).join('');
+        adminResultsPanel.classList.add('visible');
+        adminStatus.textContent = `${title} (clipboard blocked, showing in panel)`;
+      } else {
+        adminStatus.textContent = `${title} (clipboard blocked)`;
+        console.log(text);
+      }
     });
   }
 }
@@ -1866,13 +1987,20 @@ document.getElementById('admin-reset-claims')!.addEventListener('click', async (
 document.getElementById('admin-reset-all')!.addEventListener('click', async () => {
   adminStatus!.textContent = 'full reset in progress...';
   try {
+    // Stop all save timers BEFORE the reset to prevent stale data re-write
+    _resetPerformed = true;
+    if (_savePositionInterval) { clearInterval(_savePositionInterval); _savePositionInterval = null; }
+    if (economyPollInterval) { clearInterval(economyPollInterval); economyPollInterval = null; }
+    if (ghostPollInterval) { clearInterval(ghostPollInterval); ghostPollInterval = null; }
+    if (shotPollInterval) { clearInterval(shotPollInterval); shotPollInterval = null; }
     const res = await fetch('/api/admin/reset-all', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ postId, adminUser: username }),
     });
     const data = await res.json();
-    adminStatus!.textContent = `reset: ${data.usersCleared} users, ${data.claimsCleared} claims — reload`;
+    const verify = data.verify ? ` | profile keys: [${data.verify.profileKeys}] claims: [${data.verify.claims}]` : '';
+    adminStatus!.textContent = `reset: ${data.usersCleared} users, ${data.claimsCleared} claims${verify} — reload`;
   } catch (_e) { adminStatus!.textContent = 'error'; }
 });
 
@@ -1986,5 +2114,64 @@ document.getElementById('admin-autobot-flyby')!.addEventListener('click', async 
     }
   } catch (e) { adminStatus!.textContent = `flyby exception: ${e}`; }
 });
+
+// Audit Log button
+document.getElementById('admin-audit-log')?.addEventListener('click', async () => {
+  adminStatus!.textContent = 'Loading audit log...';
+  try {
+    const res = await fetch('/api/debug/audit?limit=100');
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({})) as Record<string, unknown>;
+      adminStatus!.textContent = `audit error: ${res.status} ${errBody.error ?? errBody.detail ?? ''}`;
+      return;
+    }
+    const data = await res.json() as { count: number; entries: Array<Record<string, unknown>> };
+    const lines = data.entries.map((e) => {
+      const ts = new Date(e.t as number).toLocaleString();
+      const event = e.event as string;
+      const user = (e.user as string) ?? '?';
+      const details = Object.entries(e)
+        .filter(([k]) => !['t', 'event', 'user'].includes(k))
+        .map(([k, v]) => `${k}=${v}`)
+        .join(' ');
+      return { ts, event, user, details };
+    });
+    const text = `Audit Log (${data.count} entries)\n${'─'.repeat(40)}\n` + lines.map(l => `${l.ts} | ${l.event} | ${l.user} | ${l.details}`).join('\n');
+    const html = lines.map(l =>
+      `<div class="admin-result-row"><span style="color:#666">${l.ts}</span> <span style="color:#88aaff">${l.event}</span> <b>${l.user}</b> ${l.details}</div>`
+    ).join('');
+    adminOutput(`Audit Log (${data.count})`, text, html);
+  } catch (e) { adminStatus!.textContent = `audit error: ${e}`; }
+});
+
+// Video player — preload so it's instant on click
+const videoOverlay = document.getElementById('video-overlay');
+const videoPlayer = document.getElementById('video-player') as HTMLVideoElement | null;
+const videoClose = document.getElementById('video-close');
+if (videoPlayer) {
+  videoPlayer.preload = 'auto';
+}
+document.getElementById('admin-play-video')?.addEventListener('click', () => {
+  const explEntry = VIDEO_CATALOG['exploration'];
+  if (videoOverlay && videoPlayer && explEntry) {
+    videoPlayer.src = explEntry.path;
+    videoPlayer.currentTime = 0;
+    videoOverlay.style.display = 'flex';
+    videoPlayer.play().catch(() => {});
+  }
+});
+videoClose?.addEventListener('click', () => {
+  if (videoOverlay && videoPlayer) {
+    videoPlayer.pause();
+    videoOverlay.style.display = 'none';
+  }
+});
+videoOverlay?.addEventListener('click', (e) => {
+  if (e.target === videoOverlay) {
+    videoPlayer?.pause();
+    videoOverlay.style.display = 'none';
+  }
+});
+
 } catch (adminErr) { console.error('[ADMIN] init error:', adminErr); }
 

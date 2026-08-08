@@ -9,6 +9,13 @@
 // Start the lightweight splash animation immediately (bundled into this chunk)
 import './splash';
 
+// Show idle timeout message if returning from idle
+if (location.hash === '#idle') {
+  const idleMsg = document.getElementById('idle-msg');
+  if (idleMsg) idleMsg.style.display = 'block';
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
 const playHere = document.getElementById('play-here');
 const playFull = document.getElementById('play-full');
 let gameLoaded = false;

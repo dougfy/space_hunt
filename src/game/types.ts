@@ -96,7 +96,7 @@ export interface GameState {
   pods: FuelPod[];
   ghosts: Ghost[];
   camera: Camera;
-  fuelPercent: number;
+  fuelUnits: number;
   docksCollected: number;
   totalDocks: number;
   zoomState: ZoomState;
@@ -114,6 +114,15 @@ export interface GameState {
   galaxyZoom: number; // current galaxy ortho size (10–55)
   galaxyCamPos: Vec2; // camera target at galaxy tier (independent of ship)
   galaxyZoomCooldown: number; // seconds remaining after user zoom — suppresses auto-lerps
+  floatTexts: FloatText[];
+}
+
+export interface FloatText {
+  text: string;
+  color: string;
+  x: number;     // world X at spawn
+  y: number;     // world Y at spawn
+  age: number;   // seconds since spawn
 }
 
 export interface Camera {

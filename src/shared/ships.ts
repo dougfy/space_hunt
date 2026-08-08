@@ -20,6 +20,8 @@ export type ShipCatalogEntry = {
   buildSeconds: number;
   /** Icon filename (without path) */
   icon: string;
+  /** Fuel tank capacity (units). Probes use Infinity. */
+  fuelCapacity: number;
 };
 
 export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
@@ -33,9 +35,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 1,
     dockTier: 1,
     dockLevel: 1,
-    cost: { ore: 100, food: 50, energy: 80 },
+    cost: { ore: 100, food: 50, energy: 80, fuel: 0 },
     buildSeconds: 60,
     icon: 'ship-scout.svg',
+    fuelCapacity: 100,
   },
   2: {
     id: 2,
@@ -46,10 +49,11 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     transport: 500,
     shipPoints: 2,
     dockTier: 1,
-    dockLevel: 1,
-    cost: { ore: 200, food: 100, energy: 150 },
+    dockLevel: 2,
+    cost: { ore: 200, food: 100, energy: 150, fuel: 0 },
     buildSeconds: 120,
     icon: 'ship-freighter.svg',
+    fuelCapacity: 200,
   },
   3: {
     id: 3,
@@ -61,9 +65,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 2,
     dockTier: 1,
     dockLevel: 2,
-    cost: { ore: 250, food: 120, energy: 200 },
+    cost: { ore: 250, food: 120, energy: 200, fuel: 0 },
     buildSeconds: 180,
     icon: 'ship-destroyer.svg',
+    fuelCapacity: 150,
   },
   4: {
     id: 4,
@@ -75,9 +80,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 4,
     dockTier: 2,
     dockLevel: 1,
-    cost: { ore: 400, food: 200, energy: 350 },
+    cost: { ore: 400, food: 200, energy: 350, fuel: 0 },
     buildSeconds: 300,
     icon: 'ship-frigate.svg',
+    fuelCapacity: 200,
   },
   5: {
     id: 5,
@@ -89,9 +95,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 8,
     dockTier: 2,
     dockLevel: 5,
-    cost: { ore: 800, food: 400, energy: 700 },
+    cost: { ore: 800, food: 400, energy: 700, fuel: 0 },
     buildSeconds: 600,
     icon: 'ship-battleship.svg',
+    fuelCapacity: 250,
   },
   6: {
     id: 6,
@@ -103,9 +110,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 6,
     dockTier: 3,
     dockLevel: 3,
-    cost: { ore: 900, food: 500, energy: 800 },
+    cost: { ore: 900, food: 500, energy: 800, fuel: 0 },
     buildSeconds: 720,
     icon: 'ship-command-cruiser.svg',
+    fuelCapacity: 350,
   },
   7: {
     id: 7,
@@ -117,9 +125,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 10,
     dockTier: 3,
     dockLevel: 3,
-    cost: { ore: 1200, food: 600, energy: 1000 },
+    cost: { ore: 1200, food: 600, energy: 1000, fuel: 0 },
     buildSeconds: 900,
     icon: 'ship-dreadnought.svg',
+    fuelCapacity: 500,
   },
   8: {
     id: 8,
@@ -131,9 +140,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 10,
     dockTier: 1,
     dockLevel: 3,
-    cost: { ore: 600, food: 400, energy: 500 },
+    cost: { ore: 600, food: 400, energy: 500, fuel: 0 },
     buildSeconds: 600,
     icon: 'ship-colony.svg',
+    fuelCapacity: 300,
   },
   10: {
     id: 10,
@@ -145,9 +155,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 4,
     dockTier: 1,
     dockLevel: 3,
-    cost: { ore: 350, food: 250, energy: 300 },
+    cost: { ore: 350, food: 250, energy: 300, fuel: 0 },
     buildSeconds: 300,
     icon: 'ship-troop-transport.svg',
+    fuelCapacity: 200,
   },
   11: {
     id: 11,
@@ -159,9 +170,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 1,
     dockTier: 1,
     dockLevel: 1,
-    cost: { ore: 60, food: 30, energy: 50 },
+    cost: { ore: 60, food: 30, energy: 50, fuel: 0 },
     buildSeconds: 30,
     icon: 'ship-probe-basic.svg',
+    fuelCapacity: Infinity,
   },
   12: {
     id: 12,
@@ -173,9 +185,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 3,
     dockTier: 1,
     dockLevel: 3,
-    cost: { ore: 180, food: 80, energy: 150 },
+    cost: { ore: 180, food: 80, energy: 150, fuel: 0 },
     buildSeconds: 120,
     icon: 'ship-probe-enhanced.svg',
+    fuelCapacity: Infinity,
   },
   14: {
     id: 14,
@@ -187,9 +200,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 4,
     dockTier: 1,
     dockLevel: 3,
-    cost: { ore: 400, food: 200, energy: 300 },
+    cost: { ore: 400, food: 200, energy: 300, fuel: 0 },
     buildSeconds: 300,
     icon: 'ship-wrecker.svg',
+    fuelCapacity: 200,
   },
   15: {
     id: 15,
@@ -201,9 +215,10 @@ export const SHIP_CATALOG: Record<ShipTypeId, ShipCatalogEntry> = {
     shipPoints: 4,
     dockTier: 1,
     dockLevel: 3,
-    cost: { ore: 380, food: 220, energy: 320 },
+    cost: { ore: 380, food: 220, energy: 320, fuel: 0 },
     buildSeconds: 300,
     icon: 'ship-raider.svg',
+    fuelCapacity: 200,
   },
 };
 
