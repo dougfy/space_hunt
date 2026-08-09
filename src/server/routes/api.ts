@@ -80,6 +80,8 @@ import { SHIP_CATALOG } from '../../shared/ships';
 import { rollDiscovery } from '../../shared/exploration';
 import { popSensorAlerts } from '../core/sensor-alerts';
 import type { ExploreRequest, ExploreResponse } from '../../shared/exploration';
+import { rollBuff, filterActiveBuffs } from '../../shared/buffs';
+import type { ActiveBuff } from '../../shared/buffs';
 import { requireDev } from '../core/admin-auth';
 
 type ErrorResponse = {
@@ -303,6 +305,16 @@ api.get('/debug/audit', requireDev, async (c) => {
   } catch (err) {
     return c.json({ error: 'zRange failed', detail: String(err), key: `audit:${postId}` }, 500);
   }
+});
+
+/** Player feedback — logged to audit for admin review */
+api.post('/feedback', async (c) => {
+  const body = await c.req.json<{ username?: string; postId?: string; choice?: string }>();
+  const pid = body.postId ?? context.postId ?? 'unknown';
+  const user = body.username ?? 'anonymous';
+  const choice = body.choice ?? 'unknown';
+  auditLog(pid, 'feedback', { user, choice });
+  return c.json({ ok: true });
 });
 
 /** Admin: toggle dev mode (controls visibility of debug UI for all users). */
@@ -1190,15 +1202,94 @@ api.post('/explore', async (c) => {
       console.log(`[EXPLORE] user=${username} found blueprint — granted 1 complete charge`);
     }
 
-    // Mark explored (persist forever)
-    const response: ExploreResponse = { explored: true, result };
-    await redis.set(exploreKey, JSON.stringify(response));
+    // Grant a random buff for anomaly finds
+    let grantedBuff: ActiveBuff | null = null;
+    if (result.kind === 'anomaly') {
+      const buffSeed = ((galaxySeed * 31 + starIndex) * 31 + bodyIndex + 31337) >>> 0;
+      const buffEntry = rollBuff(buffSeed);
+      const now = Date.now();
+      grantedBuff = {
+        buffId: buffEntry.buffId,
+        grantedAt: now,
+        expiresAt: buffEntry.durationMs > 0 ? now + buffEntry.durationMs : 0,
+        starIndex,
+      };
+      // Load existing buffs, filter expired, append new
+      const buffsKey = `buffs:${username.toLowerCase()}`;
+      const existingRaw = await redis.get(buffsKey);
+      const existing: ActiveBuff[] = existingRaw ? JSON.parse(existingRaw) : [];
+      const active = filterActiveBuffs(existing, now);
+      active.push(grantedBuff);
+      await redis.set(buffsKey, JSON.stringify(active));
+      console.log(`[EXPLORE] user=${username} anomaly — granted buff: ${buffEntry.buffId} (${buffEntry.name})`);
+    }
 
-    return c.json<ExploreResponse>(response);
+    // Mark explored (persist forever)
+    const response: ExploreResponse & { buff?: ActiveBuff } = { explored: true, result, ...(grantedBuff ? { buff: grantedBuff } : {}) };
+    await redis.set(exploreKey, JSON.stringify({ explored: true, result }));
+
+    return c.json(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Exploration failed';
     console.error('[EXPLORE] error:', error);
     return c.json<ErrorResponse>({ status: 'error', message }, 500);
+  }
+});
+
+// ── Buffs ─────────────────────────────────────────────────────────────────────
+
+/** Get active buffs for a player (filters expired). */
+api.get('/buffs', async (c) => {
+  const username = c.req.query('username');
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+
+  const buffsKey = `buffs:${username.toLowerCase()}`;
+  const raw = await redis.get(buffsKey);
+  if (!raw) return c.json({ buffs: [] });
+
+  const all: ActiveBuff[] = JSON.parse(raw);
+  const now = Date.now();
+  const active = filterActiveBuffs(all, now);
+
+  // Clean up expired buffs in Redis
+  if (active.length !== all.length) {
+    if (active.length === 0) {
+      await redis.del(buffsKey);
+    } else {
+      await redis.set(buffsKey, JSON.stringify(active));
+    }
+  }
+
+  return c.json({ buffs: active });
+});
+
+/** Consume a single-use buff (scanner_amp). */
+api.post('/buffs/consume', async (c) => {
+  try {
+    const body = await c.req.json<{ username: string; buffId: string }>();
+    if (!body.username || !body.buffId) {
+      return c.json<ErrorResponse>({ status: 'error', message: 'username and buffId required' }, 400);
+    }
+
+    const buffsKey = `buffs:${body.username.toLowerCase()}`;
+    const raw = await redis.get(buffsKey);
+    if (!raw) return c.json({ consumed: false });
+
+    const all: ActiveBuff[] = JSON.parse(raw);
+    const now = Date.now();
+    const active = filterActiveBuffs(all, now);
+    const idx = active.findIndex(b => b.buffId === body.buffId && b.expiresAt === 0);
+    if (idx === -1) return c.json({ consumed: false });
+
+    active.splice(idx, 1);
+    if (active.length === 0) {
+      await redis.del(buffsKey);
+    } else {
+      await redis.set(buffsKey, JSON.stringify(active));
+    }
+    return c.json({ consumed: true });
+  } catch (error) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'Failed to consume buff' }, 500);
   }
 });
 

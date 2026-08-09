@@ -149,6 +149,8 @@ let currentShape: ShipShape = 'scout';
 let currentName = username;
 let playerHomeStarIndex: number | null = null;
 
+// ── Active buffs (synced from server economy poll) ──────────────────────────
+const _activeBuffs: Array<{ buffId: string; expiresAt: number; grantedAt: number; starIndex: number }> = [];
 
 
 // ── Create bridge ───────────────────────────────────────────────────────────
@@ -195,6 +197,9 @@ const bridge: DevvitBridge = createDevvitBridge(canvas, {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }).catch(() => {});
+  },
+  onMilestone(event) {
+    journeyProgress(event === 'first_move' ? 0.05 : 0.07, event);
   },
 });
 
@@ -277,9 +282,12 @@ function loadPlayerProfile(): Promise<void> {
       // Skip journey/tutorial if already completed on server, or if returning player
       if (profile.journeyDone || profile.lastPosition) {
         skipJourney();
+        journeyStart(); // always start a telemetry journey so progress events have a journeyId
+        journeyProgress(0.01, 'returned_player');
       } else {
         startJourney();
         journeyStart();
+        journeyProgress(0.01, 'game_start');
       }
       // Show/hide debug UI based on server dev mode flag
       const debugDisplay = profile.devMode ? '' : 'none';
@@ -588,7 +596,7 @@ async function explorePlanet(starIndex: number, bodyIndex: number, isStation: bo
       body: JSON.stringify({ username, starIndex, bodyIndex }),
     });
     if (res.ok) {
-      const data = await res.json() as { explored: boolean; result: { kind: string; label: string; icon: string; amount: number } };
+      const data = await res.json() as { explored: boolean; result: { kind: string; label: string; icon: string; amount: number }; buff?: { buffId: string; expiresAt: number; grantedAt: number; starIndex: number } };
       showExploreResult(data.result.kind, data.result.label, data.result.icon, data.result.amount);
       const kind = data.result.kind;
       if (kind === 'nothing') {
@@ -599,14 +607,27 @@ async function explorePlanet(starIndex: number, bodyIndex: number, isStation: bo
         playSound('scan_artifact');
       } else if (kind === 'anomaly') {
         playSound('scan_anomaly');
+        // Play buff activation sound after anomaly sound
+        if (data.buff) {
+          setTimeout(() => {
+            const buffSound = `buff_${data.buff!.buffId}` as Parameters<typeof playSound>[0];
+            playSound(buffSound);
+          }, 2000);
+          // Store active buff locally for HUD
+          _activeBuffs.push(data.buff);
+        }
       } else if (kind === 'ore') {
         playSound('scan_ore');
+        journeyProgress(0.12, 'first_resource_collected');
       } else if (kind === 'food') {
         playSound('scan_food');
+        journeyProgress(0.12, 'first_resource_collected');
       } else if (kind === 'energy') {
         playSound('scan_energy');
+        journeyProgress(0.12, 'first_resource_collected');
       } else if (kind === 'fuel') {
         playSound('scan_fuel');
+        journeyProgress(0.12, 'first_resource_collected');
       }
     }
   } catch (_e) { /* ignore */ }
@@ -1155,7 +1176,9 @@ async function pollEconomy() {
           console.log('[BUILD] build success');
           playSound('begin_building_facility');
           journeyProgress(0.15, 'first_building');
+          journeyProgress(0.15, 'first_upgrade');
           if (pendingBuild.buildType === 'dock') journeyProgress(0.25, 'dock_upgraded');
+          showFeedbackButton();
         } else {
           console.warn('[BUILD] build failed');
           playSound('low_fuel');
@@ -1284,6 +1307,11 @@ async function pollEconomy() {
       completeCharges: data.completeCharges ?? 0,
       ...(data.richness ? { richness: data.richness } : {}),
     });
+    // Sync active buffs from server
+    if (data.buffs) {
+      _activeBuffs.length = 0;
+      _activeBuffs.push(...data.buffs);
+    }
     // Poll ship state
     const _tShips = performance.now();
     const shipsRes = await fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${starIndex}`);
@@ -1410,9 +1438,12 @@ function savePositionIfChanged() {
 }
 
 // ── Devvit Journey Telemetry ────────────────────────────────────────────────
-// Progression funnel: home_star_claimed(0.10) → first_building(0.15) → first_ship_built(0.20) →
-// dock_upgraded(0.25) → first_transfer(0.35) → ship_upgraded(0.50) → first_colony(0.60) →
-// star_discovered(0.75) → alliance_joined(0.90) → journey_end
+// Progression funnel:
+// game_start/returned_player(0.01) → first_move(0.05) → first_dock(0.07) →
+// home_star_claimed(0.10) → first_resource_collected(0.12) → first_building/first_upgrade(0.15) →
+// first_ship_built(0.20) → dock_upgraded(0.25) → first_transfer(0.35) →
+// ship_upgraded(0.50) → first_colony(0.60) → star_discovered(0.75) →
+// alliance_joined(0.90) → session_end(1.0) → journey_end
 let _journeyStarted = false;
 const _progressSent = new Set<string>();
 
@@ -1661,6 +1692,7 @@ if (deferredMode && isInline) {
 
 // ── Cleanup on page hide ────────────────────────────────────────────────────
 window.addEventListener('pagehide', () => {
+  journeyProgress(1.0, 'session_end');
   savePositionIfChanged();
   if (ghostPollInterval) clearInterval(ghostPollInterval);
   if (ghostListInterval) clearInterval(ghostListInterval);
@@ -1672,6 +1704,7 @@ window.addEventListener('pagehide', () => {
 // ── Settings panel ──────────────────────────────────────────────────────────
 const settingsBtn = document.getElementById('settings-btn')!;
 const settingsPanel = document.getElementById('settings-panel')!;
+const feedbackPanel = document.getElementById('feedback-panel')!;
 const ghostListEl = document.getElementById('ghost-list')!;
 const shipNameInput = document.getElementById('ship-name-input') as HTMLInputElement;
 
@@ -1691,6 +1724,7 @@ settingsBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 settingsBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   helpPanel.classList.remove('visible');
+  feedbackPanel.classList.remove('visible');
   const opening = !settingsPanel.classList.contains('visible');
   settingsPanel.classList.toggle('visible');
   if (opening) {
@@ -1709,6 +1743,7 @@ helpBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 helpBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   settingsPanel.classList.remove('visible');
+  feedbackPanel.classList.remove('visible');
   helpPanel.classList.toggle('visible');
 });
 helpPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -1727,6 +1762,62 @@ document.querySelectorAll('.help-tab-btn').forEach(btn => {
     document.getElementById(`help-tab-${tab}`)?.classList.add('active');
   });
 });
+
+// ── Feedback button + panel ─────────────────────────────────────────────────
+const feedbackBtn = document.getElementById('feedback-btn')!;
+const feedbackThanks = document.getElementById('feedback-thanks')!;
+let feedbackSubmitted = false;
+
+function showFeedbackPanel(): void {
+  if (!feedbackSubmitted) {
+    settingsPanel.classList.remove('visible');
+    helpPanel.classList.remove('visible');
+    feedbackPanel.classList.add('visible');
+  }
+}
+
+// Auto-show the feedback dialog after 5 minutes of play
+const FEEDBACK_DELAY_MS = 5 * 60 * 1000;
+setTimeout(showFeedbackPanel, FEEDBACK_DELAY_MS);
+
+feedbackBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+feedbackBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  settingsPanel.classList.remove('visible');
+  helpPanel.classList.remove('visible');
+  feedbackPanel.classList.toggle('visible');
+});
+feedbackPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
+feedbackPanel.addEventListener('click', (e) => e.stopPropagation());
+
+document.querySelectorAll('.feedback-option').forEach(btn => {
+  btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const choice = (btn as HTMLElement).dataset.feedback;
+    if (!choice || feedbackSubmitted) return;
+    feedbackSubmitted = true;
+    // Hide options, show thanks
+    document.querySelectorAll('.feedback-option').forEach(b => (b as HTMLElement).style.display = 'none');
+    feedbackThanks.style.display = 'block';
+    // Send to server
+    fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, postId, choice }),
+    }).catch(() => {});
+    console.log('[FEEDBACK] submitted:', choice);
+    // Auto-hide after 2 seconds
+    setTimeout(() => {
+      feedbackPanel.classList.remove('visible');
+    }, 2000);
+  });
+});
+
+// Also show feedback panel on first completed objective (first_building)
+function showFeedbackButton(): void {
+  showFeedbackPanel();
+}
 
 // ── Ghost list with paging ──────────────────────────────────────────────────
 const GHOST_PAGE_SIZE = 5;

@@ -27,7 +27,7 @@ import {
   worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
   setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert,
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
-  drawGalaxyZoomButtons, hitTestGalaxyZoomButtons,
+  drawGalaxyZoomButtons, hitTestGalaxyZoomButtons, setHomeStarIndex,
 
   selectGalaxyStar, deselectGalaxyStar, getSelectedStarIndex, hitTestStarInfoDismiss, hitTestStarInfoVisit,
   drawGalaxyModeToggle, drawGalaxyModeBanner, hitTestGalaxyModeBtn, toggleGalaxyMode, setGalaxyMode, getGalaxyMode,
@@ -220,6 +220,7 @@ export function relocateToHomeStar(starIndex: number): void {
 
   // Update home and current star
   gameState.galaxy.homeStarIndex = starIndex;
+  setHomeStarIndex(starIndex);
   gameState.galaxy.currentStarIndex = starIndex;
   star.owner = 'player';
   star.discovered = true;
@@ -413,6 +414,8 @@ export function startGame(
     floatTexts: [],
   };
 
+  setHomeStarIndex(gameState.galaxy.homeStarIndex);
+
   // Splash mode: drop into a self-contained asteroid field immediately
   if (isSplash) {
     gameState.galaxy.tier = NavigationTier.Local;
@@ -562,6 +565,7 @@ function update(dt: number): void {
         }
         undock(gameState);
         journeyAction();
+        devvitCb?.onMilestone?.('first_move');
       } else if (dockAction === 'scan') {
         playSound('begin_scan');
         // Trigger planet exploration
@@ -883,6 +887,10 @@ function update(dt: number): void {
   } else if (gameState.dock && !gameState.dock.docked) {
     // Docking approach animation in progress
     updateDocking(gameState, dt);
+    // Detect dock completion
+    if (gameState.dock.docked) {
+      devvitCb?.onMilestone?.('first_dock');
+    }
   } else {
     updateShip(gameState, dt, safeZone);
 

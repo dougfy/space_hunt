@@ -398,15 +398,71 @@
       }
       #admin-btn { display: none; }
 
+      /* Feedback panel */
+      #feedback-panel {
+        position: absolute;
+        top: 56px;
+        right: 12px;
+        z-index: 103;
+        display: none;
+        flex-direction: column;
+        gap: 6px;
+        background: rgba(10, 20, 40, 0.95);
+        border: 2px solid #ffcc44;
+        padding: 12px;
+        pointer-events: auto;
+        min-width: 200px;
+      }
+      #feedback-panel.visible { display: flex; }
+      #feedback-panel h3 {
+        color: #ffcc44;
+        font-family: monospace;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin: 0 0 6px 0;
+      }
+      .feedback-option {
+        background: rgba(40, 30, 10, 0.8);
+        border: 1px solid #ffcc44;
+        color: #ffe488;
+        font-family: monospace;
+        font-size: 10px;
+        padding: 8px 10px;
+        cursor: pointer;
+        text-align: left;
+        text-transform: none;
+      }
+      .feedback-option:hover { background: rgba(80, 60, 10, 0.9); color: #ffffff; }
+      #feedback-thanks {
+        display: none;
+        color: #ffcc44;
+        font-family: monospace;
+        font-size: 11px;
+        text-align: center;
+        padding: 12px 0;
+      }
+
     </style>
   </head>
   <body>
     <canvas id="game-canvas"></canvas>
     <div id="icon-bar">
+      <button id="feedback-btn" class="icon-btn" title="Feedback" style="background:rgba(60,50,10,0.8);border-color:#ffcc44;color:#ffcc44;font-size:9px">FB</button>
       <button id="skin-toggle-btn" class="icon-btn" title="Toggle Skin" style="background:rgba(80,20,120,0.8);border-color:#c090ff;color:#c090ff;font-size:9px">WIRE</button>
       <button id="settings-btn" class="icon-btn" title="Settings">&#x2699;</button>
       <button id="help-btn" class="icon-btn" title="Help">?</button>
       <button id="admin-btn" class="icon-btn" title="Admin" style="background:rgba(80,20,10,0.8);border-color:#ff6644;color:#ff6644">&#x2691;</button>
+    </div>
+    <div id="feedback-panel">
+      <h3>What confused you?</h3>
+      <button class="feedback-option" data-feedback="controls">Controls</button>
+      <button class="feedback-option" data-feedback="too_slow">Too slow</button>
+      <button class="feedback-option" data-feedback="didnt_know">Didn't know what to do</button>
+      <button class="feedback-option" data-feedback="bug">Bug</button>
+      <button class="feedback-option" data-feedback="im_good">I'm good</button>
+      <button class="feedback-option" data-feedback="really_good">It's really good</button>
+      <div id="feedback-thanks">Thanks for the feedback!</div>
     </div>
     <div id="admin-panel">
       <h3>&#x2691; Admin Panel</h3>

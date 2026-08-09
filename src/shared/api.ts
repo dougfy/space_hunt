@@ -1,3 +1,5 @@
+import type { ActiveBuff } from './buffs';
+
 export type InitResponse = {
   type: 'init';
   postId: string;
@@ -170,6 +172,7 @@ export type StarEconomyResponse = {
   lastTickMs: number;
   completeCharges?: number;
   richness?: ResourceStore;
+  buffs?: ActiveBuff[];
 };
 
 export type ToggleShieldRequest = {

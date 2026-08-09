@@ -4,7 +4,7 @@
 
 import versionJson from '../../version.json';
 
-type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'undocking_alt' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded' | 'freighter_arrived' | 'freighter_unloading' | 'shields_activated' | 'shields_up' | 'shields_deactivated' | 'shields_down' | 'hostile_raider' | 'unidentified_ship' | 'new_comm' | 'fleet_command' | 'scan_nothing_planet' | 'scan_nothing_station' | 'scan_ore' | 'scan_food' | 'scan_energy' | 'scan_fuel' | 'scan_artifact' | 'scan_anomaly' | 'scan_blueprint' | 'begin_scan';
+type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'undocking_alt' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded' | 'freighter_arrived' | 'freighter_unloading' | 'shields_activated' | 'shields_up' | 'shields_deactivated' | 'shields_down' | 'hostile_raider' | 'unidentified_ship' | 'new_comm' | 'fleet_command' | 'scan_nothing_planet' | 'scan_nothing_station' | 'scan_ore' | 'scan_food' | 'scan_energy' | 'scan_fuel' | 'scan_artifact' | 'scan_anomaly' | 'scan_blueprint' | 'begin_scan' | 'buff_hyperdrive' | 'buff_resonance' | 'buff_chrono' | 'buff_void_shield' | 'buff_scanner_amp';
 
 // Cache-bust sound URLs with version so updated wavs are fetched fresh
 const V = versionJson.version;
@@ -49,6 +49,11 @@ const SOUND_FILES: Partial<Record<SoundId, string>> = {
   scan_anomaly: `/sounds/Anomalous%20signal%20detected.wav?v=${V}`,
   scan_blueprint: `/sounds/Ship%20blueprint%20found.wav?v=${V}`,
   begin_scan: `/sounds/Begin%20scan.wav?v=${V}`,
+  buff_hyperdrive: `/sounds/Buff%20hyperdrive%20surge.wav?v=${V}`,
+  buff_resonance: `/sounds/Buff%20resonance%20mining.wav?v=${V}`,
+  buff_chrono: `/sounds/Buff%20chrono%20catalyst.wav?v=${V}`,
+  buff_void_shield: `/sounds/Buff%20void%20shield.wav?v=${V}`,
+  buff_scanner_amp: `/sounds/Buff%20scanner%20amplification.wav?v=${V}`,
 };
 
 let _audioCtx: AudioContext | null = null;

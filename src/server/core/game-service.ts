@@ -55,6 +55,8 @@ import { SHIP_CATALOG, canBuildShip, getUpgradeTarget, canUpgradeShip } from '..
 import { getStarName } from '../../shared/star-names';
 import { isTradingStation } from '../../shared/trading';
 import { pushSensorAlert } from './sensor-alerts';
+import { filterActiveBuffs, hasActiveBuff, RESONANCE_MULTIPLIER, HYPERDRIVE_MULTIPLIER, CHRONO_MULTIPLIER } from '../../shared/buffs';
+import type { ActiveBuff } from '../../shared/buffs';
 
 const ECONOMY_FIELD = 'economy';
 const DEFAULT_STORE: ResourceStore = { ore: 640, food: 640, energy: 640, fuel: 0 };
@@ -113,16 +115,17 @@ function normalizeStarState(star: Partial<StarEconomyState>, now: number, richne
   };
 }
 
-function tickStarEconomy(star: StarEconomyState, now: number): StarEconomyState {
+function tickStarEconomy(star: StarEconomyState, now: number, rateMultiplier = 1): StarEconomyState {
   if (now <= star.lastTickMs) return star;
   const elapsedMin = (now - star.lastTickMs) / 60_000;
+  const m = rateMultiplier;
   const next = {
     ...star,
     store: clampStore({
-      ore: star.store.ore + star.rates.ore * elapsedMin,
-      food: star.store.food + star.rates.food * elapsedMin,
-      energy: star.store.energy + star.rates.energy * elapsedMin,
-      fuel: (star.store.fuel ?? 0) + (star.rates.fuel ?? 0) * elapsedMin,
+      ore: star.store.ore + star.rates.ore * elapsedMin * m,
+      food: star.store.food + star.rates.food * elapsedMin * m,
+      energy: star.store.energy + star.rates.energy * elapsedMin * m,
+      fuel: (star.store.fuel ?? 0) + (star.rates.fuel ?? 0) * elapsedMin * m,
     }, star.cap),
     lastTickMs: now,
   };
@@ -459,7 +462,14 @@ export async function loadStarEconomy(
     rates: computeResourceRatesFromBuildings(reconciledBuildings, base.shieldRaised, rich),
     cap: computeResourceCapFromBuildings(reconciledBuildings),
   };
-  const ticked = tickStarEconomy(reconciledBase, now);
+
+  // Check for resonance buff (production multiplier)
+  const buffsRaw = await store.get(`buffs:${username.toLowerCase()}`);
+  const buffs: ActiveBuff[] = buffsRaw ? JSON.parse(buffsRaw) : [];
+  const activeBuffs = filterActiveBuffs(buffs, now);
+  const rateMult = hasActiveBuff(activeBuffs, 'resonance', now) ? RESONANCE_MULTIPLIER : 1;
+
+  const ticked = tickStarEconomy(reconciledBase, now, rateMult);
   // Only persist economy data if the player already had data at this star (owns it).
   // Prevents phantom economy entries when visiting foreign stars.
   if (hadExistingData) {
@@ -483,6 +493,7 @@ export async function loadStarEconomy(
     lastTickMs: ticked.lastTickMs,
     completeCharges: charges,
     richness: rich,
+    ...(activeBuffs.length > 0 ? { buffs: activeBuffs } : {}),
   };
 }
 
@@ -593,10 +604,17 @@ export async function startBuildingUpgrade(
   }
 
   const nextBuildings = normalizeStarBuildings(current.buildings);
+
+  // Check for chrono buff (reduces build time)
+  const buffsRaw = await store.get(`buffs:${body.username.toLowerCase()}`);
+  const playerBuffs: ActiveBuff[] = buffsRaw ? JSON.parse(buffsRaw) : [];
+  const chronoActive = hasActiveBuff(playerBuffs, 'chrono', now);
+  const buildMult = chronoActive ? CHRONO_MULTIPLIER : 1;
+
   nextBuildings[body.buildType] = {
     level: building.level,
     status: 'UPGRADING',
-    completeAt: now + getBuildingDurationSeconds(body.buildType, targetLevel) * 1000,
+    completeAt: now + getBuildingDurationSeconds(body.buildType, targetLevel) * 1000 * buildMult,
   };
   const nextCap = computeResourceCapFromBuildings(nextBuildings);
   const nextState: StarEconomyState = {
@@ -801,8 +819,16 @@ export async function buyShip(
   economy.stars[key] = current;
   await saveEconomyProfile(store, username, economy);
 
-  // Start building (instant if blueprint)
-  const completeAt = useBlueprint ? now : now + catalog.buildSeconds * 1000;
+  // Start building (instant if blueprint, chrono buff halves time)
+  let buildDurationMs = catalog.buildSeconds * 1000;
+  if (!useBlueprint) {
+    const buffsRaw = await store.get(`buffs:${username.toLowerCase()}`);
+    const playerBuffs: ActiveBuff[] = buffsRaw ? JSON.parse(buffsRaw) : [];
+    if (hasActiveBuff(playerBuffs, 'chrono', now)) {
+      buildDurationMs = Math.round(buildDurationMs * CHRONO_MULTIPLIER);
+    }
+  }
+  const completeAt = useBlueprint ? now : now + buildDurationMs;
   starData.building = { typeId: shipTypeId, completeAt };
   shipsProfile.stars[key] = starData;
   await store.hSet(`profile:${username}`, { [SHIPS_FIELD]: JSON.stringify(shipsProfile) });
@@ -1166,7 +1192,14 @@ export async function transferShips(
   // Calculate transit duration from ship speed
   const catalogEntry = SHIP_CATALOG[shipTypeId as keyof typeof SHIP_CATALOG];
   const speed = catalogEntry?.speed ?? 5;
-  const transitMs = Math.round((BASE_TRANSIT_SECONDS / speed) * 1000);
+  let transitMs = Math.round((BASE_TRANSIT_SECONDS / speed) * 1000);
+
+  // Check for hyperdrive buff (faster transit)
+  const buffsRaw = await store.get(`buffs:${username.toLowerCase()}`);
+  const playerBuffs: ActiveBuff[] = buffsRaw ? JSON.parse(buffsRaw) : [];
+  if (hasActiveBuff(playerBuffs, 'hyperdrive', now)) {
+    transitMs = Math.round(transitMs * HYPERDRIVE_MULTIPLIER);
+  }
 
   // Create transit record
   const transit: ShipTransit = {

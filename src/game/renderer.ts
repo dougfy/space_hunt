@@ -2888,6 +2888,7 @@ let _panelsTier: 'galaxy' | 'system' | 'local' | 'planet' = 'planet';
 let _panelsShipShape: string = 'scout';
 let _panelsOwned = false; // whether player owns the current star
 let _panelsForeign = false; // whether star is owned by an opponent
+let _homeStarIndex: number | null = null; // player's actual home star
 let _isAdmin = false; // whether current player is an admin
 let _completeCharges = 0; // auto-complete charges from yellow pods
 
@@ -3180,6 +3181,10 @@ export function setPanelContext(docked: boolean, starIndex: number | null, tier:
   if (owned !== undefined) _panelsOwned = owned;
   if (foreign !== undefined) _panelsForeign = foreign;
   if (bodyIndex !== undefined) _panelsBodyIndex = bodyIndex;
+}
+
+export function setHomeStarIndex(idx: number): void {
+  _homeStarIndex = idx;
 }
 
 // Pending galaxy jump from fleet panel MAP button
@@ -4141,7 +4146,7 @@ function drawFleetGalaxyView(
   } else {
     for (const e of entries) {
       // Star header
-      const isHome = e.starIndex === _panelsStarIndex;
+      const isHome = e.starIndex === _homeStarIndex;
       const starName = STAR_NAMES[e.starIndex % STAR_NAMES.length] ?? `Star ${e.starIndex}`;
       ctx.fillStyle = G_BRIGHT;
       ctx.fillText(`\u2605 ${starName}${isHome ? ' (HOME)' : ''}`, x + PANEL_PAD, cy);

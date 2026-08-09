@@ -45,6 +45,8 @@ export interface DevvitCallbacks {
   onClaimPod(podId: number, isYellow: boolean): void;
   /** Player fired a burst — send shots to server */
   onFire(projectiles: Projectile[]): void;
+  /** Game milestone event for journey telemetry */
+  onMilestone?(event: string): void;
 }
 
 let canvas: HTMLCanvasElement | null = null;

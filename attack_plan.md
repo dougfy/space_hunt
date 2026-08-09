@@ -230,7 +230,7 @@ The economy sits on top of this as the **reason to explore, colonize, and fight.
 | 9.4 | Redis persistence | ✅ | `explored:{username}:{starIndex}:{bodyIndex}` — prevents re-rolls. Cached result returned on revisit. |
 | 9.5 | Artifact collectibles | ❌ | Lore fragments tracked as collection. Achievement integration. |
 | 9.6 | Blueprint effects | ❌ | Ship unlock/discount from blueprint finds. Actual gameplay impact. |
-| 9.7 | Anomaly buffs | ❌ | Temporary speed/damage/production buffs from rare anomaly finds. |
+| 9.7 | Anomaly buffs | ⚠️ | Server grants & applies 5 buff types; client syncs & plays voice. HUD icons pending. |
 | 9.8 | Multiple ore types | ❌ | Differentiated resources beyond ore/food/energy. Rare materials for high-tier builds. |
 | 9.9 | Knowledge system | ❌ | Plans/blueprints that unlock build tree branches. Tech tree progression. |
 | 9.10 | Quest chain (legacy) | ❌ | Linear quest progression (build → mine → launch → discover → colonize). Replaced by contextual hints. |
@@ -1056,3 +1056,253 @@ if (dock.targetLabel === 'Station' && isPlayerOwnedStar(starIndex)) {
 - **New player protection** — home star seeds with 500 fuel + refinery auto-builds if dock ≥ 2
 - **Visual** — fuel pods in belt stay the same (red glow), just grant units instead of percentage
 - **Galaxy HUD** — show fuel bar in warp confirm dialog: "WARP TO PROXIMA (cost: 8 fuel, have: 65/100)"
+
+---
+
+## Feature 15 — Logged-Out Player Support ❌ NOT STARTED
+
+**What:** Allow logged-out users to play the core game loop (splash, navigation, exploration), prompt login at natural breakpoints for progress saving/sharing, and migrate localStorage state on signup.
+
+**Why:** Reddit has massive logged-out traffic via SEO/shared links. Every logged-out player who converts = subscriber + retention. Logged-out traffic does NOT count toward qualified engagement for Reddit Developer Funds, so conversion is critical.
+
+### Sub-features
+
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 15.1 | Detect logged-out state | ❌ | Check `context.userId` presence. Route to limited experience if absent. |
+| 15.2 | "Just play" session | ❌ | Allow splash mode gameplay (navigation, asteroid field) without login. No persistence. |
+| 15.3 | Login prompt at breakpoints | ❌ | Use `showLoginPrompt()` from `@devvit/client` after first star visited, or on "save progress" attempt. Pair with value prop messaging. |
+| 15.4 | localStorage state save | ❌ | Save game state (discovered stars, position) to localStorage keyed by postId for logged-out users. |
+| 15.5 | State migration on login | ❌ | On app init with userId, read localStorage, migrate to Redis, clear local. |
+| 15.6 | Share sheet integration | ❌ | Use `showShareSheet()` from `@devvit/web/client` with custom title/text. Attach deeplink data (challenge, invite code). |
+| 15.7 | Share data reading | ❌ | Use `getShareData()` on page load to detect deeplinked invites/challenges. |
+| 15.8 | Custom share preview image | ❌ | Use `media.upload()` + `setShareImageUrl()` for branded unfurl cards. |
+
+### Technical Notes
+
+- **showLoginPrompt()** reloads the page — only trigger at natural stopping points (after docking, results screen, not mid-flight).
+- **localStorage resets** on new app version install — treat as best-effort, not reliable persistence.
+- **Privacy:** Only collect data necessary for gameplay continuity. No profiling/personalization.
+- **Analytics:** Dashboard distinguishes logged-in vs logged-out engagement. Track conversion rate.
+
+---
+
+## Feature 16 — Devvit Journeys Analytics ⚠️ PARTIAL
+
+**What:** Track player progression funnel via Devvit Journeys telemetry. Measures engagement, completion rates, and drop-off points.
+
+**Why:** Required for understanding player retention and optimizing onboarding. Dashboard at developers.reddit.com shows funnel visualization.
+
+### Sub-features
+
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 16.1 | Permission + package | ✅ | `devvit.json` has `"journeys": true`, `@devvit/analytics` v0.13.10 installed. |
+| 16.2 | Server telemetry routes | ✅ | Hono routes at `/api/telemetry/journey/*` forward to `telemetry` plugin. |
+| 16.3 | Client telemetry client | ✅ | `import { telemetry } from '@devvit/analytics/client/reddit'` with default basePath. |
+| 16.4 | appReady event | ✅ | Fires on `startMultiplayer()`. |
+| 16.5 | Journey lifecycle | ✅ | `startJourney()` for new AND returning players. `endJourney()` on colony/idle. |
+| 16.6 | Progress events | ✅ | game_start, returned_player, first_move, first_dock, home_star_claimed, first_resource_collected, first_building, first_upgrade, first_ship_built, dock_upgraded, first_transfer, ship_upgraded, first_colony, star_discovered, alliance_joined, session_end. |
+| 16.7 | Allowlisting | ❌ | App must be allowlisted by Devvit team for events to be recorded. Contact via Discord. Receipt returns `JOURNEY_RECEIPT_DENIED_NOT_ALLOWLISTED` until approved. |
+| 16.8 | Receipt logging | ❌ | Log receipt status from server responses. Handle DENIED/RATE_LIMITED/DUPLICATE gracefully. |
+
+### Receipt Status Reference
+
+| Status | Meaning |
+|---|---|
+| `JOURNEY_RECEIPT_VALID` | Event accepted and recorded |
+| `JOURNEY_RECEIPT_DENIED_NOT_ALLOWLISTED` | App not yet approved — contact Devvit team |
+| `JOURNEY_RECEIPT_DENIED_RATE_LIMITED` | Too many events sent — throttle |
+| `JOURNEY_RECEIPT_DENIED_DUPLICATE` | Already recorded — safe to ignore |
+| `JOURNEY_RECEIPT_INVALID` | Bad payload — fix event data |
+| `JOURNEY_RECEIPT_UNSPECIFIED` | Unknown outcome — retry |
+
+### Action Required
+
+1. Reach out in Devvit Discord to request allowlisting for `valcordia-space`.
+2. After approval, verify receipts show `JOURNEY_RECEIPT_VALID`.
+3. Dashboard will populate at https://developers.reddit.com/apps/valcordia-space (Journeys tab).
+
+---
+
+## Feature 17 — AI-Assisted Development ✅ ACTIVE
+
+**What:** Devvit MCP server integration for AI-driven development workflow.
+
+**Why:** Accelerates development via doc search (`devvit_search`) and live log debugging (`devvit_logs`).
+
+### Sub-features
+
+| # | Item | Status | Detail |
+|---|---|---|---|
+| 17.1 | MCP server setup | ✅ | `@devvit/mcp` available via npx. VS Code `.vscode/mcp.json` configured. |
+| 17.2 | devvit_search | ✅ | Hybrid search over all Devvit docs from agent context. |
+| 17.3 | devvit_logs | ⚠️ | Experimental: query app logs for a subreddit. Use "find a bug in my app deployed to valcordia_space_dev from the past week and fix it". |
+| 17.4 | llms.txt context | ✅ | `https://developers.reddit.com/docs/llms.txt` for pre-prompt context. Full version at `llms-full.txt` for large-context models. |
+
+### Notes
+
+- Prefer `devvit_search` over pasting full docs to avoid context pollution.
+- `devvit_logs` is experimental — works sometimes, shows glimpse of future AI debugging.
+- React, ThreeJS, and Phaser have first-class MCP support with templates.
+
+---
+
+## Feature 18 — Settings & Secrets (Admin Configuration)
+
+**What:** Devvit settings system for per-subreddit and global app configuration. Allows moderators to customize app behavior and developers to store secrets (API keys, etc.) securely.
+
+**Docs:** https://developers.reddit.com/docs/capabilities/server/settings-and-secrets
+
+### Two Scopes
+
+| Scope | Who Configures | Use Case |
+|-------|---------------|----------|
+| `global` | Developer (CLI only) | API keys, secrets, environment toggle |
+| `subreddit` | Moderators (Install Settings UI) | Per-community customization |
+
+### Setting Types
+
+- `string` — Text input
+- `boolean` — Toggle switch
+- `number` — Numeric input
+- `select` — Dropdown (single choice)
+- `multiSelect` — Multiple choice dropdown
+
+### Configuration in `devvit.json`
+
+```json
+{
+  "settings": {
+    "global": {
+      "apiKey": {
+        "type": "string",
+        "label": "API Key",
+        "defaultValue": "",
+        "isSecret": true
+      },
+      "environment": {
+        "type": "select",
+        "label": "Environment",
+        "options": [
+          { "label": "Production", "value": "production" },
+          { "label": "Development", "value": "development" }
+        ],
+        "defaultValue": "production"
+      }
+    },
+    "subreddit": {
+      "welcomeMessage": {
+        "type": "string",
+        "label": "Welcome Message",
+        "validationEndpoint": "/internal/settings/validate-message",
+        "defaultValue": "Welcome to our community!"
+      },
+      "enabledFeatures": {
+        "type": "multiSelect",
+        "label": "Enabled Features",
+        "options": [
+          { "label": "Auto-moderation", "value": "automod" },
+          { "label": "Welcome posts", "value": "welcome" },
+          { "label": "Statistics tracking", "value": "stats" }
+        ],
+        "defaultValue": ["welcome"]
+      }
+    }
+  }
+}
+```
+
+### Accessing Settings in Server Code
+
+```typescript
+import { settings } from "@devvit/web/server";
+
+// Get a single setting
+const apiKey = await settings.get("apiKey");
+
+// Get multiple settings
+const [welcomeMessage, features] = await Promise.all([
+  settings.get("welcomeMessage"),
+  settings.get("enabledFeatures"),
+]);
+```
+
+### Input Validation
+
+Define `validationEndpoint` in the setting, then implement it:
+
+```typescript
+import type { SettingsValidationRequest, SettingsValidationResponse } from "@devvit/web/shared";
+
+app.post("/internal/settings/validate-age", async (c) => {
+  const { value } = await c.req.json<SettingsValidationRequest<number>>();
+  if (!value || value < 0) {
+    return c.json<SettingsValidationResponse>({ success: false, error: "Age must be positive" });
+  }
+  return c.json<SettingsValidationResponse>({ success: true });
+});
+```
+
+### Managing Secrets via CLI
+
+```bash
+npx devvit settings list          # View all settings
+npx devvit settings set apiKey    # Set a secret value (interactive prompt)
+```
+
+**Requirements:**
+- Must `npm run dev` (build) after adding settings to `devvit.json`
+- At least one app installation required before storing secrets via CLI
+- Secrets are always global scope, encrypted, CLI-only
+- Max 2KB per setting value
+
+### Subreddit Settings UI
+
+Once installed, moderators configure subreddit settings through the **Install Settings** page. All non-secret subreddit-scoped settings appear in a form UI. Changes are saved immediately.
+
+### Potential Use Cases for Valcordia Space
+
+| Setting | Scope | Purpose |
+|---------|-------|---------|
+| `difficulty` | subreddit | Easy/Normal/Hard mode per community |
+| `maxPlayers` | subreddit | Limit concurrent players |
+| `eventSchedule` | subreddit | Enable/disable seasonal events |
+| `debugMode` | subreddit | Toggle verbose logging for mods |
+| `externalApiKey` | global | Third-party service integration |
+| `environment` | global | Dev vs production behavior toggle |
+
+---
+
+## Feature 19 — Backstory & Lore
+
+**What:** Create a narrative backstory for the Valcordia Space universe that gives context to player actions, motivates exploration, and provides emotional grounding for the game mechanics.
+
+### Goals
+
+- Give players a reason to explore (not just mechanics)
+- Explain why stars are unclaimed, why resources matter, why alliances form
+- Provide flavor text for discoveries, buildings, and encounters
+- Create a sense of place and history that differentiates the game
+
+### Potential Elements
+
+| Element | Description |
+|---------|-------------|
+| Origin story | Why humanity/species arrived in this sector |
+| The Valcordia sector | What makes this region of space special |
+| Factions/history | Previous inhabitants, fallen civilizations, anomalies |
+| Player role | Who is the player? Explorer? Colonist? Survivor? |
+| Star lore | Procedural or hand-written flavor for star systems |
+| Discovery narratives | Short text blurbs on first visits, anomalies, artifacts |
+| Endgame motivation | What are players building toward? |
+
+### Implementation Ideas
+
+- Splash/intro text on first play (part of tutorial journey)
+- Lore snippets in star discovery panels
+- Anomaly encounters with narrative context
+- Codex/lore tab in help panel
+- Progressive story reveals as milestones are hit
+
+### Status: Not Started

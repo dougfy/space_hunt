@@ -10,7 +10,7 @@ const api = new Hono();
 api.post('/journey/start', async (c) => {
   try {
     const response = await telemetry.startJourney();
-    console.log('[TELEMETRY] journey started:', response.journeyId);
+    console.log('[TELEMETRY] journey started:', response.journeyId, 'receipt:', (response as Record<string, unknown>).receipt ?? 'none');
     return c.json(response);
   } catch (e) {
     console.error('[TELEMETRY] start error:', e);
@@ -30,7 +30,7 @@ api.post('/journey/progress', async (c) => {
       ...(body.action ? { action: body.action } : {}),
       ...(body.actionDetails ? { actionDetails: body.actionDetails } : {}),
     });
-    console.log('[TELEMETRY] progress:', body.progress, body.action ?? '');
+    console.log('[TELEMETRY] progress:', body.progress, body.action ?? '', 'receipt:', (response as Record<string, unknown>).receipt ?? 'none');
     return c.json(response);
   } catch (e) {
     console.error('[TELEMETRY] progress error:', e);
@@ -49,7 +49,7 @@ api.post('/journey/interaction', async (c) => {
       action: body.action,
       actionDetails: body.actionDetails ?? '',
     });
-    console.log('[TELEMETRY] interaction:', body.action);
+    console.log('[TELEMETRY] interaction:', body.action, 'receipt:', (response as Record<string, unknown>).receipt ?? 'none');
     return c.json(response);
   } catch (e) {
     console.error('[TELEMETRY] interaction error:', e);
@@ -68,7 +68,7 @@ api.post('/journey/end', async (c) => {
       complete: body.complete ?? false,
       ...(body.game ? { game: { win: body.game.win ?? false, score: body.game.score ?? 0 } } : {}),
     });
-    console.log('[TELEMETRY] journey ended, complete:', body.complete);
+    console.log('[TELEMETRY] journey ended, complete:', body.complete, 'receipt:', (response as Record<string, unknown>).receipt ?? 'none');
     return c.json(response);
   } catch (e) {
     console.error('[TELEMETRY] end error:', e);
@@ -79,7 +79,7 @@ api.post('/journey/end', async (c) => {
 api.post('/journey/app-ready', async (c) => {
   try {
     const response = await telemetry.appReady();
-    console.log('[TELEMETRY] app ready');
+    console.log('[TELEMETRY] app ready, receipt:', (response as Record<string, unknown>).receipt ?? 'none');
     return c.json(response);
   } catch (e) {
     console.error('[TELEMETRY] app-ready error:', e);
