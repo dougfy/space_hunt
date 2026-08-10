@@ -21,9 +21,9 @@
     "node": ">=22.2.0"
   },
   "dependencies": {
-    "@devvit/analytics": "^0.13.10",
-    "@devvit/start": "^0.13.10",
-    "@devvit/web": "^0.13.10",
+    "@devvit/analytics": "^0.13.11",
+    "@devvit/start": "^0.13.11",
+    "@devvit/web": "^0.13.11",
     "@hono/node-server": "2.0.3",
     "hono": "4.12.21",
     "react": "19.2.6",
@@ -36,7 +36,7 @@
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
-    "devvit": "^0.13.10",
+    "devvit": "^0.13.11",
     "eslint": "10.4.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "0.5.2",
