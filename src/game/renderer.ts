@@ -26,11 +26,18 @@ function isMobileView(): boolean {
   return vm?.isMobile ?? (window.innerWidth < 600);
 }
 
-/** Check if a body has been scanned (unlocks raster visuals). Unscanned = wireframe. */
-function isScanned(starIndex: number, bodyIndex: number): boolean {
+/** Check if features (station/buildings) on a body have been scanned. */
+function isFeatureScanned(starIndex: number, bodyIndex: number): boolean {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const fn = (globalThis as any).__isBodyScanned;
-  return fn ? fn(starIndex, bodyIndex) : false; // default wireframe until scan state loads
+  const fn = (globalThis as any).__isFeatureScanned;
+  return fn ? fn(starIndex, bodyIndex) : false;
+}
+
+/** Check if the planet surface has been scanned. */
+function isPlanetScanned(starIndex: number, bodyIndex: number): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fn = (globalThis as any).__isPlanetScanned;
+  return fn ? fn(starIndex, bodyIndex) : false;
 }
 
 export interface Renderer {
@@ -2050,7 +2057,7 @@ export function drawSystemView(
       ctx.restore();
     } else {
       // Planet — raster sprite if scanned, wireframe otherwise
-      const bodyScanned = isScanned(galaxy.currentStarIndex, body.index);
+      const bodyScanned = isPlanetScanned(galaxy.currentStarIndex, body.index);
       const planetSprite = bodyScanned ? getPlanetSprite(body.seed) : null;
 
       if (planetSprite) {
@@ -2431,8 +2438,8 @@ function getEffectiveFeatures(body: SystemBody, starIndex: number, bodyIndex: nu
   const stationFeature = body.features.find(f => f.type === 'station');
   if (!stationFeature) return body.features;
 
-  // If the body hasn't been scanned, force all features to wireframe
-  const scanned = bodyIndex >= 0 && isScanned(starIndex, bodyIndex);
+  // If the body's features haven't been scanned, force all features to wireframe
+  const scanned = bodyIndex >= 0 && isFeatureScanned(starIndex, bodyIndex);
 
   // Update station name/level from server data
   const stationBuilding = serverEcon.buildings.station;
@@ -2540,7 +2547,7 @@ export function drawPlanetView(
   // ── 2. Planet body ──
   // Scanned bodies show raster; unscanned stay wireframe.
   // Wireframe pref overrides everything back to procedural.
-  const _bodyScanned = isScanned(galaxy.currentStarIndex, galaxy.currentBodyIndex);
+  const _bodyScanned = isPlanetScanned(galaxy.currentStarIndex, galaxy.currentBodyIndex);
   const _planetSkin = (_bodyScanned && !getWireframePref()) ? 'raster' : 'procedural';
   const planetImg = _planetSkin === 'raster' ? getPlanetSprite(body.seed) : null;
   if (planetImg) {

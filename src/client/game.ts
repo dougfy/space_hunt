@@ -192,18 +192,39 @@ let currentName = username;
 let playerHomeStarIndex: number | null = null;
 
 // ── Scanned bodies tracking (wireframe → raster on scan) ────────────────────
-const _scannedBodies = new Set<string>(); // keys: "starIndex:bodyIndex"
-/** Check if a body has been scanned by this player */
+const _scannedBodies = new Set<string>(); // keys: "starIndex:bodyIndex" (legacy), "starIndex:bodyIndex:f", "starIndex:bodyIndex:p"
+
+/** Check if a body's features (station/buildings) have been scanned */
+export function isFeatureScanned(starIndex: number, bodyIndex: number): boolean {
+  return _scannedBodies.has(`${starIndex}:${bodyIndex}:f`) || _scannedBodies.has(`${starIndex}:${bodyIndex}`);
+}
+
+/** Check if a body's planet surface has been scanned */
+export function isPlanetScanned(starIndex: number, bodyIndex: number): boolean {
+  return _scannedBodies.has(`${starIndex}:${bodyIndex}:p`) || _scannedBodies.has(`${starIndex}:${bodyIndex}`);
+}
+
+/** Legacy: check if body has been scanned (either target) */
 export function isBodyScanned(starIndex: number, bodyIndex: number): boolean {
-  return _scannedBodies.has(`${starIndex}:${bodyIndex}`);
+  return isFeatureScanned(starIndex, bodyIndex) || isPlanetScanned(starIndex, bodyIndex);
 }
-/** Mark a body as scanned */
-function markBodyScanned(starIndex: number, bodyIndex: number): void {
-  _scannedBodies.add(`${starIndex}:${bodyIndex}`);
+
+/** Mark a body's features or planet as scanned */
+function markBodyScanned(starIndex: number, bodyIndex: number, target?: 'f' | 'p'): void {
+  if (target) {
+    _scannedBodies.add(`${starIndex}:${bodyIndex}:${target}`);
+  } else {
+    _scannedBodies.add(`${starIndex}:${bodyIndex}`); // legacy — both
+  }
 }
+
 // Expose to renderer (cross-module access)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).__isBodyScanned = isBodyScanned;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__isFeatureScanned = isFeatureScanned;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__isPlanetScanned = isPlanetScanned;
 
 // ── Active buffs (synced from server economy poll) ──────────────────────────
 const _activeBuffs: Array<{ buffId: string; expiresAt: number; grantedAt: number; starIndex: number }> = [];
@@ -695,8 +716,9 @@ async function explorePlanet(starIndex: number, bodyIndex: number, isStation: bo
       const data = await res.json() as { explored: boolean; result: { kind: string; label: string; icon: string; amount: number }; buff?: { buffId: string; expiresAt: number; grantedAt: number; starIndex: number } };
       showExploreResult(data.result.kind, data.result.label, data.result.icon, data.result.amount);
       journeyAction('explore');
-      // Mark body as scanned — unlocks raster visuals (even on re-explore)
-      markBodyScanned(starIndex, bodyIndex);
+      // Mark body as scanned — unlocks raster visuals
+      // Station scan reveals features only; planet scan reveals planet surface only
+      markBodyScanned(starIndex, bodyIndex, isStation ? 'f' : 'p');
       const kind = data.result.kind;
       if (kind === 'nothing') {
         playSound(isStation ? 'scan_nothing_station' : 'scan_nothing_planet');

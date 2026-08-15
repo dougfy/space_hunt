@@ -72,6 +72,8 @@ import {
   refuelShip,
   storePose,
   storeShots,
+  recordLastSeen,
+  buildReturningReport,
 } from '../core/game-service';
 import { getTradeStationInfo, executeTrade } from '../core/trading';
 import { isTradingStation } from '../../shared/trading';
@@ -279,6 +281,26 @@ api.get('/profile', async (c) => {
   return c.json<PlayerProfileResponse>({ ...response, devMode });
 });
 
+/** Returning player report — events that occurred while player was away. */
+api.get('/report', async (c) => {
+  const username = c.req.query('username');
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  const { postId } = context;
+
+  try {
+    const profileKey = `profile:${username}`;
+    const lastSeenRaw = await redis.hGet(profileKey, 'lastSeen');
+    const lastSeenMs = lastSeenRaw ? parseInt(lastSeenRaw, 10) : 0;
+    const report = await buildReturningReport(redis, username, lastSeenMs, postId ?? undefined);
+    // Update lastSeen AFTER building report (so next login sees the correct gap)
+    void recordLastSeen(redis, username);
+    return c.json(report);
+  } catch (error) {
+    console.error('[REPORT] error:', error);
+    return c.json<ErrorResponse>({ status: 'error', message: 'Failed to build report' }, 500);
+  }
+});
+
 /** Debug: dump raw profile hash from Redis. */
 api.get('/debug/profile-raw', requireDev, async (c) => {
   const user = c.req.query('username');
@@ -346,7 +368,7 @@ api.post('/stars/reset', requireDev, async (c) => {
   const users = new Set(Object.values(allClaims).map(v => v.split(':')[0]));
   for (const user of users) {
     try {
-      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition', 'journeyDone']);
+      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition', 'journeyDone', 'scannedBodies']);
     } catch { /* ignore */ }
   }
 
@@ -375,8 +397,8 @@ api.post('/admin/reset-all', requireDev, async (c) => {
   let cleared = 0;
   for (const user of users) {
     try {
-      // Profile fields: economy, ships, stats, discoveredStars, enhancedProbeStars, lastPosition, journeyDone
-      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'enhancedProbeStars', 'lastPosition', 'journeyDone']);
+      // Profile fields: economy, ships, stats, discoveredStars, enhancedProbeStars, lastPosition, journeyDone, scannedBodies
+      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'enhancedProbeStars', 'lastPosition', 'journeyDone', 'scannedBodies']);
 
       // Achievements
       const achKeys = Object.keys(await redis.hGetAll(`achievements:${user}`));
@@ -394,10 +416,12 @@ api.post('/admin/reset-all', requireDev, async (c) => {
       // Fleet share cooldown
       try { await redis.del(`share:fleet:${user}`); } catch { /* ignore */ }
 
-      // Explored planets: explored:{user}:{starIndex}:{bodyIndex} (up to 100 stars × 8 bodies)
+      // Explored planets: explored:{user}:{starIndex}:{bodyIndex}[:f|:p] (up to 100 stars × 8 bodies)
       for (let si = 0; si < 100; si++) {
         for (let bi = 0; bi < 8; bi++) {
           try { await redis.del(`explored:${user}:${si}:${bi}`); } catch { /* ignore */ }
+          try { await redis.del(`explored:${user}:${si}:${bi}:f`); } catch { /* ignore */ }
+          try { await redis.del(`explored:${user}:${si}:${bi}:p`); } catch { /* ignore */ }
         }
       }
 
@@ -552,6 +576,7 @@ api.get('/economy', async (c) => {
 api.get('/buildings', async (c) => {
   const username = c.req.query('username');
   const starIndexRaw = c.req.query('starIndex');
+  const skinId = c.req.query('skinId');
   if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
   if (!starIndexRaw) return c.json<ErrorResponse>({ status: 'error', message: 'starIndex required' }, 400);
 
@@ -560,7 +585,7 @@ api.get('/buildings', async (c) => {
     return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
   }
 
-  const response = await loadStarEconomy(redis, username, starIndex);
+  const response = await loadStarEconomy(redis, username, starIndex, Date.now(), skinId ?? undefined);
   return c.json<StarEconomyResponse>(response);
 });
 
@@ -815,7 +840,7 @@ api.post('/colonize', async (c) => {
   }
   try {
     const response = await colonizeStar(redis, body.postId, body.username, body.starIndex, Date.now(), body.bodyIndex ?? 0);
-    auditLog(body.postId, 'colonize', { user: body.username, starIndex: body.starIndex, bodyIndex: body.bodyIndex ?? 0 });
+    auditLog(body.postId, 'colonize', { user: body.username, starIndex: body.starIndex, starName: response.starName });
     // Fire-and-forget: count stars owned and trigger achievements
     getClaimedStars(redis, body.postId).then((claims) => {
       const userStars = claims.filter((c) => c.username === body.username).length;
@@ -915,7 +940,7 @@ api.get('/fleet/foreign', async (c) => {
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
   try {
     const claims = await getClaimedStars(redis, postId);
-    const result: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }> }> = {};
+    const result: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }>; skinId?: string }> = {};
     for (const claim of claims) {
       if (claim.username === excludeUser) continue;
       const raw = await redis.hGet(`profile:${claim.username}`, 'ships');
@@ -925,7 +950,10 @@ api.get('/fleet/foreign', async (c) => {
       const starKey = `s:${claim.starIndex}`;
       const starShips = profile.stars?.[starKey]?.ships ?? [];
       if (starShips.length > 0) {
-        result[starKey] = { owner: claim.username, ships: starShips };
+        // Get player's preferred skin from economy profile
+        const econRaw = await redis.hGet(`profile:${claim.username}`, 'economy');
+        const econ = econRaw ? JSON.parse(econRaw) as { preferredSkinId?: string } : {};
+        result[starKey] = { owner: claim.username, ships: starShips, skinId: econ.preferredSkinId };
       }
     }
 
@@ -1158,18 +1186,45 @@ api.post('/explore', async (c) => {
   if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'No postId' }, 400);
 
   try {
-    const body = await c.req.json<ExploreRequest & { username: string; starIndex: number }>();
+    const body = await c.req.json<ExploreRequest & { username: string; starIndex: number; isStation?: boolean }>();
     const { username, starIndex, bodyIndex } = body;
     if (!username || starIndex == null || bodyIndex == null) {
       return c.json<ErrorResponse>({ status: 'error', message: 'Missing fields' }, 400);
     }
 
-    // Check if already explored (one-shot per planet per player)
-    const exploreKey = `explored:${username}:${starIndex}:${bodyIndex}`;
-    const alreadyExplored = await redis.get(exploreKey);
+    // Check if already explored (one-shot per target per player)
+    // Station and planet are separate scan targets on the same body
+    const isStation = !!body.isStation;
+    const targetSuffix = isStation ? ':f' : ':p';
+    const exploreKey = `explored:${username}:${starIndex}:${bodyIndex}${targetSuffix}`;
+    const legacyKey = `explored:${username}:${starIndex}:${bodyIndex}`;
+    const alreadyExplored = await redis.get(exploreKey) || await redis.get(legacyKey);
     if (alreadyExplored) {
       const cached = JSON.parse(alreadyExplored) as ExploreResponse;
       return c.json<ExploreResponse>({ ...cached, explored: false });
+    }
+
+    // Check scan cooldown — after a successful find, player must wait before next scan yields results
+    const SCAN_COOLDOWN_MS = 60_000; // 60 seconds between meaningful finds
+    const cooldownKey = `scan_cooldown:${username.toLowerCase()}`;
+    const cooldownRaw = await redis.get(cooldownKey);
+    if (cooldownRaw) {
+      const cooldownEnd = parseInt(cooldownRaw, 10);
+      if (Date.now() < cooldownEnd) {
+        // Cooldown active — return a "nothing" result with appropriate message
+        const cooldownResult: ExploreResponse = {
+          explored: true,
+          result: {
+            kind: 'nothing',
+            amount: 0,
+            label: isStation ? 'Standard tech — nothing unusual detected' : 'Barren surface — nothing of interest',
+            icon: '—',
+          },
+        };
+        // Still mark as explored so this body is consumed
+        await redis.set(exploreKey, JSON.stringify(cooldownResult));
+        return c.json(cooldownResult);
+      }
     }
 
     // Compute galaxy seed from postId (same as client)
@@ -1179,8 +1234,8 @@ api.post('/explore', async (c) => {
       galaxySeed = (galaxySeed * 31 + seedStr.charCodeAt(i)) | 0;
     }
 
-    // Roll discovery (deterministic per planet)
-    const result = rollDiscovery(galaxySeed, starIndex, bodyIndex);
+    // Roll discovery (deterministic per planet; stations exclude ore)
+    const result = rollDiscovery(galaxySeed, starIndex, bodyIndex, !!body.isStation);
 
     // Grant resources to the star the player is exploring
     if (result.kind === 'ore' || result.kind === 'food' || result.kind === 'energy' || result.kind === 'fuel') {
@@ -1227,6 +1282,12 @@ api.post('/explore', async (c) => {
     // Mark explored (persist forever)
     const response: ExploreResponse & { buff?: ActiveBuff } = { explored: true, result, ...(grantedBuff ? { buff: grantedBuff } : {}) };
     await redis.set(exploreKey, JSON.stringify({ explored: true, result }));
+
+    // Set scan cooldown after a real find (not "nothing") — 60 seconds
+    if (result.kind !== 'nothing') {
+      await redis.set(cooldownKey, (Date.now() + SCAN_COOLDOWN_MS).toString());
+      console.log(`[EXPLORE] user=${username} cooldown set for ${SCAN_COOLDOWN_MS / 1000}s after finding ${result.kind}`);
+    }
 
     return c.json(response);
   } catch (error) {
