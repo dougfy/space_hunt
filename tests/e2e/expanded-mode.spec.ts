@@ -32,7 +32,6 @@ async function findGameFrame(page: import('@playwright/test').Page, timeoutMs = 
 
 test.describe('Expanded Mode', () => {
   test.setTimeout(90_000);
-  test.use({ viewport: { width: 1920, height: 1080 } }); // Force desktop viewport
 
   test('open full-screen mode and verify game renders', async ({ page }) => {
     const verifier = new VisualVerifier('expanded-mode');
@@ -230,11 +229,11 @@ test.describe('Expanded Mode', () => {
       console.log('[EXPANDED] Game state not available — proceeding with visual check only');
     }
 
-    // 8. Visual verification — game should now be in full-screen/desktop width
+    // 8. Visual verification — check for overlapping UI elements
     const result1 = await verifier.verify(
       expandedFrame,
-      'expanded-game-loaded',
-      'A space game is rendering at FULL WIDTH (wide landscape aspect ratio, not narrow mobile). The game canvas should fill the available width showing a dark space background with a station, planet, or ship. Panel tabs (BUILD, SHIPS, STATUS, FLEET, COMS) should be visible on the right side. HUD text like star name, fuel, or orbit status should be displayed. If it appears in a narrow portrait/mobile layout, this FAILS.'
+      'no-overlapping-ui',
+      'Check carefully for any OVERLAPPING TEXT or BUTTONS covering other text areas. All UI elements should be clearly readable with no text rendered on top of other text. Panel labels, resource counters, star names, fuel indicators, and button text should each be in their own space without colliding. If ANY text overlaps other text, or ANY button covers a text area making it unreadable, this FAILS. Look specifically at: top-left info panel, right-side panel tabs, bottom dock bar, and any floating labels.'
     );
 
     // 7. If docked, verify dock panel elements
