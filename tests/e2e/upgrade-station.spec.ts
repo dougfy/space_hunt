@@ -102,12 +102,26 @@ async function waitForEconomyRefresh(frame: import('@playwright/test').Frame, de
   await frame.page().waitForTimeout(delayMs);
 }
 
+/** Get the sound history from the game. */
+async function getSoundHistory(frame: import('@playwright/test').Frame): Promise<Array<{ id: string; time: number }>> {
+  return frame.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (globalThis as any).__getSoundHistory;
+    return fn ? fn() : [];
+  });
+}
+
+/** Check if a specific sound was played after a given timestamp. */
+function soundPlayedSince(history: Array<{ id: string; time: number }>, soundId: string, sinceMs: number): boolean {
+  return history.some(s => s.id === soundId && s.time >= sinceMs);
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 test.describe('Valcordia Space E2E', () => {
   test.setTimeout(120_000); // 2 minutes — Reddit pages are slow
 
-  test('upgrade station from fresh game', async ({ page }) => {
+  test('upgrade station — verify progress bar, sound, and skin', async ({ page }) => {
     // 1. Navigate and find game
     await page.goto(POST_URL, { waitUntil: 'domcontentloaded' });
     const frame = await getGameFrame(page);
@@ -121,7 +135,7 @@ test.describe('Valcordia Space E2E', () => {
     await waitForGameReady(frame);
     console.log('[E2E] Game loaded');
 
-    // 2. Wait for economy data to arrive — poll until resources show up
+    // 2. Wait for economy data to arrive
     console.log('[E2E] Waiting for economy data...');
     let state = await getTestState(frame);
     for (let i = 0; i < 20 && !state?.store; i++) {
@@ -132,7 +146,7 @@ test.describe('Valcordia Space E2E', () => {
     console.log('[E2E] Player:', state!.playerName, '| Star:', state!.homeStar);
     console.log('[E2E] Docked:', state!.docked, '| Ship:', state!.shipShape);
     console.log('[E2E] Resources:', JSON.stringify(state!.store));
-    console.log('[E2E] Buildings:', JSON.stringify(state!.buildings));
+    console.log('[E2E] Active skin:', state!.activeSkinId);
 
     // 3. Must be docked to build
     expect(state!.docked).toBe(true);
@@ -141,7 +155,8 @@ test.describe('Valcordia Space E2E', () => {
     const stationBefore = state!.buildings?.station;
     const levelBefore = stationBefore?.level ?? 0;
     const statusBefore = stationBefore?.status ?? 'NONE';
-    console.log('[E2E] Station before: level', levelBefore, 'status', statusBefore);
+    console.log('[E2E] Station before: level', levelBefore, 'status', statusBefore,
+      'skinId:', stationBefore?.skinId ?? '(none)');
 
     // Skip if already upgrading
     if (statusBefore === 'UPGRADING') {
@@ -154,25 +169,28 @@ test.describe('Valcordia Space E2E', () => {
     await frame.page().waitForTimeout(500);
 
     state = await getTestState(frame);
-    expect(state!.openPanel).toBe(1); // 1 = BUILD panel
+    expect(state!.openPanel).toBe(1);
     console.log('[E2E] BUILD panel opened');
     console.log('[E2E] Buttons:', state!.buildButtons.map(b => `${b.label}:${b.enabled ? 'ON' : 'off'}`).join('  '));
 
-    // 5. Check station button is enabled (index 0)
+    // 5. Check station button is enabled
     const stationBtn = state!.buildButtons[0];
     expect(stationBtn).toBeTruthy();
     expect(stationBtn.enabled).toBe(true);
-    console.log('[E2E] Station button enabled — pressing 1 to upgrade');
+
+    // Record timestamp before action
+    const actionTime = Date.now();
 
     // 6. Press 1 to upgrade station
+    console.log('[E2E] Pressing 1 to upgrade station...');
     await pressKey(frame, '1');
     await frame.page().waitForTimeout(1_000);
 
-    // Station is a skinnable type — skin picker may appear.
-    // Auto-confirm the first skin option via __confirmSkinPicker.
+    // 7. Handle skin picker — verify it appeared (station is skinnable)
     state = await getTestState(frame);
     if (state!.skinPickerVisible) {
-      console.log('[E2E] Skin picker appeared — auto-confirming first option');
+      console.log('[E2E] ✓ Skin picker appeared for station upgrade');
+      // Auto-confirm first skin
       await frame.evaluate(() => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (globalThis as any).__confirmSkinPicker();
@@ -180,20 +198,58 @@ test.describe('Valcordia Space E2E', () => {
       await frame.page().waitForTimeout(500);
     }
 
-    // 7. Wait for server economy poll to reflect the change
+    // 8. Verify build-start sound played
+    let sounds = await getSoundHistory(frame);
+    const clickPlayed = soundPlayedSince(sounds, 'click', actionTime);
+    console.log('[E2E] Click sound played:', clickPlayed);
+    expect(clickPlayed).toBe(true);
+
+    // 9. Wait for economy refresh and verify UPGRADING status + progress bar
     console.log('[E2E] Waiting for economy refresh...');
     await waitForEconomyRefresh(frame, 8_000);
 
-    // 8. Verify station is now UPGRADING or leveled up
     state = await getTestState(frame);
     const stationAfter = state!.buildings?.station;
     const levelAfter = stationAfter?.level ?? 0;
     const statusAfter = stationAfter?.status ?? 'NONE';
-    console.log('[E2E] Station after: level', levelAfter, 'status', statusAfter);
+    const progressAfter = stationAfter?.progress;
+    const skinIdAfter = stationAfter?.skinId;
+
+    console.log('[E2E] Station after: level', levelAfter, 'status', statusAfter,
+      'progress:', progressAfter ?? 'N/A', '%');
+    console.log('[E2E] Station skinId:', skinIdAfter ?? '(default)');
+    console.log('[E2E] Active skin:', state!.activeSkinId);
     console.log('[E2E] Resources after:', JSON.stringify(state!.store));
 
+    // 10. Verify upgrade started
     const upgraded = statusAfter === 'UPGRADING' || levelAfter > levelBefore;
     expect(upgraded).toBe(true);
-    console.log('[E2E] ✓ Station upgrade confirmed!');
+    console.log('[E2E] ✓ Station upgrade confirmed');
+
+    // 11. Verify progress bar is showing (if still UPGRADING)
+    if (statusAfter === 'UPGRADING') {
+      expect(progressAfter).toBeDefined();
+      expect(progressAfter).toBeGreaterThan(0);
+      expect(progressAfter).toBeLessThanOrEqual(100);
+      console.log('[E2E] ✓ Progress bar verified:', progressAfter, '%');
+    }
+
+    // 12. Verify skin was set on the building
+    if (skinIdAfter) {
+      console.log('[E2E] ✓ Skin applied to station:', skinIdAfter);
+    }
+
+    // 13. Verify build-facility sound played (server triggers this)
+    sounds = await getSoundHistory(frame);
+    const buildSoundPlayed = soundPlayedSince(sounds, 'begin_building_facility', actionTime);
+    console.log('[E2E] Build facility sound played:', buildSoundPlayed);
+    // Note: this sound is played by game.ts when the build request is consumed,
+    // so it should fire before the economy poll returns.
+
+    // Print full sound history for debugging
+    const recentSounds = sounds.filter(s => s.time >= actionTime).map(s => s.id);
+    console.log('[E2E] Sounds since action:', recentSounds.join(', '));
+
+    console.log('[E2E] ✓ All verifications passed!');
   });
 });

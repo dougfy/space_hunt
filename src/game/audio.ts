@@ -4,7 +4,7 @@
 
 import versionJson from '../../version.json';
 
-type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'undocking_alt' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded' | 'freighter_arrived' | 'freighter_unloading' | 'shields_activated' | 'shields_up' | 'shields_deactivated' | 'shields_down' | 'hostile_raider' | 'unidentified_ship' | 'new_comm' | 'fleet_command' | 'scan_nothing_planet' | 'scan_nothing_station' | 'scan_ore' | 'scan_food' | 'scan_energy' | 'scan_fuel' | 'scan_artifact' | 'scan_anomaly' | 'scan_blueprint' | 'begin_scan' | 'buff_hyperdrive' | 'buff_resonance' | 'buff_chrono' | 'buff_void_shield' | 'buff_scanner_amp';
+type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'ship_is_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'undocking_alt' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded' | 'freighter_arrived' | 'freighter_unloading' | 'shields_activated' | 'shields_up' | 'shields_deactivated' | 'shields_down' | 'hostile_raider' | 'unidentified_ship' | 'new_comm' | 'fleet_command' | 'scan_nothing_planet' | 'scan_nothing_station' | 'scan_ore' | 'scan_food' | 'scan_energy' | 'scan_fuel' | 'scan_artifact' | 'scan_anomaly' | 'scan_blueprint' | 'begin_scan' | 'buff_hyperdrive' | 'buff_resonance' | 'buff_chrono' | 'buff_void_shield' | 'buff_scanner_amp' | 'raid_launched' | 'raid_incoming' | 'alliance_formed' | 'alliance_broken' | 'luminari_gate' | 'colony_established' | 'reverse_engineered';
 
 // Cache-bust sound URLs with version so updated wavs are fetched fresh
 const V = versionJson.version;
@@ -15,6 +15,7 @@ const SOUND_FILES: Partial<Record<SoundId, string>> = {
   colonize: `/sounds/Colonize%20complete.wav?v=${V}`,
   arrive: `/sounds/Probe%20arrived.wav?v=${V}`,
   status_docked: `/sounds/Status%20docked%20begin.wav?v=${V}`,
+  ship_is_docked: `/sounds/Ship%20is%20docked.wav?v=${V}`,
   begin_building: `/sounds/Begin%20building.wav?v=${V}`,
   begin_building_facility: `/sounds/Begin%20building%20facility.wav?v=${V}`,
   begin_building_ship: `/sounds/Begin%20building%20ship.wav?v=${V}`,
@@ -34,7 +35,7 @@ const SOUND_FILES: Partial<Record<SoundId, string>> = {
   shields_up: `/sounds/Shields%20are%20up.wav?v=${V}`,
   shields_deactivated: `/sounds/Shields%20are%20deactivated.wav?v=${V}`,
   shields_down: `/sounds/Shields%20are%20down.wav?v=${V}`,
-  hostile_raider: `/sounds/Warning%20hostile%20raider.wav?v=${V}`,
+  hostile_raider: `/sounds/Warning%20hostile%20raider%20(1).wav?v=${V}`,
   unidentified_ship: `/sounds/Warning%20unidentified%20ship.wav?v=${V}`,
   new_comm: `/sounds/New%20comm%20message.wav?v=${V}`,
   fleet_command: `/sounds/Fleet%20command%20message.wav?v=${V}`,
@@ -45,15 +46,22 @@ const SOUND_FILES: Partial<Record<SoundId, string>> = {
   scan_food: `/sounds/Organic%20matter%20discovered.wav?v=${V}`,
   scan_energy: `/sounds/Energy%20source%20discovered.wav?v=${V}`,
   scan_fuel: `/sounds/Fuel%20source%20discovered.wav?v=${V}`,
-  scan_artifact: `/sounds/Ancient%20artifact%20recovered.wav?v=${V}`,
-  scan_anomaly: `/sounds/Anomalous%20signal%20detected.wav?v=${V}`,
+  scan_artifact: `/sounds/Luminari%20artifact%20recovered.wav?v=${V}`,
+  scan_anomaly: `/sounds/Anomalous%20signal%20detected%20(2).wav?v=${V}`,
   scan_blueprint: `/sounds/Ship%20blueprint%20found.wav?v=${V}`,
   begin_scan: `/sounds/Begin%20scan.wav?v=${V}`,
-  buff_hyperdrive: `/sounds/Buff%20hyperdrive%20surge.wav?v=${V}`,
-  buff_resonance: `/sounds/Buff%20resonance%20mining.wav?v=${V}`,
-  buff_chrono: `/sounds/Buff%20chrono%20catalyst.wav?v=${V}`,
-  buff_void_shield: `/sounds/Buff%20void%20shield.wav?v=${V}`,
-  buff_scanner_amp: `/sounds/Buff%20scanner%20amplification.wav?v=${V}`,
+  buff_hyperdrive: `/sounds/Hyperdrive%20surge%20activated.wav?v=${V}`,
+  buff_resonance: `/sounds/Resonance%20mining%20engaged.wav?v=${V}`,
+  buff_chrono: `/sounds/Chrono%20catalyst%20online.wav?v=${V}`,
+  buff_void_shield: `/sounds/Void%20shield%20deployed.wav?v=${V}`,
+  buff_scanner_amp: `/sounds/Scanner%20amplification%20active.wav?v=${V}`,
+  raid_launched: `/sounds/Raid%20fleet%20deployed.wav?v=${V}`,
+  raid_incoming: `/sounds/Alert%20incoming%20raid.wav?v=${V}`,
+  alliance_formed: `/sounds/Alliance%20established%20Strength.wav?v=${V}`,
+  alliance_broken: `/sounds/Alliance%20dissolved%20Trust.wav?v=${V}`,
+  luminari_gate: `/sounds/Luminari%20star%20gate.wav?v=${V}`,
+  colony_established: `/sounds/Colony%20established%20The.wav?v=${V}`,
+  reverse_engineered: `/sounds/Valcordian%20tech%20integrated.wav?v=${V}`,
 };
 
 let _audioCtx: AudioContext | null = null;
@@ -61,6 +69,12 @@ let _muted = false;
 let _volume = 0.5;
 const _bufferCache = new Map<string, AudioBuffer>();
 const _loadingSet = new Set<string>();
+
+// Sound history for test automation (ring buffer of last 20)
+const _soundHistory: Array<{ id: string; time: number }> = [];
+export function getSoundHistory(): Array<{ id: string; time: number }> {
+  return [..._soundHistory];
+}
 
 function getAudioContext(): AudioContext {
   if (!_audioCtx) {
@@ -110,6 +124,10 @@ function playSynthClick(): void {
 /** Play a sound effect by id. Non-blocking — fires and forgets. */
 export function playSound(id: SoundId): void {
   console.log('[AUDIO] playSound called:', id, 'muted=', _muted);
+  // Track for test automation (ring buffer of last 20 sounds)
+  _soundHistory.push({ id, time: Date.now() });
+  if (_soundHistory.length > 20) _soundHistory.shift();
+
   if (_muted) return;
 
   if (id === 'click') {

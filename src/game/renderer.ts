@@ -6960,24 +6960,47 @@ export function getTestState(): {
   openPanel: number;
   starIndex: number | null;
   skinPickerVisible: boolean;
-  buildings: Record<string, { level: number; status: string; completeAt: number | null }> | null;
+  buildings: Record<string, { level: number; status: string; completeAt: number | null; skinId?: string; progress?: number }> | null;
   store: { ore: number; food: number; energy: number; fuel: number } | null;
   rates: { ore: number; food: number; energy: number; fuel: number } | null;
   buildButtons: Array<{ label: string; enabled: boolean; action: string }>;
   shipButtons: Array<{ shipTypeId: number; enabled: boolean; isUpgrade: boolean }>;
+  shipBuilding: { typeId: number; completeAt: number; progress: number } | null;
+  ships: Array<{ typeId: number; count: number }> | null;
+  activeSkinId: string;
 } {
   const econ = _lastEconomyStarIndex != null ? _serverEconomyByStarIndex.get(_lastEconomyStarIndex) : null;
+  const fleet = _lastEconomyStarIndex != null ? _serverShipsByStarIndex.get(_lastEconomyStarIndex) : null;
+  const nowMs = Date.now();
   return {
     openPanel: _openPanel,
     starIndex: _lastEconomyStarIndex,
     skinPickerVisible: _skinPickerVisible,
     buildings: econ ? Object.fromEntries(
-      Object.entries(econ.buildings).map(([k, v]) => [k, { level: v.level, status: v.status, completeAt: v.completeAt }])
+      Object.entries(econ.buildings).map(([k, v]) => {
+        const ext = MOCK_EXTENSION_DEFS.find(d => d.key === k);
+        const progress = v.status === 'UPGRADING' && v.completeAt != null && ext
+          ? Math.max(0, Math.min(100, Math.floor(((ext.buildMs - Math.max(0, v.completeAt - nowMs)) / ext.buildMs) * 100)))
+          : undefined;
+        const entry: { level: number; status: string; completeAt: number | null; skinId?: string; progress?: number } = {
+          level: v.level, status: v.status, completeAt: v.completeAt,
+        };
+        if (v.skinId != null) entry.skinId = v.skinId;
+        if (progress != null) entry.progress = progress;
+        return [k, entry];
+      })
     ) : null,
     store: econ?.store ?? null,
     rates: econ?.rates ?? null,
     buildButtons: _lastExtensionButtons.map(b => ({ label: b.label, enabled: b.enabled, action: b.action })),
     shipButtons: _lastShipButtons.map(b => ({ shipTypeId: b.shipTypeId, enabled: b.enabled, isUpgrade: !!b.isUpgrade })),
+    shipBuilding: fleet?.building ? {
+      typeId: fleet.building.typeId,
+      completeAt: fleet.building.completeAt,
+      progress: Math.max(0, Math.min(100, Math.floor(((fleet.building.completeAt - nowMs) / 1000)))),
+    } : null,
+    ships: fleet?.ships ?? null,
+    activeSkinId: getActiveSkinId(),
   };
 }
 
