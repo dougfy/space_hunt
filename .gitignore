@@ -10,4 +10,6 @@ src/**/*.d.ts
 
 # Playwright
 tests/e2e/reddit-auth.json
+tests/e2e/.openai-key
 test-results/
+test-screenshots/
