@@ -17,6 +17,7 @@ export interface InputState {
   dragDelta: Vec2 | null; // accumulated drag movement in screen pixels (for pan)
   isDragging: boolean; // true once drag exceeds threshold (suppresses tap actions)
   keysDown: Set<string>;
+  actionKey: string | null; // keyboard shortcut action (consumed per frame)
 }
 
 export function createInputState(): InputState {
@@ -33,6 +34,7 @@ export function createInputState(): InputState {
     dragDelta: null,
     isDragging: false,
     keysDown: new Set(),
+    actionKey: null,
   };
 }
 
@@ -65,12 +67,14 @@ export function setupInput(
     const showRecenter = state?.galaxy.tier !== NavigationTier.Local;
 
     if (showRecenter) {
-      // Check recenter button (bottom-right)
+      // Check recenter button (bottom-right, pushed up on mobile to avoid orbit bar)
+      const mobile = screenW < 600;
       const rcX = screenW - 36;
-      const rcY = screenH - 36;
+      const rcY = screenH - (mobile ? 82 : 36);
       const rcdx = pos.x - rcX;
       const rcdy = pos.y - rcY;
       if (rcdx * rcdx + rcdy * rcdy <= 26 * 26) {
+        console.log('[TAP] consumed by recenter btn at', pos.x.toFixed(0), pos.y.toFixed(0));
         input.recenterRequested = true;
         return;
       }
@@ -83,6 +87,7 @@ export function setupInput(
       const zdx = pos.x - zBtnX;
       const zdy = pos.y - zBtnY;
       if (zdx * zdx + zdy * zdy <= 30 * 30) {
+        console.log('[TAP] consumed by zoom btn at', pos.x.toFixed(0), pos.y.toFixed(0));
         input.zoomToggleRequested = true;
         return;
       }
@@ -210,6 +215,23 @@ export function setupInput(
     'arrowup', 'arrowdown', 'arrowleft', 'arrowright',
   ]);
 
+  // Action key mappings (agent/keyboard shortcuts — not visible to users)
+  const ACTION_KEYS: Record<string, string> = {
+    'b': 'panel_build',     // toggle BUILD panel
+    'n': 'panel_ships',     // toggle SHIPS panel
+    't': 'panel_status',    // toggle STATUS panel
+    'f': 'panel_fleet',     // toggle FLEET panel
+    'c': 'panel_coms',      // toggle COMS panel
+    'u': 'undock',          // undock from station
+    'e': 'scan',            // scan/explore planet
+    'g': 'recenter',        // recenter camera
+    'z': 'zoom_toggle',     // toggle zoom
+    'escape': 'close_panel', // close any open panel
+    '1': 'btn_1', '2': 'btn_2', '3': 'btn_3',
+    '4': 'btn_4', '5': 'btn_5', '6': 'btn_6',
+    '7': 'btn_7', '8': 'btn_8', '9': 'btn_9',
+  };
+
   const onKeyDown = (e: KeyboardEvent) => {
     // Don't intercept keys when typing in an input field
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -217,6 +239,11 @@ export function setupInput(
     if (MOVEMENT_KEYS.has(key) || key === ' ') {
       e.preventDefault();
       input.keysDown.add(key);
+    }
+    // Action shortcuts
+    if (ACTION_KEYS[key]) {
+      e.preventDefault();
+      input.actionKey = ACTION_KEYS[key];
     }
   };
 

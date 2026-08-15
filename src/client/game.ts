@@ -1,17 +1,22 @@
 // ── Space Hunt Game Entry (Devvit Integration) ─────────────────────────────
 // Initializes the canvas game engine with the Devvit bridge.
 // Detects inline vs expanded mode and shows overlay buttons when inline.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+console.log(`[STARTUP] game.ts module executing, t=${(performance.now() - ((globalThis as any).__t0 ?? 0)).toFixed(0)}ms from HTML head`);
 
 import { context, requestExpandedMode } from '@devvit/web/client';
 import { telemetry } from '@devvit/analytics/client/reddit';
 import versionJson from '../../version.json';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingSeedBots, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, toggleSkin, consumePendingRefuel, deductBaseFuel, consumePendingVideoPlay } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingSeedBots, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getTestState, confirmSkinPicker } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
-import { initSkins, getActiveSkinId } from '../game/skin';
+import { initSkins, getActiveSkinId, setActiveSkin, getWireframePref, setWireframePref } from '../game/skin';
 import { VIDEO_CATALOG, FLEET_COMMAND_SENDER } from '../shared/feature-flags';
 import { proceduralSkin } from '../game/skins/procedural';
+import { rasterSkin, preloadRasterSprites } from '../game/skins/raster';
+import { scifiSkin, preloadScifiSprites } from '../game/skins/scifi';
+import { preloadShipSprites } from '../game/ship-sprites';
 import { PROBE_MIN_FUEL_COST } from '../game/constants';
 import type {
   BuildBuildingRequest,
@@ -64,10 +69,44 @@ async function loadRealStarNames(): Promise<void> {
 void loadRealStarNames();
 
 // ── Mode detection ──────────────────────────────────────────────────────────
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const overlay = document.getElementById('overlay') ?? document.createElement('div');
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const isInline = !!(globalThis as any).__INLINE_MODE__ || overlay.classList.contains('visible');
+
+// View mode: detect mobile/portrait vs desktop
+function detectViewMode(): { isMobile: boolean; isPortrait: boolean; screenW: number; screenH: number } {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  return { isMobile: w < 600, isPortrait: h > w, screenW: w, screenH: h };
+}
+const _viewMode = detectViewMode();
+// Re-detect on resize
+window.addEventListener('resize', () => {
+  const m = detectViewMode();
+  Object.assign(_viewMode, m);
+});
+// Export for renderer
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__VIEW_MODE__ = _viewMode;
+
+// Expose test state for Playwright/automation
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__testState = () => {
+  const gs = getGameState();
+  const ts = getTestState();
+  return {
+    ...ts,
+    playerName: gs?.playerName ?? null,
+    shipShape: gs?.shipShape ?? null,
+    docked: gs?.dock?.docked ?? false,
+    splashMode: gs?.splashMode ?? true,
+    playing: gs?.playing ?? false,
+    tier: gs?.galaxy?.tier ?? null,
+    homeStar: gs?.galaxy?.homeStarIndex ?? null,
+  };
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__confirmSkinPicker = () => confirmSkinPicker();
 
 const playHereBtn = document.getElementById('play-here') ?? document.createElement('button');
 const playFullBtn = document.getElementById('play-full') ?? document.createElement('button');
@@ -141,6 +180,7 @@ if (debugCheckRedis) {
 }
 
 console.log(`[INIT] v${versionJson.version} isInline=${isInline} username=${username} postId=${postId}`);
+console.log(`[INIT] viewMode: mobile=${_viewMode.isMobile} portrait=${_viewMode.isPortrait} screen=${_viewMode.screenW}x${_viewMode.screenH}`);
 
 const sessionId = `${username}:${Math.random().toString(36).slice(2, 8)}`;
 
@@ -148,6 +188,20 @@ const sessionId = `${username}:${Math.random().toString(36).slice(2, 8)}`;
 let currentShape: ShipShape = 'scout';
 let currentName = username;
 let playerHomeStarIndex: number | null = null;
+
+// ── Scanned bodies tracking (wireframe → raster on scan) ────────────────────
+const _scannedBodies = new Set<string>(); // keys: "starIndex:bodyIndex"
+/** Check if a body has been scanned by this player */
+export function isBodyScanned(starIndex: number, bodyIndex: number): boolean {
+  return _scannedBodies.has(`${starIndex}:${bodyIndex}`);
+}
+/** Mark a body as scanned */
+function markBodyScanned(starIndex: number, bodyIndex: number): void {
+  _scannedBodies.add(`${starIndex}:${bodyIndex}`);
+}
+// Expose to renderer (cross-module access)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__isBodyScanned = isBodyScanned;
 
 // ── Active buffs (synced from server economy poll) ──────────────────────────
 const _activeBuffs: Array<{ buffId: string; expiresAt: number; grantedAt: number; starIndex: number }> = [];
@@ -157,7 +211,7 @@ const _activeBuffs: Array<{ buffId: string; expiresAt: number; grantedAt: number
 const bridge: DevvitBridge = createDevvitBridge(canvas, {
   onPose(x, y, angle, name, tier, starIndex, bodyIndex) {
     const sentName = name || currentName;
-    const payload: PoseUpdateRequest = { x, y, angle, username: sentName, sessionId, shape: currentShape, tier, starIndex, bodyIndex };
+    const payload: PoseUpdateRequest = { x, y, angle, username: sentName, sessionId, shape: currentShape, tier, starIndex, bodyIndex, skinId: getActiveSkinId() };
     // Send pose to server via Devvit API route
     fetch('/api/pose', {
       method: 'POST',
@@ -208,16 +262,39 @@ bridge.setShipShape('scout');
 bridge.setSharedWorldSeed(postId);
 setPostId(postId);
 setAllianceUsername(username);
-preloadSounds();
 initSkins(proceduralSkin);
+
+// Restore the correct skin object if user previously selected a non-procedural skin
+const storedSkinId = getActiveSkinId();
+if (storedSkinId === 'scifi') {
+  setActiveSkin(scifiSkin);
+} else if (storedSkinId === 'raster') {
+  setActiveSkin(rasterSkin);
+}
 
 // Start rendering immediately (splash/preview mode — no networking yet)
 const _tSplash = performance.now();
+const _tPageLoad = performance.now();
+console.log(`[STARTUP] t=0ms — module init complete, starting splash`);
 // Stop the lightweight splash animation before the game engine takes over
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 if (typeof (globalThis as any).__stopSplash === 'function') (globalThis as any).__stopSplash();
 bridge.beginSplash();
-console.log(`[PERF] beginSplash (galaxy+asteroids) in ${(performance.now() - _tSplash).toFixed(0)}ms`);
+console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — beginSplash done in ${(performance.now() - _tSplash).toFixed(0)}ms`);
+
+// Hide loading screen now that splash is rendering (only for inline/play modes which show asteroids)
+const _loadingScreen = document.getElementById('loading-screen');
+if (_loadingScreen && isInline) _loadingScreen.style.display = 'none';
+// In expanded mode (game.html), loading screen stays until startMultiplayer hides it
+
+// Defer heavy asset preloads until after splash is visible (non-blocking)
+requestAnimationFrame(() => {
+  preloadSounds();
+  preloadRasterSprites();
+  preloadScifiSprites();
+  preloadShipSprites();
+  console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — deferred preloads queued`);
+});
 
 // ── Load user profile from server (deferred until play) ────────────────────
 let profileReady: Promise<void> | null = null;
@@ -225,9 +302,11 @@ let profileReady: Promise<void> | null = null;
 function loadPlayerProfile(): Promise<void> {
   if (profileReady) return profileReady;
   const _tProfile = performance.now();
+  console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — loadPlayerProfile() starting fetch`);
   profileReady = fetch(`/api/profile?username=${encodeURIComponent(username)}&postId=${encodeURIComponent(postId)}`)
-    .then(r => { console.log(`[PERF] /api/profile fetch in ${(performance.now() - _tProfile).toFixed(0)}ms`); return r.json(); })
+    .then(r => { console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — /api/profile response received (${(performance.now() - _tProfile).toFixed(0)}ms)`); return r.json(); })
     .then((profile: PlayerProfileResponse) => {
+      console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — profile JSON parsed, processing`);
       console.log('[PROFILE] full response:', JSON.stringify({ homeStar: profile.homeStar, lastPosition: profile.lastPosition, discoveredStars: profile.discoveredStars, claimedCount: profile.claimed?.length }));
       if (profile.name) {
         currentName = profile.name;
@@ -264,7 +343,10 @@ function loadPlayerProfile(): Promise<void> {
       }
       // Mark other players' stars as foreign
       if (profile.claimed && profile.claimed.length > 0) {
+        console.log(`[PROFILE] setStarClaims: ${profile.claimed.length} claims, usernames: ${profile.claimed.map((c: { starIndex: number; username: string }) => `star${c.starIndex}=${c.username}`).join(', ')}`);
         setStarClaims(profile.claimed, username);
+        // Count player's own claims for journey progress
+        _claimedStarCount = profile.claimed.filter((c: { username: string }) => c.username.toLowerCase() === username.toLowerCase()).length;
       }
       // Restore last position if different from home star
       if (profile.lastPosition && profile.homeStar != null) {
@@ -278,6 +360,16 @@ function loadPlayerProfile(): Promise<void> {
         }
       } else {
         console.log('[PROFILE] no lastPosition or homeStar');
+      }
+      // Restore scanned bodies (wireframe → raster state)
+      if (profile.scannedBodies && profile.scannedBodies.length > 0) {
+        for (const key of profile.scannedBodies) _scannedBodies.add(key);
+        console.log(`[PROFILE] restored ${profile.scannedBodies.length} scanned bodies`);
+      }
+      // Restore wireframe preference from server (syncs across devices)
+      if (profile.wireframePref !== undefined) {
+        setWireframePref(profile.wireframePref);
+        console.log(`[PROFILE] wireframe pref: ${profile.wireframePref}`);
       }
       // Skip journey/tutorial if already completed on server, or if returning player
       if (profile.journeyDone || profile.lastPosition) {
@@ -294,8 +386,9 @@ function loadPlayerProfile(): Promise<void> {
       for (const id of ['debug-copy', 'debug-log', 'debug-force-save', 'debug-check-redis', 'debug-toggle']) {
         document.getElementById(id)?.style.setProperty('display', debugDisplay);
       }
+      console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — profile processing complete`);
     })
-    .catch(() => {});
+    .catch((err) => { console.error(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — profile load error:`, err); });
   
   return profileReady;
 }
@@ -325,6 +418,7 @@ async function pollGhosts() {
           x: item.x,
           y: item.y,
           a: item.angle,
+          skinId: item.skinId,
         }));
         bridge.setRemotePoses(JSON.stringify({ items: mapped }));
       }
@@ -593,11 +687,14 @@ async function explorePlanet(starIndex: number, bodyIndex: number, isStation: bo
     const res = await fetch('/api/explore', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, starIndex, bodyIndex }),
+      body: JSON.stringify({ username, starIndex, bodyIndex, isStation }),
     });
     if (res.ok) {
       const data = await res.json() as { explored: boolean; result: { kind: string; label: string; icon: string; amount: number }; buff?: { buffId: string; expiresAt: number; grantedAt: number; starIndex: number } };
       showExploreResult(data.result.kind, data.result.label, data.result.icon, data.result.amount);
+      journeyAction('explore');
+      // Mark body as scanned — unlocks raster visuals (even on re-explore)
+      markBodyScanned(starIndex, bodyIndex);
       const kind = data.result.kind;
       if (kind === 'nothing') {
         playSound(isStation ? 'scan_nothing_station' : 'scan_nothing_planet');
@@ -702,7 +799,7 @@ async function pollSensorAlerts() {
       for (const alert of data.alerts) {
         console.log(`[SENSOR] type=${alert.type} star=${alert.starIndex} from=${alert.from} age=${Math.round((Date.now() - alert.ts) / 1000)}s`);
         if (alert.type === 'raider') {
-          playSound('hostile_raider');
+          playSound('raid_incoming');
           hadAlert = true;
         } else if (alert.type === 'unidentified') {
           playSound('unidentified_ship');
@@ -721,7 +818,7 @@ async function refreshForeignFleet() {
   try {
     const foreignRes = await fetch(`/api/fleet/foreign?postId=${encodeURIComponent(postId)}&username=${encodeURIComponent(username)}`);
     if (foreignRes.ok) {
-      const foreignData = await foreignRes.json() as { stars: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }> }> };
+      const foreignData = await foreignRes.json() as { stars: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }>; skinId?: string }> };
       setForeignFleet(foreignData.stars);
       const gs = getGameState();
       if (gs) {
@@ -729,10 +826,11 @@ async function refreshForeignFleet() {
           const idx = parseInt(key.replace('s:', ''), 10);
           if (!Number.isNaN(idx) && gs.galaxy.stars[idx]) {
             const star = gs.galaxy.stars[idx];
+            // Always store claimedBy so economy poll uses correct owner
+            star.claimedBy = val.owner;
             if (star.discoveryLevel !== 'none') {
               star.owner = 'foreign';
               if (star.discoveryLevel === 'visited') {
-                star.claimedBy = val.owner;
                 addKnownPlayer(val.owner);
               }
             }
@@ -943,7 +1041,8 @@ async function pollEconomy() {
               const err = await raidRes.json().catch(() => ({ message: 'unknown' }));
               console.warn('[FLEET] raid route failed:', err);
             } else {
-              playSound('send');
+              playSound('raid_launched');
+              journeyAction('raid');
             }
           } catch (e) {
             console.warn('[FLEET] raid route error:', e);
@@ -971,6 +1070,7 @@ async function pollEconomy() {
               console.warn('[FLEET] transfer failed:', err);
             } else {
               playSound('send');
+              journeyAction('transfer');
               journeyProgress(0.35, 'first_transfer');
             }
           } catch (e) {
@@ -1039,20 +1139,20 @@ async function pollEconomy() {
       try {
         const foreignRes = await fetch(`/api/fleet/foreign?postId=${encodeURIComponent(postId)}&username=${encodeURIComponent(username)}`);
         if (foreignRes.ok) {
-          const foreignData = await foreignRes.json() as { stars: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }> }> };
+          const foreignData = await foreignRes.json() as { stars: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }>; skinId?: string }> };
           setForeignFleet(foreignData.stars);
-          // Also mark these stars as foreign-owned in game state (only if already discovered)
+          // Also mark these stars as foreign-owned in game state
           const gs2 = getGameState();
           if (gs2) {
             for (const [key, val] of Object.entries(foreignData.stars)) {
               const idx = parseInt(key.replace('s:', ''), 10);
               if (!Number.isNaN(idx) && gs2.galaxy.stars[idx]) {
                 const star = gs2.galaxy.stars[idx];
+                // Always store claimedBy so economy poll uses correct owner
+                star.claimedBy = val.owner;
                 if (star.discoveryLevel !== 'none') {
                   star.owner = 'foreign';
-                  // Reveal owner name at 'visited' level
                   if (star.discoveryLevel === 'visited') {
-                    star.claimedBy = val.owner;
                     addKnownPlayer(val.owner);
                   }
                 }
@@ -1106,6 +1206,7 @@ async function pollEconomy() {
         });
         if (tradeRes.ok) {
           if (!hasTraded) { playSound('freighter_unloading'); hasTraded = true; }
+          journeyAction('trade');
           // Refresh trade station info
           const refreshRes = await fetch(`/api/trade-station?postId=${encodeURIComponent(postId)}&starIndex=${starIndex}`);
           if (refreshRes.ok) {
@@ -1145,10 +1246,11 @@ async function pollEconomy() {
             [], // server consumed the colony ship; next fleet poll will refresh
             null,
           );
-          playSound('colonize');
+          playSound('colony_established');
           console.log('[COLONIZE] Success! Star colonized:', pendingColonize.starIndex, 'body:', pendingColonize.bodyIndex);
-          journeyProgress(0.60, 'first_colony');
-          journeyEnd(true);
+          journeyAction('colonize');
+          _claimedStarCount++;
+          checkJourneyProgress('colonize');
         } else {
           const err = await colonizeRes.json().catch(() => ({ message: 'unknown' }));
           console.warn('[COLONIZE] failed:', err);
@@ -1164,6 +1266,7 @@ async function pollEconomy() {
         username,
         starIndex,
         buildType: pendingBuild.buildType,
+        ...(pendingBuild.skinId ? { skinId: pendingBuild.skinId } : {}),
       };
       console.log('[BUILD] sending build request, starIndex=', starIndex, 'type=', pendingBuild.buildType);
       try {
@@ -1175,6 +1278,7 @@ async function pollEconomy() {
         if (buildRes.ok) {
           console.log('[BUILD] build success');
           playSound('begin_building_facility');
+          journeyAction('build');
           journeyProgress(0.15, 'first_building');
           journeyProgress(0.15, 'first_upgrade');
           if (pendingBuild.buildType === 'dock') journeyProgress(0.25, 'dock_upgraded');
@@ -1233,6 +1337,7 @@ async function pollEconomy() {
         if (shipRes.ok) {
           console.log('[SHIPS] buy success');
           playSound('begin_building_ship');
+          journeyAction('buy_ship');
           journeyProgress(0.20, 'first_ship_built');
           journeyProgress(0.50, 'ship_upgraded');
         } else {
@@ -1291,8 +1396,18 @@ async function pollEconomy() {
         console.warn('[COMPLETE] complete-builds error:', e);
       }
     }
+    // Use star owner's username for foreign stars so we load their economy/ships.
+    // Check claimedBy directly — it's set even before owner is marked 'foreign'
+    // (covers the case where player navigates to a star before claims are visually applied).
+    const viewedStar = gs.galaxy.stars[starIndex];
+    const econUsername = (viewedStar?.owner !== 'player' && viewedStar?.claimedBy) ? viewedStar.claimedBy : username;
     const _tBldg = performance.now();
-    const res = await fetch(`/api/buildings?username=${encodeURIComponent(username)}&starIndex=${starIndex}`);
+    let buildingsUrl = `/api/buildings?username=${encodeURIComponent(econUsername)}&starIndex=${starIndex}`;
+    // Send our active skin when polling our own star so the server saves it as preferredSkinId
+    if (econUsername === username) {
+      buildingsUrl += `&skinId=${encodeURIComponent(getActiveSkinId())}`;
+    }
+    const res = await fetch(buildingsUrl);
     console.log(`[PERF] /api/buildings fetch in ${(performance.now() - _tBldg).toFixed(0)}ms`);
     if (!res.ok) return;
     const data = await res.json() as StarEconomyResponse;
@@ -1306,7 +1421,12 @@ async function pollEconomy() {
       buildings: data.buildings,
       completeCharges: data.completeCharges ?? 0,
       ...(data.richness ? { richness: data.richness } : {}),
-    });
+    }, econUsername === username);
+    // Track economy for journey progress calculation
+    if (econUsername === username && data.buildings) {
+      _lastEconomyData.set(data.starIndex, { buildings: data.buildings as Record<string, { level?: number }> });
+      checkJourneyProgress('economy_update');
+    }
     // Sync active buffs from server
     if (data.buffs) {
       _activeBuffs.length = 0;
@@ -1314,11 +1434,11 @@ async function pollEconomy() {
     }
     // Poll ship state
     const _tShips = performance.now();
-    const shipsRes = await fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${starIndex}`);
+    const shipsRes = await fetch(`/api/ships?username=${encodeURIComponent(econUsername)}&starIndex=${starIndex}`);
     console.log(`[PERF] /api/ships fetch in ${(performance.now() - _tShips).toFixed(0)}ms`);
     if (shipsRes.ok) {
       const shipsData = await shipsRes.json() as StarShipsResponse;
-      setServerShipState(starIndex, shipsData.ships, shipsData.building);
+      setServerShipState(starIndex, shipsData.ships, shipsData.building, econUsername === username);
       // Update ship shape based on HOME star fleet only
       if (starIndex === playerHomeStarIndex) {
         const fleetShape = getFleetShape(shipsData.ships);
@@ -1334,7 +1454,7 @@ async function pollEconomy() {
         const homeShipsRes = await fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${playerHomeStarIndex}`);
         if (homeShipsRes.ok) {
           const homeShipsData = await homeShipsRes.json() as StarShipsResponse;
-          setServerShipState(playerHomeStarIndex, homeShipsData.ships, homeShipsData.building);
+          setServerShipState(playerHomeStarIndex, homeShipsData.ships, homeShipsData.building, true);
           const fleetShape = getFleetShape(homeShipsData.ships);
           if (fleetShape !== currentShape) {
             currentShape = fleetShape;
@@ -1416,6 +1536,7 @@ function savePositionIfChanged() {
   // Track star discovery milestone
   if (discoveredChanged && discovered.length >= 2) {
     journeyProgress(0.75, 'star_discovered');
+    checkJourneyProgress('star_discovered');
   }
   _lastSavedPosition = pos;
   _lastSavedDiscovered = discoveredKey;
@@ -1428,6 +1549,8 @@ function savePositionIfChanged() {
     discoveredStars: discovered,
     enhancedProbeStars: visited,
     journeyDone,
+    scannedBodies: Array.from(_scannedBodies),
+    wireframePref: getWireframePref(),
   };
   console.log('[SAVE] saving profile:', JSON.stringify(payload));
   fetch('/api/profile', {
@@ -1438,14 +1561,16 @@ function savePositionIfChanged() {
 }
 
 // ── Devvit Journey Telemetry ────────────────────────────────────────────────
-// Progression funnel:
-// game_start/returned_player(0.01) → first_move(0.05) → first_dock(0.07) →
-// home_star_claimed(0.10) → first_resource_collected(0.12) → first_building/first_upgrade(0.15) →
-// first_ship_built(0.20) → dock_upgraded(0.25) → first_transfer(0.35) →
-// ship_upgraded(0.50) → first_colony(0.60) → star_discovered(0.75) →
-// alliance_joined(0.90) → session_end(1.0) → journey_end
+// Journey 1: Solo progression — progress based on build tree completion
+// Progress only increases, never decreases. Calculated from actual game state.
 let _journeyStarted = false;
-const _progressSent = new Set<string>();
+let _highestProgress = 0;
+let _journeyComplete = false;
+const _progressSent = new Set<string>(); // kept for updateHelpNextTab compatibility
+const _lastEconomyData = new Map<number, { buildings?: Record<string, { level?: number }> }>();
+let _claimedStarCount = 0;
+// eslint-disable-next-line prefer-const
+let _hasColonyShip = false;
 
 function journeyAppReady() {
   void telemetry.appReady().then(() => console.log('[TELEMETRY] app ready sent')).catch((e) => console.warn('[TELEMETRY] app ready failed:', e));
@@ -1457,15 +1582,67 @@ function journeyStart() {
   void telemetry.startJourney().then((r) => console.log('[TELEMETRY] journey started, id:', r.journeyId)).catch((e) => console.warn('[TELEMETRY] journey start failed:', e));
 }
 
-function journeyProgress(progress: number, action: string) {
-  if (_progressSent.has(action)) return; // only fire each milestone once
-  _progressSent.add(action);
-  void telemetry.progress({ progress, action }).then(() => console.log('[TELEMETRY] progress:', progress, action)).catch((e) => console.warn('[TELEMETRY] progress failed:', e));
+/** Compute journey progress from actual game state (build tree depth) */
+function computeJourneyProgress(): number {
+  let progress = 0.01; // game_start baseline
+
+  // Check home star economy for building levels
+  const homeEcon = (playerHomeStarIndex != null && playerHomeStarIndex >= 0) ? _lastEconomyData.get(playerHomeStarIndex) : null;
+  if (homeEcon?.buildings) {
+    const b = homeEcon.buildings;
+    const station = b.station?.level ?? 0;
+    const dock = b.dock?.level ?? 0;
+    const shield = b.shield?.level ?? 0;
+    const hasMine = (b.mine?.level ?? 0) >= 1;
+    const hasSolar = (b.solar?.level ?? 0) >= 1;
+    const hasHab = (b.hab?.level ?? 0) >= 1;
+
+    if (hasMine || hasSolar || hasHab) progress = Math.max(progress, 0.10);
+    if (station >= 2) progress = Math.max(progress, 0.20);
+    if (dock >= 1 && currentShape !== 'scout') progress = Math.max(progress, 0.30);
+    if (dock >= 3) progress = Math.max(progress, 0.40);
+    if (station >= 3) progress = Math.max(progress, 0.50);
+    if (shield >= 1) progress = Math.max(progress, 0.60);
+  }
+
+  // Check discovery/colonization state
+  const discovered = getDiscoveredStars();
+  if (discovered.length > 1) progress = Math.max(progress, 0.70);
+  if (discovered.length > 2) progress = Math.max(progress, 0.80);
+  if (_hasColonyShip) progress = Math.max(progress, 0.90);
+  if (_claimedStarCount > 1) progress = 1.0; // JOURNEY 1 COMPLETE
+
+  return progress;
 }
 
-function journeyEnd(win: boolean) {
-  void telemetry.endJourney({ complete: true, game: { win, score: 0 } }).then(() => console.log('[TELEMETRY] journey ended, win:', win)).catch((e) => console.warn('[TELEMETRY] end failed:', e));
+/** Send progress if it increased. Called after state changes. */
+function checkJourneyProgress(trigger: string) {
+  if (!_journeyStarted || _journeyComplete) return;
+  const progress = computeJourneyProgress();
+  if (progress > _highestProgress) {
+    _highestProgress = progress;
+    const action = `tree_${Math.round(progress * 100)}`;
+    _progressSent.add(action);
+    void telemetry.progress({ progress, action: `${action}:${trigger}` })
+      .then(() => console.log('[TELEMETRY] progress:', progress, trigger))
+      .catch((e) => console.warn('[TELEMETRY] progress failed:', e));
+
+    if (progress >= 1.0) {
+      _journeyComplete = true;
+      void telemetry.endJourney({ complete: true, game: { win: true, score: 0 } })
+        .then(() => console.log('[TELEMETRY] Journey 1 COMPLETE — colonized!'))
+        .catch(() => {});
+    }
+  }
 }
+
+/** Legacy wrapper — old calls now just trigger a state check */
+function journeyProgress(_progress: number, action: string) {
+  _progressSent.add(action);
+  checkJourneyProgress(action);
+}
+
+// journeyEnd is handled by checkJourneyProgress (complete) or idle timeout (incomplete)
 
 // ── Player stats tracking ───────────────────────────────────────────────────
 let _statsInteractions = 0;
@@ -1476,6 +1653,12 @@ function trackInteraction() { _statsInteractions++; }
 // Count pointer clicks and key presses as interactions
 window.addEventListener('pointerdown', trackInteraction, { passive: true });
 window.addEventListener('keydown', trackInteraction, { passive: true });
+
+// Journey interaction: track meaningful player actions (server interactions)
+function journeyAction(action?: string) {
+  if (!_journeyStarted) return;
+  void telemetry.interaction({ action: action ?? 'action' }).catch(() => {});
+}
 
 // ── Idle timeout: return to splash after 30 minutes of no interaction ──────
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
@@ -1520,7 +1703,12 @@ function sendStatsHeartbeat() {
 
 // ── Activate multiplayer networking ─────────────────────────────────────────
 function startMultiplayer() {
+  console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — startMultiplayer() entered`);
+  // Hide loading screen
+  const ls = document.getElementById('loading-screen');
+  if (ls) ls.style.display = 'none';
   bridge.beginPlay(); // Activate networking callbacks on existing game
+  console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — beginPlay done, game is READY`);
   _isPlaying = true;
   resetIdleTimer(); // start the 30-min idle countdown
   journeyAppReady();
@@ -1533,6 +1721,17 @@ function startMultiplayer() {
   setInterval(pollSensorAlerts, 30_000); // sensor alerts every 30s
   void pollEconomy();
   void pollComsUnread(); // initial unread check
+
+  // Fetch returning player report (fire-and-forget)
+  void fetch(`/api/report?username=${encodeURIComponent(username)}`)
+    .then(r => r.ok ? r.json() : null)
+    .then((data: { items: Array<{ icon: string; text: string; category: string }>; awaySeconds: number } | null) => {
+      if (data?.items?.length) {
+        setReturningReport(data.items as import('../shared/api').ReportItem[]);
+        console.log(`[REPORT] ${data.items.length} items (away ${data.awaySeconds}s)`);
+      }
+    })
+    .catch(() => {});
 
   // ── DM Input Overlay ────────────────────────────────────────────────────
   const dmOverlay = document.getElementById('dm-input-overlay');
@@ -1650,8 +1849,18 @@ function startMultiplayer() {
 
 // In expanded mode, start immediately. In inline mode, wait for button press.
 if (!isInline) {
-  console.log('[INIT] Expanded mode — loading profile then starting multiplayer');
-  void loadPlayerProfile().then(() => startMultiplayer()).catch(() => startMultiplayer());
+  console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — expanded mode, starting profile load`);
+  // Show loading screen for expanded mode (user already committed to play)
+  const ls = document.getElementById('loading-screen');
+  if (ls) ls.style.display = 'flex';
+  // Safety timeout: hide loading screen after 8s even if profile fetch hangs
+  const loadTimeout = setTimeout(() => {
+    console.warn(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — profile load TIMEOUT (8s) — starting anyway`);
+    startMultiplayer();
+  }, 8000);
+  void loadPlayerProfile()
+    .then(() => { clearTimeout(loadTimeout); console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — profile loaded, calling startMultiplayer`); startMultiplayer(); })
+    .catch(() => { clearTimeout(loadTimeout); console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — profile load FAILED, calling startMultiplayer`); startMultiplayer(); });
 }
 
 // ── Overlay button handlers (inline mode) ───────────────────────────────────
@@ -1659,8 +1868,11 @@ playHereBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 playHereBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   overlay.classList.remove('visible');
-  enableFullGestures(canvas); // User engaged — allow full touch gestures
-  void loadPlayerProfile().then(() => startMultiplayer()).catch(() => startMultiplayer());
+  const ls = document.getElementById('loading-screen');
+  if (ls) ls.style.display = 'flex';
+  enableFullGestures(canvas);
+  const lt = setTimeout(() => { console.warn('[INIT] inline load timeout'); startMultiplayer(); }, 8000);
+  void loadPlayerProfile().then(() => { clearTimeout(lt); startMultiplayer(); }).catch(() => { clearTimeout(lt); startMultiplayer(); });
 });
 
 playFullBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -1678,6 +1890,8 @@ const deferredMode = (globalThis as any).__DEFERRED_PLAY__ as string | undefined
 if (deferredMode && isInline) {
   console.log(`[INIT] Deferred play mode: ${deferredMode}`);
   overlay.classList.remove('visible');
+  const ls = document.getElementById('loading-screen');
+  if (ls) ls.style.display = 'flex';
   if (deferredMode === 'full') {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const savedEvent = (globalThis as any).__DEFERRED_EVENT__ as MouseEvent | undefined;
@@ -1745,9 +1959,31 @@ helpBtn.addEventListener('click', (e) => {
   settingsPanel.classList.remove('visible');
   feedbackPanel.classList.remove('visible');
   helpPanel.classList.toggle('visible');
+  if (helpPanel.classList.contains('visible')) updateHelpNextTab();
 });
 helpPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
 helpPanel.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Help "Next" tab — dynamic suggestions based on player progress ──────────
+function updateHelpNextTab() {
+  const el = document.getElementById('help-next-content');
+  if (!el) return;
+  const suggestions: string[] = [];
+  // Check journey milestones already sent
+  if (!_progressSent.has('first_move')) suggestions.push('🕹️ <b>Move your ship</b> — tap anywhere to fly there');
+  if (!_progressSent.has('home_star_claimed')) suggestions.push('⭐ <b>Claim your home star</b> — dock at a station');
+  if (!_progressSent.has('first_resource_collected')) suggestions.push('💎 <b>Collect resources</b> — fly through asteroid pods');
+  if (!_progressSent.has('first_building')) suggestions.push('🏗️ <b>Build your first structure</b> — dock and open BUILD tab');
+  if (!_progressSent.has('first_ship_built')) suggestions.push('🚢 <b>Build a ship</b> — requires a Dock building');
+  if (!_progressSent.has('dock_upgraded')) suggestions.push('🔧 <b>Upgrade your Dock</b> — unlocks better ships');
+  if (!_progressSent.has('first_transfer')) suggestions.push('📦 <b>Transfer resources</b> — between your stars');
+  if (!_progressSent.has('ship_upgraded')) suggestions.push('⬆️ <b>Upgrade your ship</b> — stronger hull & weapons');
+  if (!_progressSent.has('first_colony')) suggestions.push('🌍 <b>Colonize a new star</b> — build a Colony Ship');
+  if (!_progressSent.has('star_discovered')) suggestions.push('🌟 <b>Discover a new star</b> — fly to an unexplored system');
+  if (!_progressSent.has('alliance_joined')) suggestions.push('🤝 <b>Join an alliance</b> — team up with other players');
+  if (suggestions.length === 0) suggestions.push('🎉 <b>You\'ve done everything!</b> Keep expanding your empire.');
+  el.innerHTML = suggestions.map(s => `<div class="help-row">${s}</div>`).join('');
+}
 
 // ── Help panel tabs ─────────────────────────────────────────────────────────
 document.querySelectorAll('.help-tab-btn').forEach(btn => {
@@ -1760,8 +1996,76 @@ document.querySelectorAll('.help-tab-btn').forEach(btn => {
     document.querySelectorAll('.help-tab-content').forEach(c => c.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById(`help-tab-${tab}`)?.classList.add('active');
+    if (tab === 'next') updateHelpNextTab();
   });
 });
+
+// ── Help panel: paginated Buildings & Ships ─────────────────────────────────
+{
+  const BUILDING_PAGES = [
+    { title: 'Station I-VIII', desc: 'Your base — its level caps all other buildings.', icons: Array.from({length: 8}, (_, i) => ({ src: `/icons/skins/wireframe/station-level-${i+1}.svg`, label: `Lv${i+1}`, info: `Station Lv${i+1}: Unlocks all buildings up to this level.` })) },
+    { title: 'Mine I-VIII', desc: 'Produces Ore per second.', icons: Array.from({length: 8}, (_, i) => ({ src: `/icons/skins/wireframe/mine-level-${i+1}.svg`, label: `Lv${i+1}`, info: `Mine Lv${i+1}: +${i+1} Ore/sec production.` })) },
+    { title: 'Solar Array I-VIII', desc: 'Produces Energy per second.', icons: Array.from({length: 8}, (_, i) => ({ src: `/icons/skins/wireframe/solar-array-level-${i+1}.svg`, label: `Lv${i+1}`, info: `Solar Lv${i+1}: +${i+1} Energy/sec production.` })) },
+    { title: 'Hab I-VIII', desc: 'Produces Food, supports expansion.', icons: Array.from({length: 8}, (_, i) => ({ src: `/icons/skins/wireframe/hab-level-${i+1}.svg`, label: `Lv${i+1}`, info: `Hab Lv${i+1}: +${i+1} Food/sec production.` })) },
+    { title: 'Dock T1-T3', desc: 'Required to build ships. Higher tiers unlock more powerful vessels.', icons: [{src:'/icons/skins/wireframe/dock-level-1.svg',label:'T1',info:'Dock T1: Scout, Freighter, Probe, Destroyer, Colony Ship'},{src:'/icons/skins/wireframe/dock-level-2.svg',label:'T2',info:'Dock T2: Frigate, Battleship'},{src:'/icons/skins/wireframe/dock-level-3.svg',label:'T3',info:'Dock T3: Command Cruiser, Dreadnought'}] },
+    { title: 'Cannon I-VIII', desc: 'Defends your star from enemy ships.', icons: Array.from({length: 8}, (_, i) => ({ src: `/icons/skins/scifi/cannon-level-${i+1}.png`, label: `Lv${i+1}`, info: `Cannon Lv${i+1}: Defensive firepower ${i+1}.` })) },
+  ];
+  const SHIP_PAGES = [
+    { title: 'Dock T1 Lv1', desc: 'Starting ships available at basic dock.', icons: [{src:'/icons/skins/wireframe/ship-scout.svg',label:'Scout',info:'Scout: Fast explorer. Cannot leave star systems.'},{src:'/icons/skins/wireframe/ship-freighter.svg',label:'Freighter',info:'Freighter: Automated cargo transport between stars.'},{src:'/icons/skins/wireframe/ship-probe-basic.svg',label:'B-Probe',info:'Basic Probe: Reveals nearby unexplored stars.'}] },
+    { title: 'Dock T1 Lv3', desc: 'Mid-tier combat and utility ships.', icons: [{src:'/icons/skins/wireframe/ship-destroyer.svg',label:'Destroyer',info:'Destroyer: Light warship. First ship that can travel between stars.'},{src:'/icons/skins/wireframe/ship-colony.svg',label:'Colony',info:'Colony Ship: Colonize unclaimed stars to expand your empire.'},{src:'/icons/skins/wireframe/ship-troop-transport.svg',label:'Troop',info:'Troop Transport: Carries ground forces for invasions.'},{src:'/icons/skins/wireframe/ship-probe-enhanced.svg',label:'E-Probe',info:'Enhanced Probe: Reveals distant stars with bonus detail.'},{src:'/icons/skins/wireframe/ship-wrecker.svg',label:'Wrecker',info:'Wrecker: Damages enemy buildings during raids.'},{src:'/icons/skins/wireframe/ship-raider.svg',label:'Raider',info:'Raider: Steals resources from enemy stars.'}] },
+    { title: 'Dock T2', desc: 'Heavy warships requiring tier 2 dock.', icons: [{src:'/icons/skins/wireframe/ship-frigate.svg',label:'Frigate',info:'Frigate: Balanced heavy warship with strong shields.'},{src:'/icons/skins/wireframe/ship-battleship.svg',label:'Battleship',info:'Battleship: Massive firepower, slower but devastating.'}] },
+    { title: 'Dock T3', desc: 'Capital ships requiring tier 3 dock.', icons: [{src:'/icons/skins/wireframe/ship-command-cruiser.svg',label:'Cmd Cruiser',info:'Command Cruiser: Fleet flagship with command bonuses.'},{src:'/icons/skins/wireframe/ship-dreadnought.svg',label:'Dreadnought',info:'Dreadnought: Ultimate warship. Maximum firepower and armor.'}] },
+  ];
+
+  function renderPage(pages: typeof BUILDING_PAGES, idx: number, contentEl: HTMLElement, labelEl: HTMLElement) {
+    const page = pages[idx]!;
+    labelEl.textContent = `(${idx + 1}/${pages.length})`;
+    const icons = page.icons.map((ic, i) =>
+      `<div class="icon-card" data-info-idx="${i}" style="cursor:pointer"><img src="${ic.src}" alt="${ic.label}" /><span class="icon-tier">${ic.label}</span></div>`
+    ).join('');
+    contentEl.innerHTML = `<h4 style="color:#8ff7cf;margin:0 0 4px">${page.title}</h4><div class="help-caption">${page.desc}</div><div class="icon-strip">${icons}</div><div class="help-info-box" style="margin-top:6px;padding:4px 8px;background:rgba(79,255,176,0.08);border:1px solid rgba(79,255,176,0.2);color:#8ff7cf;font-size:9px;min-height:18px;display:none"></div>`;
+    // Attach click handlers for icon info
+    contentEl.querySelectorAll('.icon-card').forEach(card => {
+      card.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); });
+      card.addEventListener('pointerup', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const i = parseInt((card as HTMLElement).dataset.infoIdx ?? '0');
+        const infoBox = contentEl.querySelector('.help-info-box') as HTMLElement;
+        if (infoBox && page.icons[i]) {
+          infoBox.style.display = 'block';
+          infoBox.textContent = page.icons[i].info;
+        }
+      });
+      card.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const i = parseInt((card as HTMLElement).dataset.infoIdx ?? '0');
+        const infoBox = contentEl.querySelector('.help-info-box') as HTMLElement;
+        if (infoBox && page.icons[i]) {
+          infoBox.style.display = 'block';
+          infoBox.textContent = page.icons[i].info;
+        }
+      });
+    });
+  }
+
+  let bldgIdx = 0, shipIdx = 0;
+  const bldgContent = document.getElementById('bldg-page-content');
+  const bldgLabel = document.getElementById('bldg-page-label');
+  const shipContent = document.getElementById('ship-page-content');
+  const shipLabel = document.getElementById('ship-page-label');
+
+  if (bldgContent && bldgLabel) {
+    renderPage(BUILDING_PAGES, bldgIdx, bldgContent, bldgLabel);
+    document.getElementById('bldg-prev')?.addEventListener('click', (e) => { e.stopPropagation(); bldgIdx = (bldgIdx - 1 + BUILDING_PAGES.length) % BUILDING_PAGES.length; renderPage(BUILDING_PAGES, bldgIdx, bldgContent, bldgLabel); });
+    document.getElementById('bldg-next')?.addEventListener('click', (e) => { e.stopPropagation(); bldgIdx = (bldgIdx + 1) % BUILDING_PAGES.length; renderPage(BUILDING_PAGES, bldgIdx, bldgContent, bldgLabel); });
+  }
+  if (shipContent && shipLabel) {
+    renderPage(SHIP_PAGES, shipIdx, shipContent, shipLabel);
+    document.getElementById('ship-prev')?.addEventListener('click', (e) => { e.stopPropagation(); shipIdx = (shipIdx - 1 + SHIP_PAGES.length) % SHIP_PAGES.length; renderPage(SHIP_PAGES, shipIdx, shipContent, shipLabel); });
+    document.getElementById('ship-next')?.addEventListener('click', (e) => { e.stopPropagation(); shipIdx = (shipIdx + 1) % SHIP_PAGES.length; renderPage(SHIP_PAGES, shipIdx, shipContent, shipLabel); });
+  }
+}
 
 // ── Feedback button + panel ─────────────────────────────────────────────────
 const feedbackBtn = document.getElementById('feedback-btn')!;
@@ -1890,17 +2194,15 @@ if (adminBtn && adminPanel && ADMIN_USERS.some(u => u.toLowerCase() === username
   console.log('[ADMIN] button shown');
 }
 
-// Skin toggle in settings panel
-const wireToggleRow = document.getElementById('wire-toggle-row');
-const wireToggleBtn = document.getElementById('wire-toggle-btn');
-if (wireToggleRow && wireToggleBtn) {
-  wireToggleRow.style.display = 'block';
-  wireToggleBtn.textContent = getActiveSkinId() === 'procedural' ? 'WIRE' : 'RASTER';
-  wireToggleBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-  wireToggleBtn.addEventListener('click', (e) => {
+// Wireframe preference toggle in settings panel
+const wireframePrefToggle = document.getElementById('wireframe-pref-toggle') as HTMLInputElement | null;
+if (wireframePrefToggle) {
+  wireframePrefToggle.checked = getWireframePref();
+  wireframePrefToggle.addEventListener('pointerdown', (e) => e.stopPropagation());
+  wireframePrefToggle.addEventListener('change', (e) => {
     e.stopPropagation();
-    toggleSkin();
-    wireToggleBtn.textContent = getActiveSkinId() === 'procedural' ? 'WIRE' : 'RASTER';
+    setWireframePref(wireframePrefToggle.checked);
+    console.log('[SETTINGS] wireframe pref:', wireframePrefToggle.checked);
   });
 }
 

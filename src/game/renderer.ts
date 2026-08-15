@@ -12,11 +12,26 @@ import {
 } from './constants';
 import { vec2, add, sub, normalize, magnitude, scale, createRng } from './math';
 import { getShipShapePoints, getShipDetailElements } from './ship';
+import { getShipSprite, preloadShipSprites } from './ship-sprites';
 import { getAsteroidSurfaceInfo } from './asteroids';
 import type { StarVisualTone } from './ownership-contracts';
 import { playSound } from './audio';
 import { getJourneyPulseAlpha } from './journey';
 import { FLEET_COMMAND_SENDER } from '../shared/feature-flags';
+
+// ── View mode helper ────────────────────────────────────────────────────────
+function isMobileView(): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vm = (globalThis as any).__VIEW_MODE__;
+  return vm?.isMobile ?? (window.innerWidth < 600);
+}
+
+/** Check if a body has been scanned (unlocks raster visuals). Unscanned = wireframe. */
+function isScanned(starIndex: number, bodyIndex: number): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fn = (globalThis as any).__isBodyScanned;
+  return fn ? fn(starIndex, bodyIndex) : false; // default wireframe until scan state loads
+}
 
 export interface Renderer {
   canvas: HTMLCanvasElement;
@@ -162,9 +177,31 @@ export function drawShip(
   shape: ShipShape,
   color: string,
   sizeOverride?: number,
+  skinId?: string,
 ) {
-  const zs = zoomScale(camera);
   const size = sizeOverride ?? SHIP_SIZE;
+
+  // Try sprite-based rendering first (skip only if wireframe pref is on, or foreign ship explicitly uses procedural)
+  const useWireframe = skinId === 'procedural' || (!skinId && getWireframePref());
+  const sprite = !useWireframe ? getShipSprite(shape) : null;
+  if (sprite) {
+    const dpr = window.devicePixelRatio || 1;
+    const screenW = r.width / dpr;
+    const screenH = r.height / dpr;
+    const screenPos = worldToScreen(pos, camera, screenW, screenH);
+    const wpp = worldPerPixel(camera, screenH);
+    const pixelSize = (size / wpp) * 4;
+    const half = pixelSize / 2;
+    r.ctx.save();
+    r.ctx.translate(screenPos.x, screenPos.y);
+    // Sprite nose points UP; angle=0 means ship faces RIGHT
+    r.ctx.rotate(-(angle - Math.PI / 2));
+    r.ctx.drawImage(sprite, -half, -half, pixelSize, pixelSize);
+    r.ctx.restore();
+    return;
+  }
+
+  const zs = zoomScale(camera);
   const lineWidth = SHIP_LINE_WIDTH * zs;
 
   const forward = { x: Math.cos(angle), y: Math.sin(angle) };
@@ -293,14 +330,15 @@ export function drawGhostShip(
   angle: number,
   shape: ShipShape,
   slot: number,
+  skinId?: string,
 ) {
   const color = GHOST_PALETTE[Math.abs(slot - 1) % GHOST_PALETTE.length] ?? G_BRIGHT;
-  drawShip(r, camera, pos, angle, shape, color);
+  drawShip(r, camera, pos, angle, shape, color, undefined, skinId);
 }
 
 const TYPEID_TO_SHAPE: Record<number, ShipShape> = {
   1: 'scout', 2: 'frigate', 3: 'destroyer', 4: 'frigate', 5: 'battleship', 6: 'cruiser', 7: 'dreadnought',
-  8: 'frigate', 10: 'destroyer', 11: 'scout', 12: 'scout', 14: 'scout',
+  8: 'colony', 10: 'destroyer', 11: 'scout', 12: 'scout', 14: 'scout',
 };
 
 /** Draw parked player fleet ships at the current star in planet/system view. */
@@ -319,11 +357,24 @@ export function drawPlayerFleetAtStar(
   const screenW = r.width / (window.devicePixelRatio || 1);
   const screenH = r.height / (window.devicePixelRatio || 1);
 
+  // Exclude the player's active ship from fleet rendering (it's drawn separately)
+  const SHAPE_TO_TYPE: Record<string, number> = {
+    scout: 1, destroyer: 3, frigate: 4, battleship: 5, cruiser: 6, dreadnought: 7,
+  };
+  const activeShipTypeId = SHAPE_TO_TYPE[_panelsShipShape] ?? 1;
+  let subtractedActive = false;
+
   let slotIdx = 0;
   for (const entry of fleet.ships) {
-    if (entry.count <= 0) continue;
+    let count = entry.count;
+    // Subtract player's active ship so it isn't drawn twice
+    if (!subtractedActive && entry.typeId === activeShipTypeId && starIndex === _panelsStarIndex) {
+      count -= 1;
+      subtractedActive = true;
+    }
+    if (count <= 0) continue;
     const catalogEntry = SHIP_CATALOG[entry.typeId as keyof typeof SHIP_CATALOG];
-    const countToDraw = Math.min(entry.count, 3); // cap visual at 3 per type
+    const countToDraw = Math.min(count, 3); // cap visual at 3 per type
     for (let i = 0; i < countToDraw; i++) {
       // Offset ships upward (+Y world = up on screen) from station, spread out more
       const offsetAngle = Math.PI * 0.5 + (slotIdx - 1) * 0.6;
@@ -336,7 +387,8 @@ export function drawPlayerFleetAtStar(
       const sc = worldToScreen(pos, camera, screenW, screenH);
       const icon = catalogEntry ? getShipIcon(catalogEntry.icon) : null;
       if (icon) {
-        const iconSize = 28;
+        const isColony = entry.typeId === 8;
+        const iconSize = isColony ? 112 : 28;
         ctx.drawImage(icon, sc.x - iconSize / 2, sc.y - iconSize / 2, iconSize, iconSize);
       } else {
         // Fallback wireframe
@@ -374,6 +426,7 @@ export function drawForeignShipsAtStar(
   if (!foreign || foreign.ships.length === 0) return;
 
   const ENEMY_COLOR = 'rgb(255, 80, 60)';
+  const foreignSkinId = foreign.skinId;
   let slotIdx = 0;
   for (const entry of foreign.ships) {
     const shape = TYPEID_TO_SHAPE[entry.typeId] ?? 'destroyer';
@@ -386,7 +439,8 @@ export function drawForeignShipsAtStar(
         y: stationWorldPos.y + Math.sin(offsetAngle) * offsetDist,
       };
       const shipAngle = offsetAngle + Math.PI; // face toward station
-      drawShip(r, camera, pos, shipAngle, shape, ENEMY_COLOR);
+      const colonySize = shape === 'colony' ? SHIP_SIZE * 4 : undefined;
+      drawShip(r, camera, pos, shipAngle, shape, ENEMY_COLOR, colonySize, foreignSkinId);
 
       // Label on first ship only
       if (slotIdx === 0) {
@@ -724,9 +778,11 @@ function getCtrlBtnPositions(r: Renderer) {
   const dpr = window.devicePixelRatio || 1;
   const screenW = r.width / dpr;
   const screenH = r.height / dpr;
+  // On mobile, push buttons up so they don't overlap the orbit bar (barH=32 + 8px margin)
+  const bottomOffset = isMobileView() ? 82 : 36;
   return {
-    recenter: { x: screenW - 36, y: screenH - 36 },
-    zoom:     { x: screenW - 36 - 52, y: screenH - 36 },
+    recenter: { x: screenW - 36, y: screenH - bottomOffset },
+    zoom:     { x: screenW - 36 - 52, y: screenH - bottomOffset },
   };
 }
 
@@ -931,7 +987,7 @@ export function drawSkinToggleButton(r: Renderer): void {
   if (!_isAdmin) return;
   const { ctx } = r;
   const pos = getSkinBtnPos(r);
-  const label = getActiveSkinId() === 'procedural' ? 'WIRE' : 'RASTER';
+  const label = getActiveSkinId() === 'procedural' ? 'WIRE' : 'STANDARD';
   ctx.save();
   ctx.beginPath();
   roundedRect(ctx, pos.x, pos.y, SKIN_BTN_W, SKIN_BTN_H, 4);
@@ -986,9 +1042,15 @@ import { BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, FEATURE_LABELS, STA
 // ComsMessage type removed — DM system replaces old reddit-comment-based coms
 import { isTradingStation } from '../shared/trading';
 import { BUILDING_CATALOG } from '../shared/buildings';
-import { getActiveDrawFeatureIcon, getActiveSkinId, setActiveSkin } from './skin';
+import { getActiveSkinId, setActiveSkin, setSkinVariant, registerSkinDrawFn, getDrawFeatureIconForSkinId, getWireframePref } from './skin';
 import { proceduralSkin } from './skins/procedural';
-import { rasterSkin, preloadRasterSprites, getPlanetSprite } from './skins/raster';
+import { rasterSkin, preloadRasterSprites, getPlanetSprite, getCartoonStationSprite } from './skins/raster';
+import { preloadScifiSprites, getScifiStationSprite, getScifiSolarArraySprite, getScifiHabSprite, getScifiDockSprite, getScifiCannonSprite, scifiSkin } from './skins/scifi';
+
+// Register skin draw functions for cross-player rendering
+registerSkinDrawFn('procedural', proceduralSkin.drawFeatureIcon);
+registerSkinDrawFn('raster', rasterSkin.drawFeatureIcon);
+registerSkinDrawFn('scifi', scifiSkin.drawFeatureIcon);
 
 // ── Monochrome green palette (sci-fi terminal) ─────────────────────────────
 const G_BRIGHT = '#4fffb0';        // primary bright green
@@ -1888,8 +1950,8 @@ function roundedRect(
 }
 
 /** Draw a small icon for a planet feature */
-function drawFeatureIcon(ctx: CanvasRenderingContext2D, x: number, y: number, type: FeatureType, size: number, level?: number) {
-  getActiveDrawFeatureIcon()(ctx, x, y, type, size, level);
+function drawFeatureIcon(ctx: CanvasRenderingContext2D, x: number, y: number, type: FeatureType, size: number, level?: number, skinId?: string) {
+  getDrawFeatureIconForSkinId(skinId)(ctx, x, y, type, size, level);
 }
 
 export function drawSystemView(
@@ -1953,7 +2015,7 @@ export function drawSystemView(
   // ── 3. Bodies (planets & belts) ──
   for (const body of bodies) {
     const sc = worldToScreen(body.pos, camera, screenW, screenH);
-    const radPx = Math.max(4, body.radius / wpp);
+    const radPx = Math.max(4, (body.radius / wpp) * 3);
 
     if (body.type === 'belt') {
       // Asteroid belt: scatter small circles along the orbit arc
@@ -1987,56 +2049,66 @@ export function drawSystemView(
       ctx.fillText(body.name, labelX + 4, labelY);
       ctx.restore();
     } else {
-      // Planet — outlined circle with surface detail
-      ctx.save();
-      // Dark fill
-      ctx.beginPath();
-      ctx.arc(sc.x, sc.y, radPx, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0, 20, 10, 0.8)';
-      ctx.fill();
-      // Surface bands (horizontal lines for gas-giant feel)
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(sc.x, sc.y, radPx, 0, Math.PI * 2);
-      ctx.clip();
-      const bandRng = createRng(body.seed + 99);
-      const bandCount = bandRng.rangeInt(2, 5);
-      ctx.strokeStyle = G_DIM;
-      ctx.lineWidth = 0.7;
-      for (let b = 0; b < bandCount; b++) {
-        const by = sc.y - radPx + (b + 1) * (radPx * 2) / (bandCount + 1);
-        const bw = Math.sqrt(Math.max(0, radPx * radPx - (by - sc.y) * (by - sc.y)));
+      // Planet — raster sprite if scanned, wireframe otherwise
+      const bodyScanned = isScanned(galaxy.currentStarIndex, body.index);
+      const planetSprite = bodyScanned ? getPlanetSprite(body.seed) : null;
+
+      if (planetSprite) {
+        // Raster planet sprite
+        const drawSize = radPx * 2.4;
+        ctx.drawImage(planetSprite, sc.x - drawSize / 2, sc.y - drawSize / 2, drawSize, drawSize);
+      } else {
+        // Procedural wireframe planet
+        ctx.save();
+        // Dark fill
         ctx.beginPath();
-        ctx.moveTo(sc.x - bw, by);
-        ctx.quadraticCurveTo(sc.x, by + bandRng.range(-1, 1), sc.x + bw, by);
-        ctx.stroke();
-      }
-      ctx.restore();
-      // Outline
-      ctx.beginPath();
-      ctx.arc(sc.x, sc.y, radPx, 0, Math.PI * 2);
-      ctx.strokeStyle = G_BRIGHT;
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-      // Planetary ring (for some planets based on seed)
-      if (body.seed % 5 === 0) {
+        ctx.arc(sc.x, sc.y, radPx, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0, 20, 10, 0.8)';
+        ctx.fill();
+        // Surface bands (horizontal lines for gas-giant feel)
+        ctx.save();
         ctx.beginPath();
-        ctx.ellipse(sc.x, sc.y, radPx * 1.8, radPx * 0.4, -0.2, 0, Math.PI * 2);
-        ctx.strokeStyle = G_MED;
-        ctx.lineWidth = 0.8;
+        ctx.arc(sc.x, sc.y, radPx, 0, Math.PI * 2);
+        ctx.clip();
+        const bandRng = createRng(body.seed + 99);
+        const bandCount = bandRng.rangeInt(2, 5);
+        ctx.strokeStyle = G_DIM;
+        ctx.lineWidth = 0.7;
+        for (let b = 0; b < bandCount; b++) {
+          const by = sc.y - radPx + (b + 1) * (radPx * 2) / (bandCount + 1);
+          const bw = Math.sqrt(Math.max(0, radPx * radPx - (by - sc.y) * (by - sc.y)));
+          ctx.beginPath();
+          ctx.moveTo(sc.x - bw, by);
+          ctx.quadraticCurveTo(sc.x, by + bandRng.range(-1, 1), sc.x + bw, by);
+          ctx.stroke();
+        }
+        ctx.restore();
+        // Outline
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, radPx, 0, Math.PI * 2);
+        ctx.strokeStyle = G_BRIGHT;
+        ctx.lineWidth = 1.2;
         ctx.stroke();
+        // Planetary ring (for some planets based on seed)
+        if (body.seed % 5 === 0) {
+          ctx.beginPath();
+          ctx.ellipse(sc.x, sc.y, radPx * 1.8, radPx * 0.4, -0.2, 0, Math.PI * 2);
+          ctx.strokeStyle = G_MED;
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+        }
+        ctx.restore();
+        // Crosshair marker inside planet
+        ctx.save();
+        ctx.strokeStyle = G_DIM;
+        ctx.lineWidth = 0.5;
+        const ch = radPx * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(sc.x - ch, sc.y); ctx.lineTo(sc.x + ch, sc.y);
+        ctx.moveTo(sc.x, sc.y - ch); ctx.lineTo(sc.x, sc.y + ch);
+        ctx.stroke();
+        ctx.restore();
       }
-      ctx.restore();
-      // Crosshair marker inside planet
-      ctx.save();
-      ctx.strokeStyle = G_DIM;
-      ctx.lineWidth = 0.5;
-      const ch = radPx * 0.5;
-      ctx.beginPath();
-      ctx.moveTo(sc.x - ch, sc.y); ctx.lineTo(sc.x + ch, sc.y);
-      ctx.moveTo(sc.x, sc.y - ch); ctx.lineTo(sc.x, sc.y + ch);
-      ctx.stroke();
-      ctx.restore();
       // Planet name
       ctx.save();
       ctx.font = '10px monospace';
@@ -2287,7 +2359,7 @@ export function drawPlanetDebugBounds(
   const body = galaxy.bodies[galaxy.currentBodyIndex];
   if (!body) return;
 
-  const features = getEffectiveFeatures(body, galaxy.currentStarIndex);
+  const features = getEffectiveFeatures(body, galaxy.currentStarIndex, galaxy.currentBodyIndex);
 
   ctx.save();
   ctx.setLineDash([4, 3]);
@@ -2352,21 +2424,26 @@ export function drawPlanetDebugBounds(
 // ── Planet View ──────────────────────────────────────────────────────────────
 
 /** Build an effective feature list by merging static features with server-built extensions. */
-function getEffectiveFeatures(body: SystemBody, starIndex: number): PlanetFeature[] {
+function getEffectiveFeatures(body: SystemBody, starIndex: number, bodyIndex: number): PlanetFeature[] {
   const serverEcon = _serverEconomyByStarIndex.get(starIndex);
   if (!serverEcon) return body.features;
 
   const stationFeature = body.features.find(f => f.type === 'station');
   if (!stationFeature) return body.features;
 
+  // If the body hasn't been scanned, force all features to wireframe
+  const scanned = bodyIndex >= 0 && isScanned(starIndex, bodyIndex);
+
   // Update station name/level from server data
   const stationBuilding = serverEcon.buildings.station;
   const stationLevel = stationBuilding?.level ?? 1;
   const romanNumerals = ['I','II','III','IV','V','VI','VII','VIII'];
+  const effectiveSkinId = scanned ? stationBuilding?.skinId : 'procedural';
   const updatedStation: PlanetFeature = {
     ...stationFeature,
     name: `${body.name} ${romanNumerals[stationLevel - 1] ?? stationLevel} Station`,
     level: stationLevel,
+    ...(effectiveSkinId ? { skinId: effectiveSkinId } : {}),
   };
 
   // Start with non-station static features + updated station
@@ -2386,15 +2463,15 @@ function getEffectiveFeatures(body: SystemBody, starIndex: number): PlanetFeatur
     { key: 'refinery', featureType: 'refinery', label: 'Refinery' },
   ];
 
-  // Space extensions evenly around orbit, offset from station
-  const baseAngle = updatedStation.angle + Math.PI * 0.4; // start offset from station
-  const angleSep = (Math.PI * 2) / (extensionTypes.length + 1); // even spacing
+  // Space extensions evenly around full circle, well-separated from station
+  const totalSlots = extensionTypes.length + 1; // +1 for station
+  const angleSep = (Math.PI * 2) / totalSlots; // even spacing around full circle
 
   for (let i = 0; i < extensionTypes.length; i++) {
     const ext = extensionTypes[i]!;
-    // Deterministic angle: evenly spaced with small jitter
-    const angle = baseAngle + angleSep * (i + 1) + rng.range(-0.15, 0.15);
-    const dist = updatedStation.dist + rng.range(-0.2, 0.3);
+    // Deterministic angle: station occupies slot 0, extensions get slots 1..N
+    const angle = updatedStation.angle + angleSep * (i + 1);
+    const dist = updatedStation.dist + rng.range(-0.1, 0.15);
 
     const building = serverEcon.buildings[ext.key];
     if (building && building.level > 0 && (building.status === 'ACTIVE' || building.status === 'UPGRADING')) {
@@ -2404,12 +2481,12 @@ function getEffectiveFeatures(body: SystemBody, starIndex: number): PlanetFeatur
         angle,
         dist,
         level: building.level,
+        ...(scanned && building.skinId ? { skinId: building.skinId } : { skinId: 'procedural' }),
       });
     }
   }
 
-  if (builtExtensions.length === 0) return baseFeatures;
-  return [...baseFeatures, ...builtExtensions];
+  return builtExtensions.length === 0 ? baseFeatures : [...baseFeatures, ...builtExtensions];
 }
 
 export function drawPlanetView(
@@ -2434,15 +2511,20 @@ export function drawPlanetView(
   const starName = star ? star.name : '';
 
   // Merge static features with server-built extensions
-  const effectiveFeatures = getEffectiveFeatures(body, galaxy.currentStarIndex);
+  const effectiveFeatures = getEffectiveFeatures(body, galaxy.currentStarIndex, galaxy.currentBodyIndex);
 
   // Planet is at world origin (0,0) in the planet view
   const planetWorldPos = vec2(0, 0);
   const sc = worldToScreen(planetWorldPos, camera, screenW, screenH);
 
-  // Central planet (modest size — ~1/10 of screen)
-  const planetRadPx = Math.max(4, 0.25 / wpp);
-  const orbitRingPx = planetRadPx * 1.6;
+  // Central planet (modest size — ~1/10 of screen, smaller on mobile)
+  const planetScale = isMobileView() ? 2 : 3;
+  const planetRadPx = Math.max(4, (0.25 / wpp) * planetScale);
+  const orbitRingBasePx = DOCK_TRIGGER_RADIUS / wpp;
+  // Scale orbit ring visually with planet but keep minimum at game logic radius
+  const orbitRingPx = isMobileView()
+    ? Math.max(planetRadPx + 3, orbitRingBasePx * 0.7)
+    : Math.max(planetRadPx + 3, orbitRingBasePx);
 
   // ── 1. Dashed orbit ring ──
   ctx.save();
@@ -2456,7 +2538,11 @@ export function drawPlanetView(
   ctx.restore();
 
   // ── 2. Planet body ──
-  const planetImg = getActiveSkinId() === 'raster' ? getPlanetSprite(body.seed) : null;
+  // Scanned bodies show raster; unscanned stay wireframe.
+  // Wireframe pref overrides everything back to procedural.
+  const _bodyScanned = isScanned(galaxy.currentStarIndex, galaxy.currentBodyIndex);
+  const _planetSkin = (_bodyScanned && !getWireframePref()) ? 'raster' : 'procedural';
+  const planetImg = _planetSkin === 'raster' ? getPlanetSprite(body.seed) : null;
   if (planetImg) {
     // Raster planet sprite
     const drawSize = planetRadPx * 2.4;
@@ -2553,7 +2639,7 @@ export function drawPlanetView(
       ctx.restore();
 
       // Feature icon
-      drawFeatureIcon(ctx, fx, fy, feat.type, 10, feat.level);
+      drawFeatureIcon(ctx, fx, fy, feat.type, 10, feat.level, feat.skinId);
 
       // Shield ring around station when shields raised
       if (feat.type === 'station' && _serverEconomyByStarIndex.get(galaxy.currentStarIndex)?.shieldRaised) {
@@ -2571,16 +2657,16 @@ export function drawPlanetView(
 
       // Feature name and type label
       ctx.save();
-      const leftSide = feat.angle > Math.PI / 2 && feat.angle < Math.PI * 1.5;
+      const leftSide = !isMobileView() && feat.angle > Math.PI / 2 && feat.angle < Math.PI * 1.5;
       const nameOffset = leftSide ? -24 : 24;
 
-      ctx.font = 'bold 9px monospace';
+      ctx.font = isMobileView() ? 'bold 7px monospace' : 'bold 9px monospace';
       ctx.textAlign = leftSide ? 'right' : 'left';
       ctx.textBaseline = 'bottom';
       ctx.fillStyle = G_BRIGHT;
       ctx.fillText(feat.name, fx + nameOffset, fy - 6);
 
-      ctx.font = '8px monospace';
+      ctx.font = isMobileView() ? '6px monospace' : '8px monospace';
       ctx.fillStyle = G_MED;
       ctx.textBaseline = 'top';
       ctx.fillText(FEATURE_LABELS[feat.type] || feat.type, fx + nameOffset, fy + 6);
@@ -2590,14 +2676,20 @@ export function drawPlanetView(
 
   // ── 6. Title panel (top-left) ──
   ctx.save();
-  ctx.font = 'bold 14px monospace';
+  const mob = isMobileView();
+  const hx = mob ? 8 : 14;  // left margin
+  const titleFont = mob ? 'bold 11px monospace' : 'bold 14px monospace';
+  const subFont = mob ? '8px monospace' : '10px monospace';
+  const infoFont = mob ? 'bold 7px monospace' : 'bold 9px monospace';
+  const lineH = mob ? 10 : 12;
+  ctx.font = titleFont;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_BRIGHT;
-  ctx.fillText(body.name.toUpperCase(), 14, 12);
-  ctx.font = '10px monospace';
+  ctx.fillText(body.name.toUpperCase(), hx, 12);
+  ctx.font = subFont;
   ctx.fillStyle = G_MED;
-  ctx.fillText(`${starName.toUpperCase()} SYSTEM`, 14, 30);
+  ctx.fillText(`${starName.toUpperCase()} SYSTEM`, hx, mob ? 26 : 30);
 
   // Ownership indicator
   const isHome = galaxy.currentStarIndex === galaxy.homeStarIndex;
@@ -2609,19 +2701,23 @@ export function drawPlanetView(
     : star?.owner === 'player' ? G_BRIGHT
     : star?.owner === 'foreign' ? '#ff6666'
     : G_DIM;
-  ctx.font = 'bold 9px monospace';
+  ctx.font = infoFont;
   ctx.fillStyle = ownerColor;
-  ctx.fillText(ownerLabel, 14, 44);
+  let hudY = mob ? 38 : 44;
+  ctx.fillText(ownerLabel, hx, hudY);
 
-  ctx.font = 'bold 9px monospace';
+  ctx.font = infoFont;
   ctx.fillStyle = 'rgba(79, 255, 176, 0.85)';
   const resources = getEnabledResources();
   const resourceLine = resources.length > 0
     ? resources.map((resource) => resource.shortName).join('  ')
     : 'NONE';
-  ctx.fillText(`TYPE: TERRESTRIAL`, 14, 60);
-  ctx.fillText(`FEATURES: ${effectiveFeatures.length}`, 14, 72);
-  ctx.fillText(`RESOURCES: ${resourceLine}`, 14, 84);
+  hudY += lineH + 4;
+  ctx.fillText(`TYPE: TERRESTRIAL`, hx, hudY);
+  hudY += lineH;
+  ctx.fillText(`FEATURES: ${effectiveFeatures.length}`, hx, hudY);
+  hudY += lineH;
+  ctx.fillText(`RESOURCES: ${resourceLine}`, hx, hudY);
 
   // Richness per resource
   const econ = _serverEconomyByStarIndex.get(galaxy.currentStarIndex);
@@ -2632,13 +2728,16 @@ export function drawPlanetView(
           return `${val}/10`;
         }).join('  ')
       : '';
-    ctx.fillText(`RICHNESS:  ${richLine}`, 14, 96);
+    hudY += lineH;
+    ctx.fillText(`RICHNESS:  ${richLine}`, hx, hudY);
   }
 
   // Blank-line separation between planet info and ship status.
   const shipFuelPct = fuelCapacity > 0 ? (fuelUnits / fuelCapacity) * 100 : 0;
-  ctx.fillText(`SHIP FUEL: ${Math.round(shipFuelPct)}% [${Math.round(fuelCapacity)}]`, 14, 120);
-  ctx.fillText(`SHIP SHIELDS: ${Math.round(shieldPercent)}%`, 14, 132);
+  hudY += lineH + (mob ? 6 : 12);
+  ctx.fillText(`SHIP FUEL: ${Math.round(shipFuelPct)}% [${Math.round(fuelCapacity)}]`, hx, hudY);
+  hudY += lineH;
+  ctx.fillText(`SHIP SHIELDS: ${Math.round(shieldPercent)}%`, hx, hudY);
   ctx.restore();
 
   // ── 7. Feature legend (bottom-left) ──
@@ -2666,7 +2765,7 @@ export function drawPlanetView(
       const resourceSuffix = resourceNames.length > 0
         ? ` [${resourceNames.join('/')}]`
         : ' [utility]';
-      drawFeatureIcon(ctx, legX + 16, legY + 22 + i * 14, feat.type, 5, feat.level);
+      drawFeatureIcon(ctx, legX + 16, legY + 22 + i * 14, feat.type, 5, feat.level, feat.skinId);
       ctx.fillStyle = G_MED;
       ctx.fillText(`${feat.name} - ${label}${resourceSuffix}`, legX + 26, legY + 18 + i * 14);
     }
@@ -2786,6 +2885,16 @@ export function closeFleetPanel(): void {
     _openPanel = -1;
     _galaxyJumpReturnTier = null;
   }
+}
+
+export function closeAllPanels(): void {
+  if (_openPanel === 3) _galaxyJumpReturnTier = null;
+  _openPanel = -1;
+}
+
+/** Check if any slide-out panel is currently open. */
+export function isAnyPanelOpen(): boolean {
+  return _openPanel >= 0;
 }
 
 /** Get the tab rects for hit testing */
@@ -3170,6 +3279,10 @@ export function setPanelContext(docked: boolean, starIndex: number | null, tier:
   if (!docked && _panelsDocked && _openPanel >= 0 && PANEL_TABS[_openPanel]?.requiresDock) {
     _openPanel = -1;
   }
+  // Auto-close dock-required panels when tier changes away from planet
+  if (tier !== 'planet' && _openPanel >= 0 && PANEL_TABS[_openPanel]?.requiresDock) {
+    _openPanel = -1;
+  }
   // Auto-close BUILD/SHIPS if we dock at an unowned star (but not TRADE tab at trading stations)
   if (owned === false && _openPanel >= 0 && _openPanel !== 5 && PANEL_TABS[_openPanel]?.requiresDock) {
     _openPanel = -1;
@@ -3392,6 +3505,13 @@ export function drawPlanetPanels(
       const panelW = getEffectivePanelW(i, screenW);
       const panelX = screenW - TAB_W - panelW;
       let panelY = ty;
+
+      // Ships panel (index 2): anchor from bottom of tab so it grows upward
+      if (i === 2) {
+        const estimatedH = estimateShipsPanelHeight();
+        panelY = ty + TAB_H - estimatedH;
+        if (panelY < 4) panelY = 4;
+      }
 
       // Fleet panel (index 3): anchor from bottom of tab so it grows upward
       if (i === 3) {
@@ -3786,8 +3906,8 @@ function drawShipsPanelBody(
     (s) => s.count > 0 && UPGRADE_PATH.includes(s.typeId as ShipTypeId),
   );
 
-  // Show Basic Probe (11), Enhanced Probe (12), Colony Ship (8), Freighter (2)
-  const SHOWN_BUILD_IDS = hasUpgradePathShip ? [2, 11, 12, 8] : [2, 11, 12, 8];
+  // Show Basic Probe (11), Enhanced Probe (12), Colony Ship (8), Freighter (2), Raider (15)
+  const SHOWN_BUILD_IDS = hasUpgradePathShip ? [2, 11, 12, 8, 15] : [2, 11, 12, 8, 15];
   const availableShips = Object.values(SHIP_CATALOG).filter(
     (entry) => SHOWN_BUILD_IDS.includes(entry.id),
   );
@@ -4036,6 +4156,26 @@ function drawShipsPanelBody(
 }
 
 /** Estimate fleet panel height without drawing (for bottom-anchoring) */
+function estimateShipsPanelHeight(): number {
+  const starIndex = _panelsStarIndex;
+  const fleetState = starIndex != null ? _serverShipsByStarIndex.get(starIndex) : null;
+  const fleetShips = fleetState?.ships ?? [];
+  const buildingShip = fleetState?.building ?? null;
+  const nowMs = Date.now();
+
+  const isUpgradeBuildActive = buildingShip != null && UPGRADE_PATH.includes(buildingShip.typeId as ShipTypeId) && buildingShip.completeAt > nowMs;
+  const upgradeRows = Math.max(
+    fleetShips.filter(s => s.count > 0 && UPGRADE_PATH.includes(s.typeId as ShipTypeId)).length,
+    isUpgradeBuildActive ? 1 : 0,
+  );
+  const cellH = 56;
+  const cellGap = 6;
+  const upgradeDisplayH = upgradeRows > 0 ? 16 + upgradeRows * (cellH + cellGap) : 0;
+  const buildRows = Math.ceil(5 / 2); // 5 build options in 2 columns
+  const buildH = buildRows > 0 ? 16 + buildRows * (cellH + cellGap) : 0;
+  return Math.max(TAB_H, 28 + upgradeDisplayH + buildH + 12);
+}
+
 function estimateFleetPanelHeight(): number {
   // Galaxy view: same logic as drawFleetGalaxyView (exclude player's active ship)
   const SHAPE_TO_TYPE: Record<string, number> = {
@@ -5942,7 +6082,7 @@ function ensureShipIconsLoaded(): void {
   for (const entry of Object.values(SHIP_CATALOG)) {
     if (_shipIconCache.has(entry.icon)) continue;
     const img = new Image();
-    img.src = `/icons/${entry.icon}`;
+    img.src = `/icons/skins/wireframe/${entry.icon}`;
     _shipIconCache.set(entry.icon, img);
   }
 }
@@ -6011,15 +6151,15 @@ type ServerEconomySnapshot = {
   shieldRaised: boolean;
   defenseScore: { shield: number; cannon: number; total: number };
   buildings: {
-    station: { level: number; status: string; completeAt: number | null };
-    mine: { level: number; status: string; completeAt: number | null };
-    solar: { level: number; status: string; completeAt: number | null };
-    hab: { level: number; status: string; completeAt: number | null };
-    warehouse: { level: number; status: string; completeAt: number | null };
-    dock: { level: number; status: string; completeAt: number | null };
-    shield: { level: number; status: string; completeAt: number | null };
-    cannon: { level: number; status: string; completeAt: number | null };
-    refinery: { level: number; status: string; completeAt: number | null };
+    station: { level: number; status: string; completeAt: number | null; skinId?: string };
+    mine: { level: number; status: string; completeAt: number | null; skinId?: string };
+    solar: { level: number; status: string; completeAt: number | null; skinId?: string };
+    hab: { level: number; status: string; completeAt: number | null; skinId?: string };
+    warehouse: { level: number; status: string; completeAt: number | null; skinId?: string };
+    dock: { level: number; status: string; completeAt: number | null; skinId?: string };
+    shield: { level: number; status: string; completeAt: number | null; skinId?: string };
+    cannon: { level: number; status: string; completeAt: number | null; skinId?: string };
+    refinery: { level: number; status: string; completeAt: number | null; skinId?: string };
   };
   completeCharges?: number;
   richness?: { ore: number; food: number; energy: number; fuel: number };
@@ -6027,13 +6167,434 @@ type ServerEconomySnapshot = {
 
 const _serverEconomyByStarIndex = new Map<number, ServerEconomySnapshot>();
 let _lastEconomyStarIndex: number | null = null;
-let _pendingBuildRequest: { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' | 'refinery' } | null = null;
+let _pendingBuildRequest: { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' | 'refinery'; skinId?: string } | null = null;
 let _pendingBuyShipRequest: { shipTypeId: number; quantity: number; useBlueprint?: boolean } | null = null;
 let _pendingUpgradeShipRequest: { fromTypeId: number; useBlueprint?: boolean } | null = null;
 let _pendingCompleteBuilds = false;
 let _pendingColonizeRequest: { starIndex: number; bodyIndex: number } | null = null;
 let _pendingToggleShield = false;
 let _pendingExplore: { starIndex: number; bodyIndex: number } | null = null;
+
+// ── Station Skin Picker State ───────────────────────────────────────────────
+let _skinPickerVisible = false;
+let _skinPickerLevel = 1;
+let _skinPickerPendingBuild = false; // true = fire build after skin picked
+let _skinPickerBuildType: 'station' | 'hab' | 'solar' | 'dock' | 'cannon' = 'station'; // which building triggered the picker
+let _skinPickerBtns: Array<{ x: number; y: number; w: number; h: number; skinId: string }> = [];
+
+// ── Returning Player Report ─────────────────────────────────────────────────
+
+import type { ReportItem } from '../shared/api';
+
+let _reportItems: ReportItem[] = [];
+let _reportVisible = false;
+let _reportBadgeVisible = false;
+let _reportBadgePulse = 0;
+let _reportDismissBtn: { x: number; y: number; w: number; h: number } | null = null;
+
+/** Set returning player report data (called once on login). */
+export function setReturningReport(items: ReportItem[]): void {
+  _reportItems = items;
+  _reportBadgeVisible = items.length > 0;
+  _reportVisible = false;
+}
+
+/** Draw the orange report badge on the left side of the screen. */
+export function drawReportBadge(r: Renderer, elapsedTime: number): void {
+  if (!_reportBadgeVisible || _reportVisible) return;
+  const { ctx } = r;
+
+  // Position: upper-left, just below ship status area
+  const badgeW = 28;
+  const badgeH = 28;
+  const bx = 8;
+  const by = 84;
+
+  // Pulsing glow
+  _reportBadgePulse = 0.5 + 0.5 * Math.sin(elapsedTime * 3);
+  const alpha = 0.6 + 0.4 * _reportBadgePulse;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  roundedRect(ctx, bx, by, badgeW, badgeH, 6);
+  ctx.fillStyle = 'rgba(200, 120, 20, 0.85)';
+  ctx.fill();
+  roundedRect(ctx, bx, by, badgeW, badgeH, 6);
+  ctx.strokeStyle = '#ffaa44';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Icon
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('!', bx + badgeW / 2, by + badgeH / 2);
+
+  // Count badge
+  if (_reportItems.length > 1) {
+    ctx.font = 'bold 7px monospace';
+    ctx.fillStyle = '#ffdd88';
+    ctx.fillText(`${_reportItems.length}`, bx + badgeW / 2, by + badgeH - 3);
+  }
+
+  ctx.restore();
+}
+
+/** Hit test the report badge. Returns true if clicked. */
+export function hitTestReportBadge(px: number, py: number): boolean {
+  if (!_reportBadgeVisible) return false;
+  const bx = 8, by = 84, bw = 28, bh = 28;
+  return px >= bx && px <= bx + bw && py >= by && py <= by + bh;
+}
+
+/** Open the report panel. */
+export function openReportPanel(): void {
+  _reportVisible = true;
+}
+
+/** Close/dismiss the report panel and badge. */
+export function dismissReport(): void {
+  _reportVisible = false;
+  _reportBadgeVisible = false;
+  _reportItems = [];
+}
+
+/** Is the report panel currently open? */
+export function isReportPanelOpen(): boolean {
+  return _reportVisible;
+}
+
+/** Draw the full report panel overlay. */
+export function drawReportPanel(r: Renderer): void {
+  if (!_reportVisible || _reportItems.length === 0) return;
+  const { ctx } = r;
+  const dpr = window.devicePixelRatio || 1;
+  const screenW = r.width / dpr;
+  const screenH = r.height / dpr;
+
+  // Semi-transparent backdrop
+  ctx.save();
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.fillRect(0, 0, screenW, screenH);
+
+  // Panel
+  const panelW = Math.min(320, screenW - 40);
+  const lineH = 18;
+  const headerH = 36;
+  const dismissH = 28;
+  const panelH = Math.min(screenH - 60, headerH + _reportItems.length * lineH + 16 + dismissH);
+  const px = (screenW - panelW) / 2;
+  const py = (screenH - panelH) / 2;
+
+  roundedRect(ctx, px, py, panelW, panelH, 8);
+  ctx.fillStyle = 'rgba(20, 15, 5, 0.95)';
+  ctx.fill();
+  roundedRect(ctx, px, py, panelW, panelH, 8);
+  ctx.strokeStyle = '#ffaa44';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Title
+  ctx.font = 'bold 13px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffaa44';
+  ctx.fillText('RETURNING REPORT', px + panelW / 2, py + headerH / 2);
+
+  // Separator
+  ctx.beginPath();
+  ctx.moveTo(px + 10, py + headerH);
+  ctx.lineTo(px + panelW - 10, py + headerH);
+  ctx.strokeStyle = 'rgba(255, 170, 68, 0.3)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Report items
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < _reportItems.length; i++) {
+    const item = _reportItems[i]!;
+    const iy = py + headerH + 10 + i * lineH;
+    if (iy + lineH > py + panelH - dismissH) break; // overflow guard
+
+    // Category color
+    const color = item.category === 'build' ? '#44ff88'
+      : item.category === 'resources' ? '#88ccff'
+      : item.category === 'visitor' ? '#ff8844'
+      : '#cccccc';
+
+    ctx.font = '10px monospace';
+    ctx.fillStyle = color;
+    ctx.fillText(`${item.icon} ${item.text}`, px + 12, iy + lineH / 2);
+  }
+
+  // Dismiss button
+  const dbW = 80;
+  const dbH = 22;
+  const dbX = px + (panelW - dbW) / 2;
+  const dbY = py + panelH - dismissH - 2;
+  _reportDismissBtn = { x: dbX, y: dbY, w: dbW, h: dbH };
+
+  roundedRect(ctx, dbX, dbY, dbW, dbH, 4);
+  ctx.fillStyle = 'rgba(200, 120, 20, 0.5)';
+  ctx.fill();
+  roundedRect(ctx, dbX, dbY, dbW, dbH, 4);
+  ctx.strokeStyle = '#ffaa44';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.font = 'bold 9px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffdd88';
+  ctx.fillText('DISMISS', dbX + dbW / 2, dbY + dbH / 2);
+
+  ctx.restore();
+}
+
+/** Hit test the report panel dismiss button. */
+export function hitTestReportDismiss(px: number, py: number): boolean {
+  if (!_reportDismissBtn) return false;
+  const { x, y, w, h } = _reportDismissBtn;
+  return px >= x && px <= x + w && py >= y && py <= y + h;
+}
+
+// ── Skin Picker Overlay ─────────────────────────────────────────────────────
+
+/** Draw a full-screen modal overlay letting the player choose a station visual style. */
+export function drawSkinPicker(r: Renderer): void {
+  if (!_skinPickerVisible) return;
+  // Wireframe pref blocks picker — everything is wireframe
+  if (getWireframePref()) {
+    _skinPickerVisible = false;
+    return;
+  }
+  const { ctx } = r;
+  const dpr = window.devicePixelRatio || 1;
+  const screenW = r.width / dpr;
+  const screenH = r.height / dpr;
+
+  ctx.save();
+  // Dim background
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillRect(0, 0, screenW, screenH);
+
+  // Panel dimensions — 2x2 grid
+  const panelW = Math.min(360, screenW - 30);
+  const panelH = 340;
+  const px = (screenW - panelW) / 2;
+  const py = (screenH - panelH) / 2;
+
+  // Panel background
+  roundedRect(ctx, px, py, panelW, panelH, 8);
+  ctx.fillStyle = 'rgba(10, 10, 30, 0.95)';
+  ctx.fill();
+  roundedRect(ctx, px, py, panelW, panelH, 8);
+  ctx.strokeStyle = '#70b0ff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Title
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 16px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const pickerLabel = _skinPickerBuildType === 'station' ? 'STATION' :
+                      _skinPickerBuildType === 'hab' ? 'HAB' :
+                      _skinPickerBuildType === 'solar' ? 'SOLAR ARRAY' :
+                      _skinPickerBuildType === 'dock' ? 'DOCK' : 'CANNON';
+  ctx.fillText(`CHOOSE ${pickerLabel} STYLE`, px + panelW / 2, py + 28);
+
+  // 2x2 grid layout
+  const gap = 10;
+  const colW = (panelW - gap * 3) / 2;
+  const rowH = 120;
+  const startY = py + 50;
+
+  const skins = [
+    { id: 'raster', label: 'STANDARD', locked: false },
+    { id: 'scifi', label: 'SCI-FI', locked: false },
+    { id: 'cartoon', label: '', locked: true },
+  ];
+
+  _skinPickerBtns = [];
+  preloadRasterSprites();
+  preloadScifiSprites();
+  preloadShipSprites();
+
+  for (let i = 0; i < skins.length; i++) {
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    const cellX = px + gap + col * (colW + gap);
+    const cellY = startY + row * (rowH + gap);
+    const skin = skins[i]!;
+
+    // Cell background
+    const isLocked = skin.locked;
+    roundedRect(ctx, cellX, cellY, colW, rowH, 6);
+    ctx.fillStyle = isLocked ? 'rgba(30, 30, 30, 0.7)' : 'rgba(20, 30, 50, 0.8)';
+    ctx.fill();
+    roundedRect(ctx, cellX, cellY, colW, rowH, 6);
+    ctx.strokeStyle = isLocked ? '#555' : '#4080c0';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Preview image
+    const previewSize = 56;
+    const imgX = cellX + (colW - previewSize) / 2;
+    const imgY = cellY + 8;
+
+    if (skin.id === 'procedural') {
+      // Draw wireframe station preview
+      ctx.strokeStyle = '#4fffb0';
+      ctx.lineWidth = 1.5;
+      const cx = imgX + previewSize / 2;
+      const cy = imgY + previewSize / 2;
+      const r2 = previewSize * 0.35;
+      ctx.beginPath();
+      for (let j = 0; j < 6; j++) {
+        const a = (j / 6) * Math.PI * 2 - Math.PI / 2;
+        const bx = cx + Math.cos(a) * r2;
+        const by = cy + Math.sin(a) * r2;
+        if (j === 0) ctx.moveTo(bx, by); else ctx.lineTo(bx, by);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      // inner circle
+      ctx.beginPath();
+      ctx.arc(cx, cy, r2 * 0.4, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (skin.id === 'raster') {
+      const img = getCartoonStationSprite(_skinPickerLevel);
+      if (img) {
+        ctx.drawImage(img, imgX, imgY, previewSize, previewSize);
+      } else {
+        ctx.fillStyle = '#333';
+        ctx.fillRect(imgX, imgY, previewSize, previewSize);
+      }
+    } else if (skin.id === 'scifi') {
+      const img = _skinPickerBuildType === 'solar' ? getScifiSolarArraySprite(_skinPickerLevel) :
+                  _skinPickerBuildType === 'hab' ? getScifiHabSprite(_skinPickerLevel) :
+                  _skinPickerBuildType === 'dock' ? getScifiDockSprite(_skinPickerLevel) :
+                  _skinPickerBuildType === 'cannon' ? getScifiCannonSprite(_skinPickerLevel) :
+                  getScifiStationSprite(_skinPickerLevel);
+      if (img) {
+        ctx.drawImage(img, imgX, imgY, previewSize, previewSize);
+      } else {
+        ctx.fillStyle = '#333';
+        ctx.fillRect(imgX, imgY, previewSize, previewSize);
+      }
+    } else {
+      // Locked/cartoon — grey placeholder
+      ctx.fillStyle = '#222';
+      ctx.fillRect(imgX, imgY, previewSize, previewSize);
+      ctx.fillStyle = '#666';
+      ctx.font = '20px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('\u{1F512}', imgX + previewSize / 2, imgY + previewSize / 2);
+    }
+
+    // Button area
+    const btnH = 28;
+    const btnY = cellY + rowH - btnH - 8;
+    const btnW = colW - 20;
+    const btnX = cellX + 10;
+
+    if (!isLocked) {
+      roundedRect(ctx, btnX, btnY, btnW, btnH, 4);
+      ctx.fillStyle = skin.id === 'scifi' ? 'rgba(60, 60, 160, 0.85)' :
+                      skin.id === 'procedural' ? 'rgba(40, 120, 80, 0.85)' :
+                      'rgba(60, 140, 60, 0.85)';
+      ctx.fill();
+      roundedRect(ctx, btnX, btnY, btnW, btnH, 4);
+      ctx.strokeStyle = skin.id === 'scifi' ? '#80a0ff' :
+                        skin.id === 'procedural' ? '#4fffb0' : '#80ff80';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(skin.label, btnX + btnW / 2, btnY + btnH / 2);
+      _skinPickerBtns.push({ x: btnX, y: btnY, w: btnW, h: btnH, skinId: skin.id });
+    } else {
+      ctx.fillStyle = '#555';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('COMING SOON', cellX + colW / 2, btnY + btnH / 2);
+    }
+
+    // Dim locked cells
+    if (isLocked) {
+      roundedRect(ctx, cellX, cellY, colW, rowH, 6);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+      ctx.fill();
+    }
+  }
+
+  // Subtitle hint
+  ctx.fillStyle = '#8899aa';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('You can change this later in settings', px + panelW / 2, py + panelH - 14);
+
+  ctx.restore();
+}
+
+/** Hit test the skin picker overlay. Returns true if the picker consumed the tap. */
+export function hitTestSkinPicker(screenX: number, screenY: number): boolean {
+  if (!_skinPickerVisible) return false;
+
+  for (const btn of _skinPickerBtns) {
+    if (screenX >= btn.x && screenX <= btn.x + btn.w &&
+        screenY >= btn.y && screenY <= btn.y + btn.h) {
+      // Apply the selected skin
+      if (btn.skinId === 'procedural') {
+        setActiveSkin(proceduralSkin);
+        setSkinVariant('station', 'cartoon');
+      } else if (btn.skinId === 'raster') {
+        setActiveSkin(rasterSkin);
+        setSkinVariant('station', 'cartoon');
+      } else if (btn.skinId === 'scifi') {
+        preloadScifiSprites();
+        setActiveSkin(scifiSkin);
+        setSkinVariant('station', 'scifi');
+        setSkinVariant('solar_array', 'scifi');
+        setSkinVariant('hab', 'scifi');
+        setSkinVariant('dock', 'scifi');
+        setSkinVariant('cannon', 'scifi');
+      }
+      _skinPickerVisible = false;
+      _skinPickerBtns = [];
+      // If picker was shown before a build, now fire the build
+      if (_skinPickerPendingBuild) {
+        _skinPickerPendingBuild = false;
+        _pendingBuildRequest = { buildType: _skinPickerBuildType, skinId: btn.skinId };
+      }
+      return true;
+    }
+  }
+
+  // Picker is visible but no button hit — still consume the tap (modal)
+  return true;
+}
+
+/** Auto-confirm the first skin option (for automation/testing). */
+export function confirmSkinPicker(): boolean {
+  if (!_skinPickerVisible || _skinPickerBtns.length === 0) return false;
+  const btn = _skinPickerBtns[0]!;
+  _skinPickerVisible = false;
+  _skinPickerBtns = [];
+  if (_skinPickerPendingBuild) {
+    _skinPickerPendingBuild = false;
+    _pendingBuildRequest = { buildType: _skinPickerBuildType, skinId: btn.skinId };
+  }
+  return true;
+}
+
 let _pendingVideoPlay: string | null = null; // video ID to play (from Fleet Command DM)
 let _videoPlayButtons: Array<{ x: number; y: number; w: number; h: number; videoId: string }> = [];
 let _lastExploreResult: { kind: string; label: string; icon: string; amount: number; showUntil: number } | null = null;
@@ -6052,10 +6613,10 @@ export function clearShieldCharging(): void {
   _shieldCharging = null;
 }
 
-export function setServerStarEconomy(snapshot: ServerEconomySnapshot): void {
-  // Detect building completions: was UPGRADING, now ACTIVE → play sound
+export function setServerStarEconomy(snapshot: ServerEconomySnapshot, isOwner?: boolean): void {
+  // Detect building completions: was UPGRADING, now ACTIVE → play sound (only for owner)
   const prev = _serverEconomyByStarIndex.get(snapshot.starIndex);
-  if (prev?.buildings && snapshot.buildings) {
+  if (isOwner && prev?.buildings && snapshot.buildings) {
     for (const key of Object.keys(snapshot.buildings) as Array<keyof typeof snapshot.buildings>) {
       const oldB = prev.buildings[key];
       const newB = snapshot.buildings[key];
@@ -6064,6 +6625,7 @@ export function setServerStarEconomy(snapshot: ServerEconomySnapshot): void {
         break; // one sound per poll cycle
       }
     }
+
   }
   _serverEconomyByStarIndex.set(snapshot.starIndex, snapshot);
   // Update complete charges from server
@@ -6161,10 +6723,10 @@ let _pendingCancelRoute: string | null = null;
 let _fleetCancelRouteButtons: Array<{ x: number; y: number; w: number; h: number; routeId: string }> = [];
 
 // Foreign (enemy) fleet data — ships at other players' stars
-const _foreignShipsByStarIndex = new Map<number, { owner: string; ships: Array<{ typeId: number; count: number }> }>();
+const _foreignShipsByStarIndex = new Map<number, { owner: string; ships: Array<{ typeId: number; count: number }>; skinId?: string }>();
 
 export function setForeignFleet(
-  stars: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }> }>,
+  stars: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }>; skinId?: string }>,
 ): void {
   _foreignShipsByStarIndex.clear();
   for (const [key, val] of Object.entries(stars)) {
@@ -6179,10 +6741,11 @@ export function setServerShipState(
   starIndex: number,
   ships: Array<{ typeId: number; count: number }>,
   building: { typeId: number; completeAt: number } | null,
+  isOwner?: boolean,
 ): void {
   // Detect ship build completion: was building, now not (or past completeAt)
   const prev = _serverShipsByStarIndex.get(starIndex);
-  if (prev?.building && !building) {
+  if (isOwner && prev?.building && !building) {
     playSound('construction_complete');
   }
   _serverShipsByStarIndex.set(starIndex, { ships, building });
@@ -6229,7 +6792,7 @@ export function consumePendingCancelRoute(): string | null {
   return id;
 }
 
-export function consumePendingBuildRequest(): { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' | 'refinery' } | null {
+export function consumePendingBuildRequest(): { buildType: 'station' | 'mine' | 'solar' | 'hab' | 'warehouse' | 'dock' | 'shield' | 'cannon' | 'refinery'; skinId?: string } | null {
   const next = _pendingBuildRequest;
   _pendingBuildRequest = null;
   return next;
@@ -6344,6 +6907,17 @@ export function triggerDockPanelAction(action: DockPanelAction, dock?: DockState
       serverEcon.store.energy >= effectiveCost.energy;
     const anyActive = Object.values(serverEcon.buildings).some((candidate) => candidate.status === 'UPGRADING');
     if (anyActive || isMaxLevel || !canAfford) return false;
+    // Show skin picker for any build type that has skin variants
+    const skinnableTypes = ['station', 'hab', 'solar', 'dock', 'cannon'];
+    if (skinnableTypes.includes(buildType)) {
+      _skinPickerLevel = nextLevel;
+      _skinPickerVisible = true;
+      _skinPickerPendingBuild = true;
+      _skinPickerBuildType = buildType as 'station' | 'hab' | 'solar' | 'dock' | 'cannon';
+      playSound('click');
+      return true;
+    }
+    // Non-skinnable builds (mine, warehouse, refinery, shield) — fire immediately
     _pendingBuildRequest = { buildType };
     playSound('click');
     return true;
@@ -6359,9 +6933,57 @@ export function triggerDockPanelAction(action: DockPanelAction, dock?: DockState
   return false;
 }
 
+/** Trigger a BUILD panel button by 1-based index (1=Station, 2=Hab, ..., 9=Refinery). */
+export function triggerBuildButtonByIndex(index: number, dock?: DockState): boolean {
+  if (_openPanel !== 1) return false; // BUILD panel must be open
+  const btn = _lastExtensionButtons[index - 1];
+  if (!btn || !btn.enabled) return false;
+  return triggerDockPanelAction(btn.action as DockPanelAction, dock);
+}
+
+/** Trigger a SHIPS panel button by 1-based index. */
+export function triggerShipButtonByIndex(index: number): boolean {
+  if (_openPanel !== 2) return false; // SHIPS panel must be open
+  const btn = _lastShipButtons[index - 1];
+  if (!btn || !btn.enabled) return false;
+  if (btn.isUpgrade && btn.upgradeFromTypeId != null) {
+    _pendingUpgradeShipRequest = { fromTypeId: btn.upgradeFromTypeId, ...(btn.useBlueprint != null ? { useBlueprint: btn.useBlueprint } : {}) };
+  } else {
+    _pendingBuyShipRequest = { shipTypeId: btn.shipTypeId, quantity: 1, ...(btn.useBlueprint != null ? { useBlueprint: btn.useBlueprint } : {}) };
+  }
+  playSound('click');
+  return true;
+}
+
+/** Get a test-friendly snapshot of current game economy and state. */
+export function getTestState(): {
+  openPanel: number;
+  starIndex: number | null;
+  skinPickerVisible: boolean;
+  buildings: Record<string, { level: number; status: string; completeAt: number | null }> | null;
+  store: { ore: number; food: number; energy: number; fuel: number } | null;
+  rates: { ore: number; food: number; energy: number; fuel: number } | null;
+  buildButtons: Array<{ label: string; enabled: boolean; action: string }>;
+  shipButtons: Array<{ shipTypeId: number; enabled: boolean; isUpgrade: boolean }>;
+} {
+  const econ = _lastEconomyStarIndex != null ? _serverEconomyByStarIndex.get(_lastEconomyStarIndex) : null;
+  return {
+    openPanel: _openPanel,
+    starIndex: _lastEconomyStarIndex,
+    skinPickerVisible: _skinPickerVisible,
+    buildings: econ ? Object.fromEntries(
+      Object.entries(econ.buildings).map(([k, v]) => [k, { level: v.level, status: v.status, completeAt: v.completeAt }])
+    ) : null,
+    store: econ?.store ?? null,
+    rates: econ?.rates ?? null,
+    buildButtons: _lastExtensionButtons.map(b => ({ label: b.label, enabled: b.enabled, action: b.action })),
+    shipButtons: _lastShipButtons.map(b => ({ shipTypeId: b.shipTypeId, enabled: b.enabled, isUpgrade: !!b.isUpgrade })),
+  };
+}
+
 const DOCK_ACTIONS: { action: DockAction; label: string; icon: string }[] = [
   { action: 'scan',    label: 'SCAN',    icon: '\u25CE' },     // ◎
-  { action: 'leave',   label: 'LEAVE',   icon: '\u2191' },     // ↑
+  { action: 'leave',   label: 'UNDOCK',  icon: '\u2191' },     // ↑
 ];
 
 export function drawDockPanel(
@@ -6441,7 +7063,7 @@ export function drawDockPanel(
   const showShieldBtn = shieldLevel >= 1;
   const isCharging = _shieldCharging != null;
 
-  // Build action list: [SHIELDS?] + SCAN + LEAVE
+  // Build action list: [SHIELDS?] + SCAN + UNDOCK
   interface OrbitBtn { action: string; label: string; icon: string; color?: string }
   const orbitBtns: OrbitBtn[] = [];
   if (showShieldBtn) {
@@ -6502,15 +7124,19 @@ export function drawDockPanel(
       _lastDockButtons.push({ action: act.action as DockAction, label: act.label, icon: act.icon, x: bx, y: by, w: thisW, h: btnH });
 
       const enabled = dock.docked || act.action === 'leave';
-      ctx.strokeStyle = enabled ? G_BRIGHT : G_FAINT;
-      ctx.lineWidth = 1;
+      // Journey pulse on UNDOCK button so player knows how to leave
+      const undockPulse = act.action === 'leave' ? getJourneyPulseAlpha() : 0;
+      const hasUndockPulse = undockPulse > 0;
+
+      ctx.strokeStyle = hasUndockPulse ? `rgba(79, 255, 176, ${0.4 + undockPulse * 0.6})` : enabled ? G_BRIGHT : G_FAINT;
+      ctx.lineWidth = hasUndockPulse ? 2.5 : 1;
       roundedRect(ctx, bx, by, thisW, btnH, 3);
       ctx.stroke();
 
       ctx.font = '10px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = enabled ? G_BRIGHT : G_FAINT;
+      ctx.fillStyle = hasUndockPulse ? `rgba(79, 255, 176, ${0.6 + undockPulse * 0.4})` : enabled ? G_BRIGHT : G_FAINT;
       ctx.fillText(act.icon, bx + 12, by + btnH / 2);
 
       ctx.font = '7px monospace';

@@ -23,7 +23,7 @@ import {
   Renderer, drawControlButtons, drawForeignShipsAtStar, drawPlayerFleetAtStar,
   drawGalaxyView, drawSystemView, drawPlanetView, drawTierHUD, drawShipStatus,
   drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
-  hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds,
+  hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds, closeAllPanels, isAnyPanelOpen,
   worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
   setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert,
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
@@ -33,6 +33,10 @@ import {
   drawGalaxyModeToggle, drawGalaxyModeBanner, hitTestGalaxyModeBtn, toggleGalaxyMode, setGalaxyMode, getGalaxyMode,
   setGalaxyJumpReturnTier, isFleetPanelOpen, closeFleetPanel,
   getPostId, triggerExplore,
+  drawSkinPicker, hitTestSkinPicker,
+  drawReportBadge, drawReportPanel, hitTestReportBadge, hitTestReportDismiss,
+  openReportPanel, dismissReport, isReportPanelOpen,
+  triggerBuildButtonByIndex, triggerShipButtonByIndex,
 } from './renderer';
 import type { GalaxyMode as _GalaxyMode } from './renderer';
 import type { DevvitCallbacks } from './bridge';
@@ -68,6 +72,10 @@ const SCOUT_WARNING_DURATION = 3.5; // seconds
 // ── Warp fuel warning (Phase 14d) ──
 let _warpFuelWarningTimer = 0;
 const WARP_FUEL_WARNING_DURATION = 3.0; // seconds
+
+// ── Docked movement warning ──
+let _dockWarningTimer = 0;
+const DOCK_WARNING_DURATION = 3.0; // seconds
 
 // ── Dock refuel request (to debit star fuel supply) ──
 let _pendingRefuel: { starIndex: number; amount: number } | null = null;
@@ -129,11 +137,12 @@ export function setStarClaims(claims: Array<{ starIndex: number; username: strin
       star.discovered = true;
       playerClaimCount++;
     } else {
-      // Only reveal foreign stars if player has already discovered them
+      // Always store claimedBy so economy poll can use the correct owner username
+      // even before the star is visually revealed as foreign
+      star.claimedBy = claim.username;
+      // Only reveal foreign stars visually if player has already discovered them
       if (star.discoveryLevel !== 'none') {
         star.owner = 'foreign';
-        // Always store claimedBy so it's available when player visits later
-        star.claimedBy = claim.username;
         // Only add to contacts at 'visited' level (enhanced probe or physical visit)
         if (star.discoveryLevel === 'visited') {
           addKnownPlayer(claim.username);
@@ -188,21 +197,27 @@ export function getVisitedStars(): number[] {
 }
 
 /** Get all star ownership claims (player + foreign). */
-export function getStarOwnership(): Array<{ starIndex: number; owner: 'player' | 'foreign' }> {
+export function getStarOwnership(): Array<{ starIndex: number; owner: 'player' | 'foreign'; claimedBy?: string }> {
   if (!gameState) return [];
   return gameState.galaxy.stars
     .filter(s => s.owner === 'player' || s.owner === 'foreign')
-    .map(s => ({ starIndex: s.index, owner: s.owner as 'player' | 'foreign' }));
+    .map(s => ({ starIndex: s.index, owner: s.owner as 'player' | 'foreign', ...(s.claimedBy ? { claimedBy: s.claimedBy } : {}) }));
 }
 
 /** Re-apply star ownership from saved data. */
-export function applyStarOwnership(claims: Array<{ starIndex: number; owner: 'player' | 'foreign' }>): void {
+export function applyStarOwnership(claims: Array<{ starIndex: number; owner: 'player' | 'foreign'; claimedBy?: string }>): void {
   if (!gameState) return;
   for (const claim of claims) {
     const star = gameState.galaxy.stars[claim.starIndex];
     if (!star) continue;
     star.owner = claim.owner;
     star.discovered = true;
+    if (claim.claimedBy) {
+      star.claimedBy = claim.claimedBy;
+      console.log(`[OWNERSHIP] applied star ${claim.starIndex}: owner=${claim.owner} claimedBy=${claim.claimedBy}`);
+    } else {
+      console.log(`[OWNERSHIP] applied star ${claim.starIndex}: owner=${claim.owner} claimedBy=MISSING`);
+    }
   }
 }
 
@@ -217,6 +232,14 @@ export function relocateToHomeStar(starIndex: number): void {
 
   const star = gameState.galaxy.stars[starIndex];
   if (!star) { console.warn(`[RELOCATE] invalid starIndex ${starIndex}`); return; }
+
+  // Clear ownership on the old home star (splash mode may have set a different one)
+  const oldHome = gameState.galaxy.stars[gameState.galaxy.homeStarIndex];
+  if (oldHome && oldHome.index !== starIndex && oldHome.owner === 'player') {
+    oldHome.owner = 'none';
+    oldHome.discovered = false;
+    oldHome.discoveryLevel = 'none';
+  }
 
   // Update home and current star
   gameState.galaxy.homeStarIndex = starIndex;
@@ -496,6 +519,9 @@ export function startGame(
 
     update(dt);
     render();
+    drawSkinPicker(renderer!);
+    drawReportBadge(renderer!, gameState!.elapsedTime);
+    drawReportPanel(renderer!);
 
     animFrame = requestAnimationFrame(loop);
   };
@@ -539,6 +565,7 @@ function update(dt: number): void {
   // Tick down scout warning timer
   if (_scoutWarningTimer > 0) _scoutWarningTimer = Math.max(0, _scoutWarningTimer - dt);
   if (_warpFuelWarningTimer > 0) _warpFuelWarningTimer = Math.max(0, _warpFuelWarningTimer - dt);
+  if (_dockWarningTimer > 0) _dockWarningTimer = Math.max(0, _dockWarningTimer - dt);
 
   // Intercept UI clicks BEFORE processInput sets ship target
 
@@ -551,10 +578,35 @@ function update(dt: number): void {
   // Clear pendingTap now that it's been promoted (or if pointerDown was already true)
   inputState.pendingTap = null;
 
+  // Skin picker overlay is modal — intercept all taps when visible
+  if (inputState.pointerDown && inputState.pointerPos) {
+    if (hitTestSkinPicker(inputState.pointerPos.x, inputState.pointerPos.y)) {
+      console.log('[TAP] consumed by skin picker');
+      inputState.pointerDown = false;
+    }
+  }
+
+  // Report panel — modal when open, badge when closed
+  if (inputState.pointerDown && inputState.pointerPos) {
+    if (isReportPanelOpen()) {
+      // Check dismiss button or click-anywhere-to-dismiss
+      if (hitTestReportDismiss(inputState.pointerPos.x, inputState.pointerPos.y)) {
+        dismissReport();
+      } else {
+        dismissReport(); // click anywhere on backdrop dismisses
+      }
+      inputState.pointerDown = false;
+    } else if (hitTestReportBadge(inputState.pointerPos.x, inputState.pointerPos.y)) {
+      openReportPanel();
+      inputState.pointerDown = false;
+    }
+  }
+
   // Handle dock panel clicks
   if (gameState.dock && inputState.pointerDown && inputState.pointerPos) {
     const dockAction = hitTestDockPanel(inputState.pointerPos);
     if (dockAction) {
+      console.log('[TAP] dock action:', dockAction, 'pos:', inputState.pointerPos);
       inputState.pointerDown = false;
       if (dockAction === 'leave') {
         console.log('[DOCK] Undocking from', gameState.dock.targetName);
@@ -588,6 +640,51 @@ function update(dt: number): void {
   // Scouts cannot use fleet — close it if somehow open
   if (isFleetPanelOpen() && gameState.shipShape === 'scout') {
     closeFleetPanel();
+
+  // ── Keyboard action shortcuts (agent/power-user) ──────────────────────────
+  } else if (inputState.actionKey) {
+    const action = inputState.actionKey;
+    inputState.actionKey = null;
+    const PANEL_MAP: Record<string, number> = { panel_status: 0, panel_build: 1, panel_ships: 2, panel_fleet: 3, panel_coms: 4 };
+    if (action in PANEL_MAP) {
+      const idx = PANEL_MAP[action]!;
+      const fleetAction = togglePlanetPanel(idx);
+      if (fleetAction === 'fleet-opened' && gameState.galaxy.tier !== NavigationTier.Galaxy) {
+        _savedDock = gameState.dock;
+        const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet';
+        setGalaxyJumpReturnTier(returnTier);
+        gameState.galaxy.tier = NavigationTier.Galaxy;
+        gameState.ship.vel = { x: 0, y: 0 };
+        gameState.ship.thrust = false;
+        setGalaxyMode('fleet');
+      }
+      playSound('click');
+    } else if (action === 'undock' && gameState.dock) {
+      console.log('[KEY] Undocking from', gameState.dock.targetName);
+      if (gameState.dock.targetType === 'planet') playSound('leaving_orbit');
+      else playSound(Math.random() < 0.5 ? 'undocking' : 'undocking_alt');
+      undock(gameState);
+      journeyAction();
+      devvitCb?.onMilestone?.('first_move');
+    } else if (action === 'scan' && gameState.dock) {
+      playSound('begin_scan');
+      triggerExplore(gameState.galaxy.currentStarIndex, gameState.galaxy.currentBodyIndex);
+      console.log('[KEY] SCAN triggered at star', gameState.galaxy.currentStarIndex, 'body', gameState.galaxy.currentBodyIndex);
+    } else if (action === 'close_panel') {
+      closeAllPanels();
+    } else if (action === 'recenter') {
+      inputState.recenterRequested = true;
+    } else if (action === 'zoom_toggle') {
+      inputState.zoomToggleRequested = true;
+    } else if (action.startsWith('btn_')) {
+      const idx = parseInt(action.slice(4), 10);
+      if (triggerBuildButtonByIndex(idx, gameState.dock ?? undefined)) {
+        console.log('[KEY] BUILD button', idx, 'triggered');
+      } else if (triggerShipButtonByIndex(idx)) {
+        console.log('[KEY] SHIP button', idx, 'triggered');
+      }
+    }
+
   } else if (isFleetPanelOpen() && gameState.galaxy.tier !== NavigationTier.Galaxy) {
     const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet';
     setGalaxyJumpReturnTier(returnTier);
@@ -619,6 +716,10 @@ function update(dt: number): void {
       }
       inputState.pointerDown = false;
     } else if (panelIdx === -2) {
+      inputState.pointerDown = false;
+    } else if (panelIdx === -1 && isAnyPanelOpen()) {
+      // Clicked outside all panels while a panel is open → close it
+      closeAllPanels();
       inputState.pointerDown = false;
     }
   }
@@ -747,6 +848,27 @@ function update(dt: number): void {
   }
 
   // Process input (ship targeting, etc.) — skip in fleet mode at galaxy tier
+  // ── Docked movement warning: intercept clicks/keys when docked ──
+  if (gameState.dock && gameState.dock.docked) {
+    const DOCK_MOVEMENT_KEYS = new Set(['w','a','s','d','h','j','k','l','arrowup','arrowdown','arrowleft','arrowright']);
+    const hasMovement = [...inputState.keysDown].some(k => DOCK_MOVEMENT_KEYS.has(k));
+    const hasSpaceClick = inputState.pointerDown && inputState.pointerPos;
+    if ((hasMovement || hasSpaceClick) && _dockWarningTimer <= 0) {
+      // Close any open panel first before showing dock warning
+      if (isAnyPanelOpen()) {
+        closeAllPanels();
+      } else {
+        _dockWarningTimer = DOCK_WARNING_DURATION;
+        playSound('ship_is_docked');
+      }
+      journeyAction();
+    }
+    if (hasMovement || hasSpaceClick) {
+      inputState.pointerDown = false;
+      inputState.pendingTap = null;
+    }
+  }
+
   if (!(gameState.galaxy.tier === NavigationTier.Galaxy && getGalaxyMode() === 'fleet')) {
     processInput(inputState, gameState, gameState.camera, screenW, screenH);
   }
@@ -828,8 +950,16 @@ function update(dt: number): void {
     inputState.scrollDelta = 0;
   }
 
-  // ── Galaxy drag-to-pan (fleet mode) ──
-  if (inputState.dragDelta && gameState.galaxy.tier === NavigationTier.Galaxy && getGalaxyMode() === 'fleet') {
+  // ── Galaxy drag-to-pan ──
+  // Fleet mode: always pan on drag
+  // Nav mode (extended): pan only while Shift is held (avoids conflict with click-to-move)
+  // Nav mode (inline): no drag-pan (uses buttons)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const _isInlineMode = !!(globalThis as any).__INLINE_MODE__;
+  const isFleetMode = getGalaxyMode() === 'fleet';
+  const shiftHeld = inputState.keysDown.has('shift');
+  const canDragPan = isFleetMode || (!_isInlineMode && shiftHeld);
+  if (inputState.dragDelta && gameState.galaxy.tier === NavigationTier.Galaxy && canDragPan) {
     const screenH = renderer.height / (window.devicePixelRatio || 1);
     // Convert screen pixels to world units based on current ortho size
     const worldPerPx = (gameState.galaxyZoom * 2) / screenH;
@@ -959,6 +1089,7 @@ function update(dt: number): void {
   if (transition) {
     // Star pass-through: if ship has active target at a DIFFERENT star, skip entering this star
     // Only applies when in galaxy tier flying between stars
+    console.log('[TRANSITION] check:', tier, '→', transition.newTier, 'star=', transition.starIndex, 'body=', transition.bodyIndex, 'tgtActive=', gameState.tgtActive, 'shipShape=', gameState.shipShape);
     let skipTransition = false;
     if (transition.newTier === NavigationTier.System && tier === NavigationTier.Galaxy && gameState.tgtActive) {
       const targetStar = gameState.galaxy.stars[transition.starIndex];
@@ -992,6 +1123,7 @@ function update(dt: number): void {
     }
 
     if (skipTransition) {
+      console.log('[TRANSITION] skipped (pass-through)');
       // Do nothing — let ship fly through the belt
     } else
     // Ship gate: scouts cannot enter Galaxy tier
@@ -1150,7 +1282,7 @@ function render(): void {
         x: g.curWorld.x - gameState.worldOffset.x,
         y: g.curWorld.y - gameState.worldOffset.y,
       };
-      drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot);
+      drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot, g.skinId);
       drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
     }
 
@@ -1208,7 +1340,7 @@ function render(): void {
         x: g.curWorld.x - gameState.worldOffset.x,
         y: g.curWorld.y - gameState.worldOffset.y,
       };
-      drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot);
+      drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot, g.skinId);
       drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
     }
 
@@ -1280,7 +1412,7 @@ function render(): void {
       if (isPointCoveredByOpenPlanetPanel(screenW, screenH, ghostSc.x, ghostSc.y)) {
         continue;
       }
-      drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot);
+      drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot, g.skinId);
       drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
     }
 
@@ -1318,6 +1450,22 @@ function render(): void {
         : null;
       drawDockPanel(renderer, gameState.dock, body, gameState.galaxy.currentStarIndex);
       drawShipPanel(renderer);
+    }
+
+    // Docked movement warning overlay
+    if (_dockWarningTimer > 0) {
+      const ctx = renderer.ctx;
+      const alpha = Math.min(1, _dockWarningTimer / 0.5);
+      ctx.save();
+      ctx.font = 'bold 13px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = `rgba(255, 100, 80, ${alpha})`;
+      ctx.fillText('UNDOCK TO MOVE', screenW / 2, screenH * 0.18);
+      ctx.font = '11px monospace';
+      ctx.fillStyle = `rgba(200, 220, 210, ${alpha * 0.85})`;
+      ctx.fillText('Press UNDOCK to leave station', screenW / 2, screenH * 0.18 + 20);
+      ctx.restore();
     }
     return;
   }
@@ -1374,7 +1522,7 @@ function render(): void {
       x: g.curWorld.x - gameState.worldOffset.x,
       y: g.curWorld.y - gameState.worldOffset.y,
     };
-    drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot);
+    drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot, g.skinId);
     drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
   }
 
