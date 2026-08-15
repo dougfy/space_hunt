@@ -4,7 +4,21 @@
 
 **Platform:** Devvit WebView (TypeScript/Canvas2D), current `spacehunt` codebase.
 
-**Last Updated:** 2026-08-04 (v1.1.120)
+**Last Updated:** 2026-08-14 (v1.4.32)
+
+---
+
+## 🎯 Current Priorities
+
+| # | Priority | Description | Why |
+|---|----------|-------------|-----|
+| 1 | **Journey Instrumentation (First 5 min)** | Ensure Devvit Journeys tracks the critical first 5 minutes — splash → first move → first dock → first resource. Get allowlisted. | Proves retention funnel, required for Developer Funds visibility. |
+| 2 | **Help System (First 5 min)** | Feature 12 — progressive disclosure so new players understand undock, thrust, dock, build within the first session. | Players who don't learn basics in 5 min churn. |
+| 3 | **Testing (Unit & System)** | Expand test coverage: combat, alliance/DM, ship building, voice/sensors. CI confidence before next features. Playwright E2E framework operational (v1.4.32). | Prevents regressions as features stack. |
+| 4 | **AI Probe (Autonomous Explorer)** | AI-controlled probe that travels star-to-star autonomously, exploring systems and refueling when it finds fuel. Reveals galaxy map without player input. | Adds passive exploration, makes galaxy feel alive, gives new players a head start on map knowledge. |
+| 5 | **Expanding Star System** | Dynamically grow the galaxy when more players join and existing stars are all claimed. Add new star clusters connected to the existing graph. | Required for scaling — without this the game hits a hard player cap when all 100 stars are colonized. |
+| 6 | **Backstory & Video COMS** | Feature 19/20 lore integration + video communication system. | Differentiates the game, adds atmosphere. |
+| 7 | **Finishing New Skins** | Skin framework implementation — station skins first (POC), then expand. | Visual variety, potential premium content. |
 
 ---
 
@@ -12,14 +26,14 @@
 
 | # | Issue | Status | Notes |
 |---|---|---|---|
-| 1 | Boundary issue in solar tier — no need to scroll | ❌ Open | System view should fit without scrolling. |
+| 1 | Boundary issue in solar tier — no need to scroll | ✅ Fixed | System view fits without scrolling. |
 | 2 | Leaving solar→galaxy with bounds on loses bounds state | ✅ Fixed | Bounds state now persisted in localStorage. Survives tier changes and page reloads. |
 | 3 | Galaxy view: separate ship nav from fleet movement picker | ✅ Done | Transfer mode with per-ship-type filtering (probes→undiscovered, colony→probed+unowned, freighter→owned+trade stations). |
 | 4 | Star coloring not working — see red stars after visiting | ✅ Fixed (v0.0.293) | Foreign stars now show red via `getGalaxyStarTone()` checking `owner === 'foreign'`. |
 | 5 | Ship name editing blocked by steering keys | ✅ Fixed (v0.0.257) | Mode flag added — keyboard input passes through when editing ship name. |
 | 6 | iPad sizing | ❌ Open | Layout/canvas not adapting properly to iPad screen dimensions. |
 | 7 | Pinch gesture conflicts with ship movement | ❌ Open | Pinch-to-zoom triggers ship movement instead of being handled as zoom. Need gesture disambiguation. |
-| 8 | Galaxy fuel vs system fuel | ❌ Open | **→ Feature 14 (Fuel as Commodity)** — fuel becomes real resource, Refinery building, ownership-gated dock. |
+| 8 | Galaxy fuel vs system fuel | ✅ Done | **→ Feature 14 (Fuel as Commodity)** implemented — fuel is real resource, Refinery building, ownership-gated dock. |
 | 9 | Extended discovery: belt items, planet items, multiple ores, Knowledge | ⚠️ Partial | Multi-color pods (6 types: refuel/dock/energy/ore/food/upgrade). Planet SCAN exploration (7 outcomes). Blueprint + anomaly finds. Full knowledge/multiple ore system still open. |
 | 10 | Entry into solar tier dumps into belt | ✅ Fixed | `restorePosition` now places ship at system edge (dist 20) instead of center (dist 3). |
 | 11 | Belt (Local tier) missing side controls | ✅ Done | Added `drawControlButtons` to Local tier render. |
@@ -32,8 +46,8 @@
 | 18 | Layout overlapping (fleet ships, feature labels, player names) | ✅ Fixed (v1.1.25) | Increased spacing constants across galaxy view. |
 | 19 | Trading station ⚖ icon visible before discovery | ✅ Fixed (v1.1.31) | Icon only shown after star is probed/visited. |
 | 20 | Probe arrival not updating star to probed state | ✅ Fixed (v1.1.29) | Server now returns discoveredStars in FleetAllResponse; client uses authoritative list. |
-| 21 | **REDDIT REVIEW: UGC reportability** | 🔴 Blocker | DMs stored in Redis are not reportable. Public comments use Reddit API (OK). DMs must either: (a) be posted as Reddit comments so Reddit's report system applies, or (b) add an in-app report mechanism that surfaces to moderators. |
-| 22 | **REDDIT REVIEW: Admin endpoint security** | 🔴 Blocker | All admin/debug endpoints (`/api/admin/*`, `/api/debug/*`, `/api/bots/*`, `/api/stars/reset`) have zero server-side auth. Client-side `ADMIN_USERS` list is not a valid security control. Must add server-side auth middleware. |
+| 21 | **REDDIT REVIEW: UGC reportability** | ✅ Fixed | DM report button implemented. `POST /api/coms/dm/report` stores report in Redis + sends modmail to subreddit moderators with attribution. |
+| 22 | **REDDIT REVIEW: Admin endpoint security** | ✅ Fixed | `requireDev` middleware in `src/server/core/admin-auth.ts` uses `reddit.getCurrentUsername()` (Devvit-authenticated). Applied to all admin/debug/bot routes. Client-side `ADMIN_USERS` retained for UI only. |
 | 23 | **Bot smooth presence (Level 2 patrol)** | ✅ Fixed | Server-side time-based drift in `listRoomPoses()`. Bot visible at all tiers (Galaxy patrol, System/Planet arrive-linger-depart). NavigationTier.Planet=3 fix. |
 
 ---
@@ -824,9 +838,9 @@ Start with `drawFeatureIcon` station type ONLY. This proves the pattern works vi
 
 ---
 
-## 🔴 Reddit App Review — Blockers (2026-08-04)
+## � Reddit App Review — Resolved (2026-08-10)
 
-Reddit review flagged two issues blocking publication:
+Reddit review flagged two issues — both now fixed:
 
 ### Issue 1: User-Generated Content Reportability
 
@@ -888,7 +902,7 @@ async function requireAdmin(c: Context, next: Next) {
 
 ---
 
-## Feature 14 — Fuel as a Commodity ❌ NOT STARTED
+## Feature 14 — Fuel as a Commodity ✅ COMPLETE
 
 **What:** Fuel becomes a real tracked resource (stored per-star, consumed by ships, produced by Refineries). Players cannot refuel or dock at opponent-owned facilities. Ships consume fuel units to move between stars and maneuver in-tier.
 
@@ -1306,3 +1320,159 @@ Once installed, moderators configure subreddit settings through the **Install Se
 - Progressive story reveals as milestones are hit
 
 ### Status: Not Started
+
+---
+
+## Feature 20 — Backstory Integration (10 Gameplay Enhancements)
+
+**What:** Bring the Luminari/Valcordian/Machine backstory (see BACKSTORY.md) directly into gameplay through existing and new systems.
+
+### 20.1 — Luminari Artifact Discoveries ⬡ Not Started
+
+**Ties to:** Exploration system, buff system
+
+When players explore planets, rare rolls yield a "Luminari Artifact" — grants a powerful one-time buff. Add flavor text to exploration results: *"Your scanners detect an ancient Luminari energy node, dormant for millennia. Its resonance amplifies your hyperdrive."*
+
+- Modify exploration outcome table to include `luminari_artifact` kind
+- Map to existing buff grants (hyperdrive, resonance, etc.)
+- Add lore text to explore result UI
+
+### 20.2 — Valcordian Ruin Star Systems ⬡ Not Started
+
+**Ties to:** Galaxy generation, autobot NPC
+
+Mark 5-10 stars as "Valcordian Ruins" (distinct visual — orange glow or cracked icon). These stars have richer exploration rewards but the Autobot patrols them more aggressively, representing machines guarding old territory.
+
+- Tag ruin stars at galaxy generation (deterministic from seed)
+- Renderer: distinct star color/icon for ruin stars
+- Exploration: higher reward weights at ruin stars
+- Autobot: prioritize ruin stars in patrol routes
+
+### 20.3 — Machine Raid Escalation ⬡ Not Started
+
+**Ties to:** Autobot FSM, colony count, alliance system
+
+As total player colonies grow, the Autobot becomes more aggressive (matches Act III). At 10 total colonies across all players, raids increase frequency. At 20, the Autobot targets the weakest colony. Creates natural pressure to form alliances.
+
+- Track global colony count in Redis
+- Autobot FSM: scale aggression by colony thresholds
+- Notification system for escalation events
+
+### 20.4 — Star Gate Network (Fast Travel) ⬡ Not Started
+
+**Ties to:** Galaxy generation, jump links, fuel system
+
+3-4 star pairs have "Luminari Star Gates" — zero fuel cost, instant travel time. Discoverable only via Enhanced Probes. Lore: *"A dormant Luminari gate activates as your probe approaches."*
+
+- Galaxy generation: designate gate pairs (deterministic from seed)
+- Probe discovery: reveal gate connections
+- Transit system: zero cost/time for gate links
+- Renderer: distinct visual for gate links
+
+### 20.5 — Introductory Lore Crawl ⬡ Not Started
+
+**Ties to:** Tutorial/journey system, splash screen
+
+On first play, show a brief 3-sentence text crawl before gameplay: *"The Luminari are gone. The Valcordian machines remain. You are humanity's next chapter."* Dismissable with a tap, sets tone in 5 seconds.
+
+- Add lore overlay to tutorial flow (before first undock)
+- Fade-in/fade-out text animation
+- Skip on tap, auto-advance after 5 seconds
+- Only show once (track in profile)
+
+### 20.6 — Codex Tab in Help Panel ⬡ Not Started
+
+**Ties to:** Help panel UI, achievements/milestones
+
+Add a "Lore" tab alongside Controls/Buildings/Ships in the help panel. Entries unlock as players hit milestones:
+
+| Milestone | Codex Entry |
+|-----------|-------------|
+| First login | "Humanity Arrives" |
+| First colony | "Claiming the Stars" |
+| First alliance | "The Fragile Peace" |
+| First raid survived | "The Machines Strike" |
+| 5 stars discovered | "Luminari Echoes" |
+| Machine stronghold found | "The Valcordian Legacy" |
+
+- New help tab with locked/unlocked entry list
+- Store unlocked entries in player profile
+- Green glow on new unlocks
+
+### 20.7 — Machine Stronghold End-Game Objective ⬡ Not Started
+
+**Ties to:** Galaxy generation, alliance system, fleet combat
+
+One star (fixed seed position) is a "Machine Stronghold" — visually distinct, cannot be colonized solo. Requires 3+ alliance members to each send a fleet simultaneously. Conquering it unlocks a unique achievement and permanent resource bonus for the alliance. Maps to Act IV.
+
+- Designate one star as stronghold at generation
+- Renderer: unique stronghold visual (red pulsing)
+- Alliance fleet coordination mechanic
+- Achievement + alliance-wide bonus on conquest
+- Resets weekly or per-galaxy cycle
+
+### 20.8 — Splinter Faction Event (Periodic) ⬡ Not Started
+
+**Ties to:** Scheduler, community voting, buff system
+
+Every 7 days, a timed event: "A splinter faction offers a truce with the machines." Players vote:
+- **Accept** → temporary shield buff galaxy-wide (24h)
+- **Reject** → raid damage bonus galaxy-wide (24h)
+
+Majority vote wins. Creates a recurring community decision point from Act V.
+
+- Scheduler: trigger event every 7 days
+- Redis: store votes per player, tally at deadline
+- Apply winning buff to all players for 24h
+- Notification/UI for active event + result
+
+### 20.9 — Reverse-Engineered Tech Unlocks ⬡ Not Started
+
+**Ties to:** Building system, autobot raids, progression
+
+After defeating 5 Autobot raids, players unlock a "Valcordian Tech" building slot — a unique structure outside the normal tree:
+- **Machine Harvester** — doubles ore production rate
+- **Automaton Shield** — immunity to one raid per day
+
+Ties to "reverse-engineered Valcordian technology" from the lore.
+
+- Track raid defeats per player in Redis
+- New building type with special unlock condition
+- Unique visual in dock panel (Valcordian aesthetic)
+
+### 20.10 — Discovery Log Voice Lines ⬡ Not Started
+
+**Ties to:** Audio system, exploration system
+
+Replace generic exploration results with lore-flavored audio voice lines:
+- *"Luminari energy signature detected... extracting."*
+- *"Warning: Valcordian automaton debris. Salvageable components recovered."*
+- *"Ancient star gate fragment found. Navigation data archived."*
+- *"Machine patrol remnants detected. Proceed with caution."*
+
+- Record new WAV files with narrative context
+- Map exploration outcome kinds to specific voice lines
+- Use existing audio system (SoundId + SOUND_FILES)
+
+### Priority Order (Suggested)
+
+| Priority | Feature | Effort | Impact |
+|----------|---------|--------|--------|
+| 1 | 20.5 Lore Crawl | Low | Sets tone immediately |
+| 2 | 20.1 Luminari Artifacts | Low | Builds on existing buff/explore |
+| 3 | 20.10 Voice Lines | Medium | Adds atmosphere every session |
+| 4 | 20.6 Codex Tab | Medium | Gives collectors a goal |
+| 5 | 20.2 Ruin Stars | Medium | Visual variety + exploration |
+| 6 | 20.4 Star Gates | Medium | Quality-of-life + lore |
+| 7 | 20.3 Raid Escalation | Medium | Dynamic difficulty |
+| 8 | 20.8 Splinter Event | High | Community engagement |
+| 9 | 20.9 Reverse-Eng Tech | High | End-game depth |
+| 10 | 20.7 Machine Stronghold | High | Alliance end-game |
+
+---
+
+## Future Consideration: Moderator-Based Admin Commands
+
+Currently admin access is hardcoded in `src/server/core/admin-auth.ts`. A future improvement could tie admin commands to the subreddit's moderator list using `reddit.getModerators()`. This would allow adding/removing admins via Reddit's mod panel instead of redeploying.
+
+**Approach:** Hybrid — subreddit mods get general admin access (game management, leaderboard resets), while a hardcoded "superadmin" list stays locked for destructive operations (data wipes, debug endpoints). Cache the mod list in memory with a 5-minute TTL to avoid extra API calls per request.
