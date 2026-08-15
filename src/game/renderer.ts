@@ -6150,6 +6150,11 @@ const MOCK_EXTENSION_DEFS: MockExtensionState[] = [
 let _lastExtensionButtons: ExtensionButton[] = [];
 let _lockFlash: { action: string; expireMs: number } | null = null;
 
+/** Show a build/action error message in the panel area (visible for 4 seconds). */
+export function showBuildError(message: string): void {
+  _lockFlash = { action: message, expireMs: Date.now() + 4000 };
+}
+
 type ServerEconomySnapshot = {
   starIndex: number;
   store: { ore: number; food: number; energy: number; fuel: number };
