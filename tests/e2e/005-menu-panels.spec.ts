@@ -134,30 +134,53 @@ test.describe('TEST-005: Menu Panel Readability (Desktop)', () => {
       { key: 't', name: 'STATUS', index: 0 },
       { key: 'b', name: 'BUILD', index: 1 },
       { key: 'n', name: 'SHIPS', index: 2 },
-      { key: 'f', name: 'FLEET', index: 3 },
       { key: 'c', name: 'COMS', index: 4 },
+      { key: null, name: 'SETTINGS', index: -2 }, // opened via DOM button click
     ];
 
     const results: Array<{ name: string; pass: boolean; explanation: string }> = [];
 
     for (const panel of panels) {
       // Open panel
-      await pressKey(frame, panel.key);
+      if (panel.key) {
+        await pressKey(frame, panel.key);
+      } else if (panel.name === 'SETTINGS') {
+        // Settings is a DOM panel — click the gear button
+        const settingsBtn = frame.locator('#settings-btn');
+        if (await settingsBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+          await settingsBtn.click();
+        } else {
+          console.log(`[${panel.name}] ⚠ Settings button not found`);
+          results.push({ name: panel.name, pass: false, explanation: 'Settings button #settings-btn not found in DOM' });
+          continue;
+        }
+      }
       await page.waitForTimeout(1_500);
 
       // Verify it opened
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const state = await frame.evaluate(() => (globalThis as any).__testState?.()) as Record<string, unknown> | null;
-      const openPanel = state?.openPanel;
-      console.log(`[${panel.name}] openPanel: ${openPanel} (expected: ${panel.index})`);
+      if (panel.name === 'SETTINGS') {
+        // Settings is a DOM element — check visibility
+        const visible = await frame.locator('#settings-panel').evaluate(el => el.classList.contains('visible')).catch(() => false);
+        if (!visible) {
+          console.log(`[${panel.name}] ⚠ Panel did not open`);
+          results.push({ name: panel.name, pass: false, explanation: 'Settings panel not visible after clicking gear button' });
+          continue;
+        }
+        console.log(`[${panel.name}] Settings panel visible`);
+      } else {
+        // Canvas panels — check via __testState
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const state = await frame.evaluate(() => (globalThis as any).__testState?.()) as Record<string, unknown> | null;
+        const openPanel = state?.openPanel;
+        console.log(`[${panel.name}] openPanel: ${openPanel} (expected: ${panel.index})`);
 
-      if (openPanel !== panel.index) {
-        console.log(`[${panel.name}] ⚠ Panel did not open — skipping visual check`);
-        results.push({ name: panel.name, pass: false, explanation: `Panel did not open (openPanel=${openPanel})` });
-        // Close whatever is open before trying next
-        await pressKey(frame, 'Escape');
-        await page.waitForTimeout(500);
-        continue;
+        if (openPanel !== panel.index) {
+          console.log(`[${panel.name}] ⚠ Panel did not open — skipping visual check`);
+          results.push({ name: panel.name, pass: false, explanation: `Panel did not open (openPanel=${openPanel})` });
+          await pressKey(frame, 'Escape');
+          await page.waitForTimeout(500);
+          continue;
+        }
       }
 
       // Visual verify
@@ -166,7 +189,11 @@ test.describe('TEST-005: Menu Panel Readability (Desktop)', () => {
       results.push({ name: panel.name, pass: result.pass, explanation: result.explanation });
 
       // Close panel before opening next
-      await pressKey(frame, 'Escape');
+      if (panel.name === 'SETTINGS') {
+        await frame.locator('#settings-btn').click();
+      } else {
+        await pressKey(frame, 'Escape');
+      }
       await page.waitForTimeout(500);
     }
 
