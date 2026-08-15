@@ -622,6 +622,7 @@ function update(dt: number): void {
         playSound('begin_scan');
         // Trigger planet exploration
         triggerExplore(gameState.galaxy.currentStarIndex, gameState.galaxy.currentBodyIndex);
+        journeyAction();
         console.log('[DOCK] SCAN triggered at star', gameState.galaxy.currentStarIndex, 'body', gameState.galaxy.currentBodyIndex);
       } else if (dockAction === 'ships' || dockAction === 'buy_ships') {
         playSound('click');
@@ -669,6 +670,7 @@ function update(dt: number): void {
     } else if (action === 'scan' && gameState.dock) {
       playSound('begin_scan');
       triggerExplore(gameState.galaxy.currentStarIndex, gameState.galaxy.currentBodyIndex);
+      journeyAction();
       console.log('[KEY] SCAN triggered at star', gameState.galaxy.currentStarIndex, 'body', gameState.galaxy.currentBodyIndex);
     } else if (action === 'close_panel') {
       closeAllPanels();
@@ -679,8 +681,10 @@ function update(dt: number): void {
     } else if (action.startsWith('btn_')) {
       const idx = parseInt(action.slice(4), 10);
       if (triggerBuildButtonByIndex(idx, gameState.dock ?? undefined)) {
+        journeyAction();
         console.log('[KEY] BUILD button', idx, 'triggered');
       } else if (triggerShipButtonByIndex(idx)) {
+        journeyAction();
         console.log('[KEY] SHIP button', idx, 'triggered');
       }
     }
