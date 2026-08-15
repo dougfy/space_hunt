@@ -32,26 +32,37 @@ async function findGameFrame(page: import('@playwright/test').Page, timeoutMs = 
 const OVERLAP_PROMPT = 'Check carefully for any OVERLAPPING TEXT or BUTTONS covering other text areas. All UI elements should be clearly readable with no text rendered on top of other text. Panel labels, resource counters, star names, fuel indicators, and button text should each be in their own space without colliding. If ANY text overlaps other text, or ANY button covers a text area making it unreadable, this FAILS. Look specifically at: top-left info panel, right-side panel tabs, bottom dock bar, floating labels near ships/stations, and player names.';
 
 async function switchDevvitMode(page: import('@playwright/test').Page, mode: 'Mobile' | 'Desktop' | 'Fullscreen'): Promise<boolean> {
-  const selectors = [
-    'text=Mobile >> xpath=..',
-    'text=Desktop >> xpath=..',
-    'text=Fullscreen >> xpath=..',
-  ];
-  for (const selector of selectors) {
+  // The Devvit toolbar has a dropdown showing current mode (e.g. "Mobile ∨")
+  // Click it to open, then click the desired option from the list
+  const modeLabels = ['Mobile', 'Desktop', 'Fullscreen'];
+
+  // Find and click whichever mode label is currently shown (to open dropdown)
+  for (const label of modeLabels) {
     try {
-      const el = page.locator(selector).first();
-      if (await el.isVisible({ timeout: 2_000 })) {
-        await el.click();
+      const trigger = page.locator(`text=${label}`).first();
+      if (await trigger.isVisible({ timeout: 2_000 })) {
+        await trigger.click();
         await page.waitForTimeout(500);
-        const option = page.locator(`text=${mode}`).first();
-        if (await option.isVisible({ timeout: 2_000 })) {
-          await option.click();
-          await page.waitForTimeout(2_000);
-          return true;
+
+        // Now the dropdown should be open — find and click the target mode
+        // The options appear as a list; the target might be the 2nd or 3rd item
+        const options = page.locator(`text=${mode}`);
+        const count = await options.count();
+        // Click the last match (the dropdown option, not the trigger itself)
+        if (count > 0) {
+          const target = count > 1 ? options.nth(count - 1) : options.first();
+          if (await target.isVisible({ timeout: 2_000 })) {
+            await target.click();
+            await page.waitForTimeout(3_000);
+            console.log(`[MODE] Switched to ${mode} (found ${count} "${mode}" elements, clicked last)`);
+            return true;
+          }
         }
+        break; // opened dropdown but couldn't find option
       }
-    } catch { /* try next */ }
+    } catch { /* try next label */ }
   }
+  console.log(`[MODE] ⚠ Could not switch to ${mode}`);
   return false;
 }
 
@@ -65,6 +76,15 @@ async function enterExpandedMode(page: import('@playwright/test').Page): Promise
     await fullBtn.click();
     await page.waitForTimeout(3_000);
   }
+
+  // Dismiss "Preview across devices" / "Got it" dialog if present
+  try {
+    const gotIt = page.locator('button:has-text("Got it")').first();
+    if (await gotIt.isVisible({ timeout: 3_000 })) {
+      await gotIt.click();
+      await page.waitForTimeout(1_000);
+    }
+  } catch { /* no dialog */ }
 
   // Re-find frame (should be play.html now)
   frame = await findGameFrame(page);
@@ -119,7 +139,8 @@ test.describe('Overlap Check — All Modes', () => {
     const verifier = new VisualVerifier('overlap-desktop');
 
     const frame = await enterExpandedMode(page);
-    await switchDevvitMode(page, 'Desktop');
+    const switched = await switchDevvitMode(page, 'Desktop');
+    console.log('[DESKTOP] Mode switch result:', switched);
     const desktopFrame = await findGameFrame(page);
     await page.waitForTimeout(3_000);
 
