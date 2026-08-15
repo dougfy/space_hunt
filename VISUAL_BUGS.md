@@ -64,8 +64,47 @@ In Devvit's Desktop preview mode, the subreddit description or header text from 
 |------|--------|--------|
 | Inline | ✓ Clean | No overlaps detected |
 | Mobile | ✗ Bug | BUG-001: Ship name collision |
-| Desktop | ✗ Bug | BUG-002: Subreddit text bleeds into game |
-| Fullscreen | ✗ Bug | BUG-001: Ship name collision |
+| Desktop | ✗ Bug | BUG-001, BUG-002, BUG-003 |
+| Fullscreen | ✗ Bug | BUG-001, BUG-003 |
+
+---
+
+## BUG-003: Return report badge overlaps info panel text
+
+**Detected:** 2026-08-15  
+**Test:** `006-scan-raster.spec.ts` → `after-scan-station`  
+**Modes affected:** Desktop, Fullscreen  
+**Status:** Open  
+
+**Description:**  
+The orange pulsing `!` return report badge (positioned at y=84) overlaps the "RESOURCES:" and "RICHNESS:" lines in the top-left info panel, making them partially unreadable.
+
+**Screenshot:**  
+- `test-screenshots/006-scan-raster/after-scan-station-1786799271970.png`
+
+**Root Cause:**  
+The badge was moved from vertically-centered (y=screenH/2) to upper-left (y=84) to be "just under the upper left area." But y=84 sits directly on top of the info panel text lines that extend below the star name/type info.
+
+**Suggested Fix:**  
+Move the badge further down (y=120+) or to the right of the info panel text. Alternatively, make it position-aware — check the info panel height and place below it.
+
+---
+
+## BUG-004: Station type label overlaps station name
+
+**Detected:** 2026-08-15  
+**Test:** `006-scan-raster.spec.ts` → `after-scan-station`  
+**Modes affected:** Desktop, Fullscreen  
+**Status:** Open  
+
+**Description:**  
+The word "Station" (feature type label below the station icon) partially merges with the "Druen I Station" name label above it.
+
+**Screenshot:**  
+- `test-screenshots/006-scan-raster/after-scan-station-1786799271970.png`
+
+**Suggested Fix:**  
+Increase vertical spacing between the station name label and the feature type label, or suppress the type label when it's redundant with the name.
 
 ---
 
