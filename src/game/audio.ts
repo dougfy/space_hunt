@@ -4,7 +4,7 @@
 
 import versionJson from '../../version.json';
 
-type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'ship_is_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'undocking_alt' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded' | 'freighter_arrived' | 'freighter_unloading' | 'shields_activated' | 'shields_up' | 'shields_deactivated' | 'shields_down' | 'hostile_raider' | 'unidentified_ship' | 'new_comm' | 'fleet_command' | 'scan_nothing_planet' | 'scan_nothing_station' | 'scan_ore' | 'scan_food' | 'scan_energy' | 'scan_fuel' | 'scan_artifact' | 'scan_anomaly' | 'scan_blueprint' | 'begin_scan' | 'buff_hyperdrive' | 'buff_resonance' | 'buff_chrono' | 'buff_void_shield' | 'buff_scanner_amp' | 'raid_launched' | 'raid_incoming' | 'alliance_formed' | 'alliance_broken' | 'luminari_gate' | 'colony_established' | 'reverse_engineered';
+type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'ship_is_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'undocking_alt' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded' | 'freighter_arrived' | 'freighter_unloading' | 'shields_activated' | 'shields_up' | 'shields_deactivated' | 'shields_down' | 'hostile_raider' | 'unidentified_ship' | 'new_comm' | 'fleet_command' | 'scan_nothing_planet' | 'scan_nothing_station' | 'scan_ore' | 'scan_food' | 'scan_energy' | 'scan_fuel' | 'scan_artifact' | 'scan_anomaly' | 'scan_blueprint' | 'begin_scan' | 'buff_hyperdrive' | 'buff_resonance' | 'buff_chrono' | 'buff_void_shield' | 'buff_scanner_amp' | 'raid_launched' | 'raid_incoming' | 'alliance_formed' | 'alliance_broken' | 'luminari_gate' | 'colony_established' | 'reverse_engineered' | 'max_level_reached' | 'upgrade_failed' | 'upgrade_in_progress';
 
 // Cache-bust sound URLs with version so updated wavs are fetched fresh
 const V = versionJson.version;
@@ -62,6 +62,9 @@ const SOUND_FILES: Partial<Record<SoundId, string>> = {
   luminari_gate: `/sounds/Luminari%20star%20gate.wav?v=${V}`,
   colony_established: `/sounds/Colony%20established%20The.wav?v=${V}`,
   reverse_engineered: `/sounds/Valcordian%20tech%20integrated.wav?v=${V}`,
+  max_level_reached: `/sounds/Maximum%20level%20reached.wav?v=${V}`,
+  upgrade_failed: `/sounds/Upgrade%20Failed.wav?v=${V}`,
+  upgrade_in_progress: `/sounds/Upgrade%20in%20progress.wav?v=${V}`,
 };
 
 let _audioCtx: AudioContext | null = null;

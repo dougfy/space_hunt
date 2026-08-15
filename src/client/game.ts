@@ -1312,16 +1312,16 @@ async function pollEconomy() {
           const reason = (errData.message ?? 'Build failed').toLowerCase();
           console.warn('[BUILD] build failed:', reason);
           if (reason.includes('insufficient') || reason.includes('resource') || reason.includes('afford')) {
-            playSound('insufficient_resources');
+            playSound('upgrade_failed');
             showBuildError('NEED MORE RESOURCES');
           } else if (reason.includes('already') || reason.includes('upgrading')) {
-            playSound('click');
+            playSound('upgrade_in_progress');
             showBuildError('ALREADY UPGRADING');
           } else if (reason.includes('max') || reason.includes('level')) {
-            playSound('click');
+            playSound('max_level_reached');
             showBuildError('MAX LEVEL REACHED');
           } else {
-            playSound('insufficient_resources');
+            playSound('upgrade_failed');
             showBuildError('BUILD FAILED: ' + (errData.message ?? 'Unknown error').toUpperCase());
           }
         }

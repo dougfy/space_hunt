@@ -6193,6 +6193,7 @@ let _skinPickerLevel = 1;
 let _skinPickerPendingBuild = false; // true = fire build after skin picked
 let _skinPickerBuildType: 'station' | 'hab' | 'solar' | 'dock' | 'cannon' = 'station'; // which building triggered the picker
 let _skinPickerBtns: Array<{ x: number; y: number; w: number; h: number; skinId: string }> = [];
+let _skinPickerCancelBtn: { x: number; y: number; w: number; h: number } | null = null;
 
 // ── Returning Player Report ─────────────────────────────────────────────────
 
@@ -6540,11 +6541,24 @@ export function drawSkinPicker(r: Renderer): void {
     }
   }
 
-  // Subtitle hint
-  ctx.fillStyle = '#8899aa';
-  ctx.font = '11px monospace';
+  // Cancel button at bottom
+  const cancelW = 80;
+  const cancelH = 24;
+  const cancelX = px + panelW / 2 - cancelW / 2;
+  const cancelY = py + panelH - 40;
+  roundedRect(ctx, cancelX, cancelY, cancelW, cancelH, 4);
+  ctx.fillStyle = 'rgba(80, 40, 40, 0.8)';
+  ctx.fill();
+  roundedRect(ctx, cancelX, cancelY, cancelW, cancelH, 4);
+  ctx.strokeStyle = '#ff6644';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = '#ffaa88';
+  ctx.font = 'bold 10px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText('You can change this later in settings', px + panelW / 2, py + panelH - 14);
+  ctx.textBaseline = 'middle';
+  ctx.fillText('CANCEL', cancelX + cancelW / 2, cancelY + cancelH / 2);
+  _skinPickerCancelBtn = { x: cancelX, y: cancelY, w: cancelW, h: cancelH };
 
   ctx.restore();
 }
@@ -6552,6 +6566,20 @@ export function drawSkinPicker(r: Renderer): void {
 /** Hit test the skin picker overlay. Returns true if the picker consumed the tap. */
 export function hitTestSkinPicker(screenX: number, screenY: number): boolean {
   if (!_skinPickerVisible) return false;
+
+  // Check cancel button first
+  if (_skinPickerCancelBtn) {
+    const cb = _skinPickerCancelBtn;
+    if (screenX >= cb.x && screenX <= cb.x + cb.w &&
+        screenY >= cb.y && screenY <= cb.y + cb.h) {
+      _skinPickerVisible = false;
+      _skinPickerBtns = [];
+      _skinPickerPendingBuild = false;
+      _skinPickerCancelBtn = null;
+      playSound('click');
+      return true;
+    }
+  }
 
   for (const btn of _skinPickerBtns) {
     if (screenX >= btn.x && screenX <= btn.x + btn.w &&
