@@ -333,34 +333,36 @@ test.describe('Colony Ship Journey', () => {
     // ═══════════════════════════════════════════════════════════════════════
     // BUILD ORDER — optimized for resource production before expensive builds
     // Dock 3 costs 1500/900/1200 — need high production rates first!
+    // Each step checks if target level already met before upgrading.
     // ═══════════════════════════════════════════════════════════════════════
 
-    // ── Phase 1: Station 2 (unlocks Dock, Warehouse, Shield) ──
-    await upgradeBuilding('station', 1, true);
+    async function upgradeTo(key: string, buttonIndex: number, isSkinnable: boolean, targetLevel: number) {
+      state = await getState(frame);
+      const current = state.buildings?.[key]?.level ?? 0;
+      if (current >= targetLevel) {
+        console.log(`\n── ${key} already at level ${current} (target: ${targetLevel}) — skipping ──`);
+        return;
+      }
+      for (let lvl = current; lvl < targetLevel; lvl++) {
+        await upgradeBuilding(key, buttonIndex, isSkinnable);
+      }
+    }
 
-    // ── Phase 2: Production buildings (generates resources faster) ──
-    await upgradeBuilding('mine', 3, false);       // Mine 1
-    await upgradeBuilding('solar', 4, true);       // Solar 1
-    await upgradeBuilding('hab', 2, true);         // Hab 1
-    await upgradeBuilding('mine', 3, false);       // Mine 2
-    await upgradeBuilding('solar', 4, true);       // Solar 2
-    await upgradeBuilding('hab', 2, true);         // Hab 2
+    // ── Phase 1: Station ≥ 2 (unlocks Dock, Warehouse, Shield) ──
+    await upgradeTo('station', 1, true, 2);
 
-    // ── Phase 3: Warehouse (increase resource cap for Dock 3's 1500 ore cost) ──
-    await upgradeBuilding('warehouse', 5, false);  // Store 1 (cap +500 → 2100)
+    // ── Phase 2: Production buildings level 2 ──
+    await upgradeTo('mine', 3, false, 2);
+    await upgradeTo('solar', 4, true, 2);
+    await upgradeTo('hab', 2, true, 2);
+
+    // ── Phase 3: Warehouse (increase cap for Dock 3's 1500 ore cost) ──
+    await upgradeTo('warehouse', 5, false, 1);
 
     // ── Phase 4: Dock to level 3 ──
     state = await getState(frame);
-    console.log('\n  Resources before Dock 1:', JSON.stringify(state.store));
-    await upgradeBuilding('dock', 6, true);        // Dock 1
-
-    state = await getState(frame);
-    console.log('\n  Resources before Dock 2:', JSON.stringify(state.store));
-    await upgradeBuilding('dock', 6, true);        // Dock 2
-
-    state = await getState(frame);
-    console.log('\n  Resources before Dock 3:', JSON.stringify(state.store));
-    await upgradeBuilding('dock', 6, true);        // Dock 3
+    console.log('\n  Resources before Dock phase:', JSON.stringify(state.store));
+    await upgradeTo('dock', 6, true, 3);
 
     // ── Step 8: Build Colony Ship ──
     console.log('\n── Building Colony Ship ──');
