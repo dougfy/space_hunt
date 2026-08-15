@@ -253,8 +253,8 @@ async function waitForBuildComplete(
 // ─── Full Colony Ship Journey ──────────────────────────────────────────────
 
 test.describe('Colony Ship Journey', () => {
-  // This is a LONG test — 30+ minutes of real build time
-  test.setTimeout(1_800_000); // 30 minutes
+  // This is a LONG test — builds take real time
+  test.setTimeout(2_700_000); // 45 minutes
 
   test('fresh game to colony ship', async ({ page }) => {
     await page.goto(POST_URL, { waitUntil: 'domcontentloaded' });
@@ -280,11 +280,27 @@ test.describe('Colony Ship Journey', () => {
       await pressKey(frame, 'b');
       await frame.page().waitForTimeout(300);
 
-      const s = await getState(frame);
-      const btn = s.buildButtons[buttonIndex - 1];
+      // Wait until button is enabled (resources may need to accumulate)
+      let s = await getState(frame);
+      let btn = s.buildButtons[buttonIndex - 1];
       if (!btn?.enabled) {
-        console.log(`  SKIP — button not enabled (${btn?.label})`);
-        return false;
+        console.log(`  Waiting for resources (button ${btn?.label} not yet enabled)...`);
+        await pressKey(frame, 'Escape'); // close panel while waiting
+        for (let wait = 0; wait < 60 && !btn?.enabled; wait++) {
+          await frame.page().waitForTimeout(10_000);
+          await pressKey(frame, 'b');
+          await frame.page().waitForTimeout(300);
+          s = await getState(frame);
+          btn = s.buildButtons[buttonIndex - 1];
+          if (!btn?.enabled) {
+            await pressKey(frame, 'Escape');
+          }
+        }
+        if (!btn?.enabled) {
+          console.log(`  FAILED — button never enabled after 10 minutes`);
+          return false;
+        }
+        console.log(`  Resources sufficient — proceeding`);
       }
 
       const t0 = Date.now();
@@ -314,31 +330,37 @@ test.describe('Colony Ship Journey', () => {
       return true;
     }
 
-    // ── Step 1: Station → Level 2 ──
+    // ═══════════════════════════════════════════════════════════════════════
+    // BUILD ORDER — optimized for resource production before expensive builds
+    // Dock 3 costs 1500/900/1200 — need high production rates first!
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // ── Phase 1: Station 2 (unlocks Dock, Warehouse, Shield) ──
     await upgradeBuilding('station', 1, true);
 
-    // ── Step 2: Mine → Level 1 ──
-    await upgradeBuilding('mine', 3, false);
+    // ── Phase 2: Production buildings (generates resources faster) ──
+    await upgradeBuilding('mine', 3, false);       // Mine 1
+    await upgradeBuilding('solar', 4, true);       // Solar 1
+    await upgradeBuilding('hab', 2, true);         // Hab 1
+    await upgradeBuilding('mine', 3, false);       // Mine 2
+    await upgradeBuilding('solar', 4, true);       // Solar 2
+    await upgradeBuilding('hab', 2, true);         // Hab 2
 
-    // ── Step 3: Solar → Level 1 ──
-    await upgradeBuilding('solar', 4, true);
+    // ── Phase 3: Warehouse (increase resource cap for Dock 3's 1500 ore cost) ──
+    await upgradeBuilding('warehouse', 5, false);  // Store 1 (cap +500 → 2100)
 
-    // ── Step 4: Hab → Level 1 ──
-    await upgradeBuilding('hab', 2, true);
+    // ── Phase 4: Dock to level 3 ──
+    state = await getState(frame);
+    console.log('\n  Resources before Dock 1:', JSON.stringify(state.store));
+    await upgradeBuilding('dock', 6, true);        // Dock 1
 
-    // ── Step 5: Dock → Level 1 ──
-    await upgradeBuilding('dock', 6, true);
-
-    // ── Step 6: Dock → Level 2 ──
-    // May need to wait for resources
     state = await getState(frame);
     console.log('\n  Resources before Dock 2:', JSON.stringify(state.store));
-    await upgradeBuilding('dock', 6, true);
+    await upgradeBuilding('dock', 6, true);        // Dock 2
 
-    // ── Step 7: Dock → Level 3 ──
     state = await getState(frame);
     console.log('\n  Resources before Dock 3:', JSON.stringify(state.store));
-    await upgradeBuilding('dock', 6, true);
+    await upgradeBuilding('dock', 6, true);        // Dock 3
 
     // ── Step 8: Build Colony Ship ──
     console.log('\n── Building Colony Ship ──');
@@ -352,11 +374,29 @@ test.describe('Colony Ship Journey', () => {
     ).join('  '));
 
     // Find Colony Ship button (typeId = 8)
-    const colonyIdx = state.shipButtons.findIndex(
+    let colonyIdx = state.shipButtons.findIndex(
       (b: { shipTypeId: number }) => b.shipTypeId === 8
     );
     expect(colonyIdx).toBeGreaterThanOrEqual(0);
-    expect(state.shipButtons[colonyIdx].enabled).toBe(true);
+
+    // Wait for colony ship button to become enabled (may need resources)
+    if (!state.shipButtons[colonyIdx].enabled) {
+      console.log('  Waiting for Colony Ship button to enable...');
+      await pressKey(frame, 'Escape');
+      for (let wait = 0; wait < 60; wait++) {
+        await frame.page().waitForTimeout(10_000);
+        await pressKey(frame, 'n');
+        await frame.page().waitForTimeout(300);
+        state = await getState(frame);
+        colonyIdx = state.shipButtons.findIndex(
+          (b: { shipTypeId: number }) => b.shipTypeId === 8
+        );
+        if (colonyIdx >= 0 && state.shipButtons[colonyIdx].enabled) break;
+        await pressKey(frame, 'Escape');
+      }
+      expect(state.shipButtons[colonyIdx].enabled).toBe(true);
+      console.log('  Colony Ship button now enabled');
+    }
 
     const t0 = Date.now();
     await pressKey(frame, String(colonyIdx + 1));
