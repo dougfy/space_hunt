@@ -3808,7 +3808,7 @@ function drawBuildPanelBody(
     const progress = serverBuilding && serverBuilding.status === 'UPGRADING' && serverBuilding.completeAt != null
       ? Math.max(0, Math.min(100, Math.floor(((ext.buildMs - Math.max(0, serverBuilding.completeAt - nowMs)) / ext.buildMs) * 100)))
       : 0;
-    const enabled = stationReady && canAfford && !isActive && !isMaxLevel && !isLocked && activeBuildCount === 0;
+    const enabled = stationReady && canAfford && !isActive && !isMaxLevel && !isLocked && activeBuildCount === 0 && !_buildCooldown;
     const tierLabel = `${ext.label} ${toRoman(nextLevel)}`;
 
     // Compute lock reason from prereqs or station-cap
@@ -6149,10 +6149,16 @@ const MOCK_EXTENSION_DEFS: MockExtensionState[] = [
 
 let _lastExtensionButtons: ExtensionButton[] = [];
 let _lockFlash: { action: string; expireMs: number } | null = null;
+let _buildCooldown = false; // Set after successful build, cleared on next economy poll
 
 /** Show a build/action error message in the panel area (visible for 4 seconds). */
 export function showBuildError(message: string): void {
   _lockFlash = { action: message, expireMs: Date.now() + 4000 };
+}
+
+/** Mark that a build was just started — disables all buttons until next economy refresh. */
+export function setBuildCooldown(): void {
+  _buildCooldown = true;
 }
 
 type ServerEconomySnapshot = {
@@ -6661,6 +6667,7 @@ export function setServerStarEconomy(snapshot: ServerEconomySnapshot, isOwner?: 
 
   }
   _serverEconomyByStarIndex.set(snapshot.starIndex, snapshot);
+  _buildCooldown = false; // Economy refreshed — re-enable build buttons
   // Update complete charges from server
   if (snapshot.completeCharges != null) {
     _completeCharges = snapshot.completeCharges;
