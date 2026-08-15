@@ -68,9 +68,15 @@ async function pressKey(frame: import('@playwright/test').Frame, key: string) {
   }, key);
 }
 
-const WIREFRAME_DESC = `WIREFRAME style means: objects are drawn as GREEN LINE OUTLINES on a dark/black background. No filled colors, no shading, no realistic textures — just geometric green lines forming the shape. Think retro vector graphics or oscilloscope displays.`;
+const WIREFRAME_DESC = `WIREFRAME style means: objects are drawn as GREEN LINE OUTLINES on a dark/black background. No filled colors, no shading, no realistic textures — just geometric green lines forming the shape. Think retro vector graphics. A wireframe PLANET looks like a green circle outline with horizontal green lines across it (like latitude lines on a globe).`;
 
-const RASTER_DESC = `RASTER/REALISTIC style means: objects are drawn as FILLED, COLORFUL SPRITES with shading, detail, and realistic appearance. They have multiple colors (not just green), filled shapes, surface textures or patterns, and look like actual artwork rather than wire outlines.`;
+const RASTER_DESC = `RASTER/REALISTIC style means: objects are drawn as FILLED, COLORFUL SPRITES with shading, detail, and realistic appearance. They have multiple colors (not just green), filled shapes, surface textures or patterns. A raster PLANET looks like a filled colored sphere (orange, brown, blue, etc.) with surface detail — NOT just green outlines. A raster STATION looks like a detailed metallic structure with colors and shading.`;
+
+const OVERLAP_CHECK = `ALSO CHECK FOR THESE OVERLAY/COLLISION ISSUES:
+- Any orange badge or icon (like a pulsing "!" notification) overlapping text in the top-left info panel
+- Any label text overlapping other label text (e.g., "Red Raider (S1)" colliding with "Red Raider")
+- Any feature type label (like the word "Station") overlapping the feature name label above it (like "Druen I Station")
+- Report any overlapping elements you find, even if the main visual check passes.`;
 
 test.describe('TEST-006: Scan Reveals Raster Graphics (Desktop)', () => {
   test.setTimeout(120_000);
@@ -118,13 +124,17 @@ test.describe('TEST-006: Scan Reveals Raster Graphics (Desktop)', () => {
     const beforeScan = await verifier.verify(
       frame,
       'before-scan-station',
-      `Look at the STATION (the structure near the ship, usually labeled "Station" or with the player docked at it). Is it drawn in WIREFRAME style or RASTER/REALISTIC style?
+      `Look at the STATION (the structure near the ship, usually labeled "Station" or with the player docked at it) AND the PLANET (the large circular body).
 
 ${WIREFRAME_DESC}
 
 ${RASTER_DESC}
 
-Answer: Is the station currently WIREFRAME (green outlines only)? If yes, this PASSES. If the station already looks realistic/filled/colorful, this FAILS (it should be wireframe BEFORE scanning).`
+Is the station currently WIREFRAME (green outlines only)? Is the planet WIREFRAME (green circle with horizontal lines)?
+If both are wireframe, this PASSES.
+If either already looks realistic/filled/colorful (raster), this FAILS — they should be wireframe BEFORE scanning.
+
+${OVERLAP_CHECK}`
     );
     console.log('[BEFORE SCAN]', beforeScan.pass ? '✓ wireframe' : '✗ not wireframe', '—', beforeScan.explanation);
 
@@ -141,15 +151,19 @@ Answer: Is the station currently WIREFRAME (green outlines only)? If yes, this P
     const afterStationScan = await verifier.verify(
       frame,
       'after-scan-station',
-      `Look at the STATION (the structure where the player is docked). Is it now drawn in RASTER/REALISTIC style?
+      `Look at the STATION (the structure where the player is docked) AND the PLANET (the large circular body).
 
 ${WIREFRAME_DESC}
 
 ${RASTER_DESC}
 
-The station should NOW look REALISTIC — filled colors, detailed artwork, shading, not just green outlines. The PLANET nearby may still be wireframe (green circle with lines). 
+After scanning the station, the STATION should now be RASTER/REALISTIC. The PLANET may still be wireframe (green circle with horizontal lines) OR may also be raster (filled colored sphere).
 
-Answer: Is the station now RASTER/REALISTIC (filled, colorful, detailed) while the planet is still WIREFRAME (green outline)? If the station is realistic and planet is wireframe, this PASSES. If both are still wireframe or both are realistic, this FAILS.`
+Respond about: 1) Is the station raster? 2) Is the planet wireframe or raster?
+If station is raster, this PASSES regardless of planet state.
+If station is still wireframe, this FAILS.
+
+${OVERLAP_CHECK}`
     );
     console.log('[AFTER STATION SCAN]', afterStationScan.pass ? '✓' : '✗', '—', afterStationScan.explanation);
 
@@ -182,7 +196,9 @@ ${RASTER_DESC}
 
 After scanning both, BOTH the station AND the planet should now be RASTER/REALISTIC — filled with colors, detailed artwork, shading, looking like actual sprites rather than green line outlines.
 
-Answer: Are BOTH the station and planet now RASTER/REALISTIC (filled, colorful, detailed)? If both look realistic/detailed, this PASSES. If either is still just green wireframe outlines, this FAILS.`
+Answer: Are BOTH the station and planet now RASTER/REALISTIC (filled, colorful, detailed)? If both look realistic/detailed, this PASSES. If either is still just green wireframe outlines, this FAILS.
+
+${OVERLAP_CHECK}`
     );
     console.log('[AFTER PLANET SCAN]', afterPlanetScan.pass ? '✓' : '✗', '—', afterPlanetScan.explanation);
 
