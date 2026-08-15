@@ -47,8 +47,6 @@ const DISCOVERY_TABLE: DiscoveryEntry[] = [
   { kind: 'anomaly',   weight: 3,  minAmount: 1,   maxAmount: 1,   label: 'Anomalous signal detected',            icon: 'anm' },
 ];
 
-const TOTAL_WEIGHT = DISCOVERY_TABLE.reduce((s, e) => s + e.weight, 0);
-
 // ── Seeded RNG (same as game/math.ts stableHash + createRng pattern) ────────
 
 function explorationHash(text: string): number {
@@ -72,17 +70,32 @@ function seededFloat(seed: number): number {
  * @param galaxySeed - world seed (shared by all players)
  * @param starIndex - index of the star system
  * @param bodyIndex - index of the body within the system
+ * @param isStation - if true, exclude ore from results (stations yield tech/artifacts, not raw ore)
  */
-export function rollDiscovery(galaxySeed: number, starIndex: number, bodyIndex: number): DiscoveryResult {
+export function rollDiscovery(galaxySeed: number, starIndex: number, bodyIndex: number, isStation = false): DiscoveryResult {
   const key = `explore:${galaxySeed}:${starIndex}:${bodyIndex}`;
   const baseSeed = explorationHash(key);
 
+  // Build effective table — stations yield tech/artifacts (no raw resources)
+  const table = isStation
+    ? DISCOVERY_TABLE.map(e => {
+        // Stations don't yield raw resources — redistribute to tech/lore
+        if (e.kind === 'ore' || e.kind === 'food' || e.kind === 'fuel') return { ...e, weight: 0 };
+        if (e.kind === 'energy') return { ...e, weight: 5, label: 'Power cell salvaged', icon: 'nrg' }; // small energy find OK
+        if (e.kind === 'blueprint') return { ...e, weight: e.weight + 20 };
+        if (e.kind === 'artifact') return { ...e, weight: e.weight + 12 };
+        if (e.kind === 'anomaly') return { ...e, weight: e.weight + 5 };
+        return e;
+      })
+    : DISCOVERY_TABLE;
+  const totalWeight = table.reduce((s, e) => s + e.weight, 0);
+
   // First roll: pick discovery kind
   const kindRoll = seededFloat(baseSeed);
-  const scaled = kindRoll * TOTAL_WEIGHT;
+  const scaled = kindRoll * totalWeight;
   let cumulative = 0;
-  let entry: DiscoveryEntry = DISCOVERY_TABLE[0]!;
-  for (const e of DISCOVERY_TABLE) {
+  let entry: DiscoveryEntry = table[0]!;
+  for (const e of table) {
     cumulative += e.weight;
     if (scaled < cumulative) {
       entry = e;

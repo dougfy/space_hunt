@@ -6212,8 +6212,8 @@ export function drawReportBadge(r: Renderer, elapsedTime: number): void {
   const { ctx } = r;
 
   // Position: upper-left, below the info panel text
-  const badgeW = 28;
-  const badgeH = 28;
+  const badgeW = 52;
+  const badgeH = 22;
   const bx = 8;
   const by = 140;
 
@@ -6233,18 +6233,11 @@ export function drawReportBadge(r: Renderer, elapsedTime: number): void {
   ctx.globalAlpha = 1;
 
   // Icon
-  ctx.font = 'bold 14px monospace';
+  ctx.font = 'bold 9px monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ffffff';
-  ctx.fillText('!', bx + badgeW / 2, by + badgeH / 2);
-
-  // Count badge
-  if (_reportItems.length > 1) {
-    ctx.font = 'bold 7px monospace';
-    ctx.fillStyle = '#ffdd88';
-    ctx.fillText(`${_reportItems.length}`, bx + badgeW / 2, by + badgeH - 3);
-  }
+  ctx.fillText('STATUS', bx + badgeW / 2, by + badgeH / 2);
 
   ctx.restore();
 }
@@ -6252,7 +6245,7 @@ export function drawReportBadge(r: Renderer, elapsedTime: number): void {
 /** Hit test the report badge. Returns true if clicked. */
 export function hitTestReportBadge(px: number, py: number): boolean {
   if (!_reportBadgeVisible) return false;
-  const bx = 8, by = 140, bw = 28, bh = 28;
+  const bx = 8, by = 140, bw = 52, bh = 22;
   return px >= bx && px <= bx + bw && py >= by && py <= by + bh;
 }
 
