@@ -594,11 +594,11 @@ export function drawPlayerLabel(
 
   // Shadow for readability
   ctx.fillStyle = 'rgba(0,0,0,0.9)';
-  ctx.fillText(name, sc.x + 1, sc.y + 30);
+  ctx.fillText(name, sc.x + 1, sc.y + 36);
 
   // Main text
   ctx.fillStyle = '#4fffb0';
-  ctx.fillText(name, sc.x, sc.y + 29);
+  ctx.fillText(name, sc.x, sc.y + 35);
   ctx.restore();
 }
 
@@ -6204,11 +6204,11 @@ export function drawReportBadge(r: Renderer, elapsedTime: number): void {
   if (!_reportBadgeVisible || _reportVisible) return;
   const { ctx } = r;
 
-  // Position: upper-left, just below ship status area
+  // Position: upper-left, below the info panel text
   const badgeW = 28;
   const badgeH = 28;
   const bx = 8;
-  const by = 84;
+  const by = 140;
 
   // Pulsing glow
   _reportBadgePulse = 0.5 + 0.5 * Math.sin(elapsedTime * 3);
@@ -6245,7 +6245,7 @@ export function drawReportBadge(r: Renderer, elapsedTime: number): void {
 /** Hit test the report badge. Returns true if clicked. */
 export function hitTestReportBadge(px: number, py: number): boolean {
   if (!_reportBadgeVisible) return false;
-  const bx = 8, by = 84, bw = 28, bh = 28;
+  const bx = 8, by = 140, bw = 28, bh = 28;
   return px >= bx && px <= bx + bw && py >= by && py <= by + bh;
 }
 

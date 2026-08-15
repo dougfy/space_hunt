@@ -1283,7 +1283,7 @@ function render(): void {
         y: g.curWorld.y - gameState.worldOffset.y,
       };
       drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot, g.skinId);
-      drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
+      if (g.name !== gameState.playerName) drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
     }
 
     // Draw ship (hidden in fleet mode)
@@ -1341,7 +1341,7 @@ function render(): void {
         y: g.curWorld.y - gameState.worldOffset.y,
       };
       drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot, g.skinId);
-      drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
+      if (g.name !== gameState.playerName) drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
     }
 
     // Draw ship
@@ -1413,7 +1413,7 @@ function render(): void {
         continue;
       }
       drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot, g.skinId);
-      drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
+      if (g.name !== gameState.playerName) drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
     }
 
     // Draw fleet ships near station (or near planet if no station)
@@ -1523,7 +1523,7 @@ function render(): void {
       y: g.curWorld.y - gameState.worldOffset.y,
     };
     drawGhostShip(renderer, camera, localPos, g.curAng, g.shape, g.slot, g.skinId);
-    drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
+    if (g.name !== gameState.playerName) drawGhostLabel(renderer, camera, localPos, g.name, g.slot);
   }
 
   // Draw local ship
