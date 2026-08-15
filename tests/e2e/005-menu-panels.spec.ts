@@ -118,89 +118,68 @@ If the panel is clearly displayed and all content is readable without overlap, t
 test.describe('TEST-005: Menu Panel Readability (Desktop)', () => {
   test.setTimeout(120_000);
 
-  test('STATUS panel is clearly readable', async ({ page }) => {
-    const verifier = new VisualVerifier('005-panels-status');
+  test('all panels are clearly readable', async ({ page }) => {
+    const verifier = new VisualVerifier('005-panels');
     const frame = await setupDesktopMode(page);
 
-    await pressKey(frame, 't'); // Open STATUS panel
-    await page.waitForTimeout(1_500);
+    // Wait for economy data to confirm game is fully loaded
+    for (let i = 0; i < 20; i++) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const s = await frame.evaluate(() => (globalThis as any).__testState?.()) as Record<string, unknown> | null;
+      if (s?.store) break;
+      await page.waitForTimeout(2_000);
+    }
 
-    // Verify panel opened
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = await frame.evaluate(() => (globalThis as any).__testState?.()) as Record<string, unknown> | null;
-    console.log('[STATUS] openPanel:', state?.openPanel);
+    const panels = [
+      { key: 't', name: 'STATUS', index: 0 },
+      { key: 'b', name: 'BUILD', index: 1 },
+      { key: 'n', name: 'SHIPS', index: 2 },
+      { key: 'f', name: 'FLEET', index: 3 },
+      { key: 'c', name: 'COMS', index: 4 },
+    ];
 
-    const result = await verifier.verify(frame, 'status-panel', PANEL_PROMPT('STATUS'));
+    const results: Array<{ name: string; pass: boolean; explanation: string }> = [];
+
+    for (const panel of panels) {
+      // Open panel
+      await pressKey(frame, panel.key);
+      await page.waitForTimeout(1_500);
+
+      // Verify it opened
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const state = await frame.evaluate(() => (globalThis as any).__testState?.()) as Record<string, unknown> | null;
+      const openPanel = state?.openPanel;
+      console.log(`[${panel.name}] openPanel: ${openPanel} (expected: ${panel.index})`);
+
+      if (openPanel !== panel.index) {
+        console.log(`[${panel.name}] ⚠ Panel did not open — skipping visual check`);
+        results.push({ name: panel.name, pass: false, explanation: `Panel did not open (openPanel=${openPanel})` });
+        // Close whatever is open before trying next
+        await pressKey(frame, 'Escape');
+        await page.waitForTimeout(500);
+        continue;
+      }
+
+      // Visual verify
+      const result = await verifier.verify(frame, `${panel.name.toLowerCase()}-panel`, PANEL_PROMPT(panel.name));
+      console.log(`[${panel.name}]`, result.pass ? '✓' : '✗', result.explanation);
+      results.push({ name: panel.name, pass: result.pass, explanation: result.explanation });
+
+      // Close panel before opening next
+      await pressKey(frame, 'Escape');
+      await page.waitForTimeout(500);
+    }
+
+    // Write report
     verifier.writeReport();
-    console.log('[STATUS]', result.pass ? '✓' : '✗', result.explanation);
-    expect(result.pass).toBe(true);
-  });
 
-  test('BUILD panel is clearly readable', async ({ page }) => {
-    const verifier = new VisualVerifier('005-panels-build');
-    const frame = await setupDesktopMode(page);
+    // Summary
+    console.log('\n=== PANEL RESULTS ===');
+    for (const r of results) {
+      console.log(`  ${r.name}: ${r.pass ? '✓' : '✗'} ${r.explanation}`);
+    }
 
-    await pressKey(frame, 'b'); // Open BUILD panel
-    await page.waitForTimeout(1_500);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = await frame.evaluate(() => (globalThis as any).__testState?.()) as Record<string, unknown> | null;
-    console.log('[BUILD] openPanel:', state?.openPanel);
-
-    const result = await verifier.verify(frame, 'build-panel', PANEL_PROMPT('BUILD'));
-    verifier.writeReport();
-    console.log('[BUILD]', result.pass ? '✓' : '✗', result.explanation);
-    expect(result.pass).toBe(true);
-  });
-
-  test('SHIPS panel is clearly readable', async ({ page }) => {
-    const verifier = new VisualVerifier('005-panels-ships');
-    const frame = await setupDesktopMode(page);
-
-    await pressKey(frame, 'n'); // Open SHIPS panel
-    await page.waitForTimeout(1_500);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = await frame.evaluate(() => (globalThis as any).__testState?.()) as Record<string, unknown> | null;
-    console.log('[SHIPS] openPanel:', state?.openPanel);
-
-    const result = await verifier.verify(frame, 'ships-panel', PANEL_PROMPT('SHIPS'));
-    verifier.writeReport();
-    console.log('[SHIPS]', result.pass ? '✓' : '✗', result.explanation);
-    expect(result.pass).toBe(true);
-  });
-
-  test('FLEET panel is clearly readable', async ({ page }) => {
-    const verifier = new VisualVerifier('005-panels-fleet');
-    const frame = await setupDesktopMode(page);
-
-    await pressKey(frame, 'f'); // Open FLEET panel
-    await page.waitForTimeout(1_500);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = await frame.evaluate(() => (globalThis as any).__testState?.()) as Record<string, unknown> | null;
-    console.log('[FLEET] openPanel:', state?.openPanel);
-
-    const result = await verifier.verify(frame, 'fleet-panel', PANEL_PROMPT('FLEET'));
-    verifier.writeReport();
-    console.log('[FLEET]', result.pass ? '✓' : '✗', result.explanation);
-    expect(result.pass).toBe(true);
-  });
-
-  test('COMS panel is clearly readable', async ({ page }) => {
-    const verifier = new VisualVerifier('005-panels-coms');
-    const frame = await setupDesktopMode(page);
-
-    await pressKey(frame, 'c'); // Open COMS panel
-    await page.waitForTimeout(1_500);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = await frame.evaluate(() => (globalThis as any).__testState?.()) as Record<string, unknown> | null;
-    console.log('[COMS] openPanel:', state?.openPanel);
-
-    const result = await verifier.verify(frame, 'coms-panel', PANEL_PROMPT('COMS'));
-    verifier.writeReport();
-    console.log('[COMS]', result.pass ? '✓' : '✗', result.explanation);
-    expect(result.pass).toBe(true);
+    const allPassed = results.every(r => r.pass);
+    expect(allPassed).toBe(true);
   });
 });
