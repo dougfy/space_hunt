@@ -105,7 +105,87 @@ test.describe('Expanded Mode', () => {
 
     console.log('[EXPANDED] Expanded frame URL:', expandedFrame.url());
 
-    // 5. Dismiss any "Preview across devices" overlay from Devvit
+    // 5. Switch to Fullscreen mode via the Devvit preview dropdown
+    //    The toolbar shows "Mobile ∨" — click it, then select "Fullscreen"
+    console.log('[EXPANDED] Switching to Fullscreen mode...');
+    let switched = false;
+
+    // Try multiple approaches to find and click the Mobile dropdown
+    const dropdownSelectors = [
+      'button:has-text("Mobile")',
+      '[aria-label*="device"] >> text=Mobile',
+      'select:has(option[value="mobile"])',
+      '.device-selector',
+      'text=Mobile >> xpath=..',
+    ];
+
+    for (const selector of dropdownSelectors) {
+      try {
+        const el = page.locator(selector).first();
+        if (await el.isVisible({ timeout: 2_000 })) {
+          await el.click();
+          await page.waitForTimeout(500);
+          // Now click Fullscreen
+          const fsOption = page.locator('text=Fullscreen').first();
+          if (await fsOption.isVisible({ timeout: 2_000 })) {
+            await fsOption.click();
+            await page.waitForTimeout(2_000);
+            switched = true;
+            console.log('[EXPANDED] ✓ Switched to Fullscreen via:', selector);
+            break;
+          }
+        }
+      } catch { /* try next */ }
+    }
+
+    // Also try: the dropdown might be a <select> element
+    if (!switched) {
+      try {
+        const select = page.locator('select').first();
+        if (await select.isVisible({ timeout: 2_000 })) {
+          await select.selectOption({ label: 'Fullscreen' });
+          await page.waitForTimeout(2_000);
+          switched = true;
+          console.log('[EXPANDED] ✓ Switched to Fullscreen via <select>');
+        }
+      } catch { /* not a select */ }
+    }
+
+    // Try looking in all frames for the dropdown
+    if (!switched) {
+      for (const frame of page.frames()) {
+        try {
+          const mobileBtn = frame.locator('text=Mobile').first();
+          if (await mobileBtn.isVisible({ timeout: 1_000 })) {
+            await mobileBtn.click();
+            await page.waitForTimeout(500);
+            const fsBtn = frame.locator('text=Fullscreen').first();
+            if (await fsBtn.isVisible({ timeout: 1_000 })) {
+              await fsBtn.click();
+              await page.waitForTimeout(2_000);
+              switched = true;
+              console.log('[EXPANDED] ✓ Switched to Fullscreen via frame:', frame.url().substring(0, 60));
+              break;
+            }
+          }
+        } catch { /* try next frame */ }
+      }
+    }
+
+    if (!switched) {
+      console.log('[EXPANDED] ⚠ Could not switch to Fullscreen — dropdown not found');
+      // Log page content for debugging
+      const allText = await page.locator('body').innerText().catch(() => '');
+      if (allText.includes('Mobile')) {
+        console.log('[EXPANDED] "Mobile" text IS on page but not clickable with tried selectors');
+      }
+    }
+
+    // Re-find the game frame after mode switch (iframe may have reloaded)
+    expandedFrame = await findGameFrame(page);
+    console.log('[EXPANDED] Game frame after fullscreen:', expandedFrame.url());
+
+    // 6. Dismiss any "Preview across devices" overlay from Devvit
     try {
       const gotItBtn = page.locator('button:has-text("Got it")').first();
       if (await gotItBtn.isVisible({ timeout: 3_000 })) {
@@ -150,13 +230,11 @@ test.describe('Expanded Mode', () => {
       console.log('[EXPANDED] Game state not available — proceeding with visual check only');
     }
 
-    // 7. Visual verification — take full page screenshot to show context
-    //    Note: Devvit expanded mode renders in a narrow column (Reddit platform limitation).
-    //    We verify the GAME renders correctly within its container.
+    // 8. Visual verification — game should now be in full-screen/desktop width
     const result1 = await verifier.verify(
       expandedFrame,
       'expanded-game-loaded',
-      'A space game is rendering correctly. The game canvas should show a dark space background with a station, planet, or ship visible. Panel tabs (icons on the right side like BUILD, SHIPS, STATUS, FLEET, COMS) should be present. HUD information like star name, resources, fuel, or orbit status should be displayed. The game should look functional and playable.'
+      'A space game is rendering at FULL WIDTH (wide landscape aspect ratio, not narrow mobile). The game canvas should fill the available width showing a dark space background with a station, planet, or ship. Panel tabs (BUILD, SHIPS, STATUS, FLEET, COMS) should be visible on the right side. HUD text like star name, fuel, or orbit status should be displayed. If it appears in a narrow portrait/mobile layout, this FAILS.'
     );
 
     // 7. If docked, verify dock panel elements
