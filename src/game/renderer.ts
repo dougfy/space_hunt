@@ -3805,8 +3805,10 @@ function drawBuildPanelBody(
       : false;
     const isActive = serverBuilding ? serverBuilding.status === 'UPGRADING' : false;
     const isLocked = serverBuilding ? serverBuilding.status === 'LOCKED' : true;
+    // Actual build duration matches server: 120s + (targetLevel - 1) × 60s, converted to ms
+    const actualBuildMs = (120 + (nextLevel - 1) * 60) * 1000;
     const progress = serverBuilding && serverBuilding.status === 'UPGRADING' && serverBuilding.completeAt != null
-      ? Math.max(0, Math.min(100, Math.floor(((ext.buildMs - Math.max(0, serverBuilding.completeAt - nowMs)) / ext.buildMs) * 100)))
+      ? Math.max(0, Math.min(100, Math.floor(((actualBuildMs - Math.max(0, serverBuilding.completeAt - nowMs)) / actualBuildMs) * 100)))
       : 0;
     const enabled = stationReady && canAfford && !isActive && !isMaxLevel && !isLocked && activeBuildCount === 0 && !_buildCooldown;
     const tierLabel = `${ext.label} ${toRoman(nextLevel)}`;
@@ -7022,9 +7024,11 @@ export function getTestState(): {
     skinPickerVisible: _skinPickerVisible,
     buildings: econ ? Object.fromEntries(
       Object.entries(econ.buildings).map(([k, v]) => {
-        const ext = MOCK_EXTENSION_DEFS.find(d => d.key === k);
-        const progress = v.status === 'UPGRADING' && v.completeAt != null && ext
-          ? Math.max(0, Math.min(100, Math.floor(((ext.buildMs - Math.max(0, v.completeAt - nowMs)) / ext.buildMs) * 100)))
+        // Actual build duration matches server: 120s + (targetLevel - 1) × 60s
+        const targetLvl = v.level + 1;
+        const buildDurMs = (120 + (targetLvl - 1) * 60) * 1000;
+        const progress = v.status === 'UPGRADING' && v.completeAt != null
+          ? Math.max(0, Math.min(100, Math.floor(((buildDurMs - Math.max(0, v.completeAt - nowMs)) / buildDurMs) * 100)))
           : undefined;
         const entry: { level: number; status: string; completeAt: number | null; skinId?: string; progress?: number } = {
           level: v.level, status: v.status, completeAt: v.completeAt,
