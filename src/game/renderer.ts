@@ -3864,8 +3864,9 @@ function drawBuildPanelBody(
         ctx.font = '6px monospace';
       }
     } else if (isActive) {
+      const remainingSec = serverBuilding?.completeAt != null ? Math.max(0, Math.ceil((serverBuilding.completeAt - nowMs) / 1000)) : 0;
       ctx.fillStyle = G_MED;
-      ctx.fillText(`${progress}%`, bx + extBtnW / 2, by + 18);
+      ctx.fillText(`${progress}% (${remainingSec}s)`, bx + extBtnW / 2, by + 18);
       const barX = bx + 4;
       const barY = by + 30;
       const barW = extBtnW - 8;
