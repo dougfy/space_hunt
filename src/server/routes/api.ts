@@ -531,6 +531,122 @@ api.post('/admin/reset-all', requireDev, async (c) => {
   return c.json({ ok: true, usersCleared: cleared, claimsCleared: claimKeys.length, verify: { profileKeys: Object.keys(verifyProfile), claims: Object.keys(verifyClaims) } });
 });
 
+/** Admin: set a player's game state directly (for testing). */
+api.post('/admin/set-state', requireDev, async (c) => {
+  const body = await c.req.json<{
+    username: string;
+    starIndex: number;
+    buildings?: Partial<Record<string, number>>; // { station: 4, dock: 3, mine: 2, ... } → set levels
+    resources?: Partial<{ ore: number; food: number; energy: number; fuel: number }>;
+    ships?: Array<{ typeId: number; count: number }>;
+    completeCharges?: number;
+    discoveredStars?: number[];
+  }>();
+
+  if (!body.username || body.starIndex == null) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'username and starIndex required' }, 400);
+  }
+
+  const { username, starIndex } = body;
+  const profileKey = `profile:${username}`;
+  const starKey = `s:${starIndex}`;
+
+  // Load or create economy profile
+  const rawEcon = await redis.hGet(profileKey, 'economy');
+  const econProfile = rawEcon ? JSON.parse(rawEcon) : { stars: {}, homeStar: starIndex };
+
+  // Ensure star entry exists
+  if (!econProfile.stars[starKey]) {
+    econProfile.stars[starKey] = {
+      store: { ore: 640, food: 640, energy: 640, fuel: 0 },
+      rates: { ore: 0, food: 0, energy: 0, fuel: 0 },
+      cap: 1600,
+      buildings: {
+        station: { level: 1, status: 'ACTIVE', completeAt: null },
+        mine: { level: 0, status: 'READY', completeAt: null },
+        solar: { level: 0, status: 'READY', completeAt: null },
+        hab: { level: 0, status: 'READY', completeAt: null },
+        warehouse: { level: 0, status: 'LOCKED', completeAt: null },
+        dock: { level: 0, status: 'LOCKED', completeAt: null },
+        shield: { level: 0, status: 'LOCKED', completeAt: null },
+        cannon: { level: 0, status: 'LOCKED', completeAt: null },
+        refinery: { level: 0, status: 'LOCKED', completeAt: null },
+      },
+      lastTickMs: Date.now(),
+    };
+  }
+
+  const star = econProfile.stars[starKey];
+
+  // Set building levels
+  if (body.buildings) {
+    for (const [type, level] of Object.entries(body.buildings)) {
+      if (star.buildings[type] && typeof level === 'number') {
+        star.buildings[type].level = level;
+        star.buildings[type].status = level > 0 ? 'ACTIVE' : 'READY';
+        star.buildings[type].completeAt = null;
+      }
+    }
+    // Re-evaluate lock status based on new levels
+    const stationLevel = star.buildings.station?.level ?? 0;
+    const prereqs: Record<string, number> = { warehouse: 2, dock: 2, shield: 2, cannon: 3, refinery: 2 };
+    for (const [type, reqStation] of Object.entries(prereqs)) {
+      if (star.buildings[type]) {
+        const bLevel = star.buildings[type].level;
+        if (bLevel === 0 && stationLevel >= reqStation) {
+          star.buildings[type].status = 'READY';
+        } else if (bLevel === 0 && stationLevel < reqStation) {
+          star.buildings[type].status = 'LOCKED';
+        }
+      }
+    }
+  }
+
+  // Set resources
+  if (body.resources) {
+    if (body.resources.ore != null) star.store.ore = body.resources.ore;
+    if (body.resources.food != null) star.store.food = body.resources.food;
+    if (body.resources.energy != null) star.store.energy = body.resources.energy;
+    if (body.resources.fuel != null) star.store.fuel = body.resources.fuel;
+  }
+
+  // Update lastTickMs so resources don't jump on next poll
+  star.lastTickMs = Date.now();
+
+  // Save economy
+  econProfile.homeStar = econProfile.homeStar ?? starIndex;
+  await redis.hSet(profileKey, { economy: JSON.stringify(econProfile) });
+
+  // Set ships
+  if (body.ships) {
+    const shipsData = { ships: body.ships, building: null };
+    const rawShips = await redis.hGet(profileKey, 'ships');
+    const shipsProfile = rawShips ? JSON.parse(rawShips) : { stars: {} };
+    shipsProfile.stars[starKey] = shipsData;
+    await redis.hSet(profileKey, { ships: JSON.stringify(shipsProfile) });
+  }
+
+  // Set complete charges
+  if (body.completeCharges != null) {
+    const chargeKey = `complete_charges:${username.toLowerCase()}`;
+    await redis.set(chargeKey, body.completeCharges.toString());
+  }
+
+  // Set discovered stars
+  if (body.discoveredStars) {
+    await redis.hSet(profileKey, { discoveredStars: JSON.stringify(body.discoveredStars) });
+  }
+
+  console.log(`[ADMIN] set-state for ${username} star=${starIndex}:`, JSON.stringify({
+    buildings: body.buildings,
+    resources: body.resources,
+    ships: body.ships,
+    charges: body.completeCharges,
+  }));
+
+  return c.json({ ok: true, starIndex, username });
+});
+
 /** Save a user's profile (ship name + shape). */
 api.post('/profile', async (c) => {
   const body = await c.req.json<SaveProfileRequest>();

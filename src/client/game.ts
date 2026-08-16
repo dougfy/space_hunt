@@ -118,6 +118,9 @@ const _t0 = performance.now();
 const username = context.username ?? 'pilot';
 const postId = context.postId ?? 'standalone:dev';
 let hasTraded = false;
+// Expose Reddit username for test automation (display name may differ)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__REDDIT_USERNAME__ = username;
 console.log(`[PERF] context resolved in ${(performance.now() - _t0).toFixed(0)}ms`);
 
 // Set version in settings panel (Vite replaces __APP_VERSION__ in JS modules)
