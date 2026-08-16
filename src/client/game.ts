@@ -850,6 +850,8 @@ async function refreshForeignFleet() {
           const idx = parseInt(key.replace('s:', ''), 10);
           if (!Number.isNaN(idx) && gs.galaxy.stars[idx]) {
             const star = gs.galaxy.stars[idx];
+            // Never override player's own stars with foreign ownership
+            if (star.owner === 'player' || idx === gs.galaxy.homeStarIndex) continue;
             // Always store claimedBy so economy poll uses correct owner
             star.claimedBy = val.owner;
             if (star.discoveryLevel !== 'none') {
@@ -1172,6 +1174,8 @@ async function pollEconomy() {
               const idx = parseInt(key.replace('s:', ''), 10);
               if (!Number.isNaN(idx) && gs2.galaxy.stars[idx]) {
                 const star = gs2.galaxy.stars[idx];
+                // Never override player's own stars with foreign ownership
+                if (star.owner === 'player' || idx === gs2.galaxy.homeStarIndex) continue;
                 // Always store claimedBy so economy poll uses correct owner
                 star.claimedBy = val.owner;
                 if (star.discoveryLevel !== 'none') {
@@ -1439,7 +1443,10 @@ async function pollEconomy() {
     // Check claimedBy directly — it's set even before owner is marked 'foreign'
     // (covers the case where player navigates to a star before claims are visually applied).
     const viewedStar = gs.galaxy.stars[starIndex];
-    const econUsername = (viewedStar?.owner !== 'player' && viewedStar?.claimedBy) ? viewedStar.claimedBy : username;
+    const isHomeStar = starIndex === gs.galaxy.homeStarIndex;
+    // Never load foreign economy for our own home star (bots visiting shouldn't override)
+    const econUsername = (!isHomeStar && viewedStar?.owner !== 'player' && viewedStar?.claimedBy) ? viewedStar.claimedBy : username;
+    console.log(`[ECON-POLL] star=${starIndex} owner=${viewedStar?.owner} claimedBy=${viewedStar?.claimedBy} econUser=${econUsername} myUser=${username} isHome=${isHomeStar}`);
     const _tBldg = performance.now();
     let buildingsUrl = `/api/buildings?username=${encodeURIComponent(econUsername)}&starIndex=${starIndex}`;
     // Send our active skin when polling our own star so the server saves it as preferredSkinId

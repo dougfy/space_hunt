@@ -6653,6 +6653,9 @@ export function clearShieldCharging(): void {
 }
 
 export function setServerStarEconomy(snapshot: ServerEconomySnapshot, isOwner?: boolean): void {
+  // Debug: log building status on every economy update
+  const bSummary = Object.entries(snapshot.buildings).map(([k, v]) => `${k}:L${v.level}/${v.status}`).join(' ');
+  console.log(`[ECON] star=${snapshot.starIndex} isOwner=${isOwner} buildings=[${bSummary}]`);
   // Detect building completions: was UPGRADING, now ACTIVE → play sound (only for owner)
   const prev = _serverEconomyByStarIndex.get(snapshot.starIndex);
   if (isOwner && prev?.buildings && snapshot.buildings) {
@@ -6667,6 +6670,7 @@ export function setServerStarEconomy(snapshot: ServerEconomySnapshot, isOwner?: 
 
   }
   _serverEconomyByStarIndex.set(snapshot.starIndex, snapshot);
+  if (_buildCooldown) console.log('[ECON] buildCooldown cleared');
   _buildCooldown = false; // Economy refreshed — re-enable build buttons
   // Update complete charges from server
   if (snapshot.completeCharges != null) {
