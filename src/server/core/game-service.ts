@@ -33,9 +33,12 @@ import type {
   SaveProfileRequest,
   ShotItem,
   ShotsResponse,
+  StarBuildingState,
   ToggleShieldResponse,
   UpgradeShipRequest,
   UpgradeShipResponse,
+  ReportItem,
+  ReturningReport,
 } from '../../shared/api';
 import { normalizeSharedShipShape } from '../../shared/api';
 import {
@@ -64,6 +67,7 @@ const DEFAULT_STORE: ResourceStore = { ore: 640, food: 640, energy: 640, fuel: 0
 type StoredEconomyProfile = {
   stars: Record<string, StarEconomyState>;
   homeStar?: number;
+  preferredSkinId?: string;
 };
 
 function starKey(starIndex: number): string {
@@ -175,6 +179,8 @@ export type RedisGameStore = {
   hDel(key: string, fields: string[]): Promise<unknown>;
   get(key: string): Promise<string | undefined>;
   set(key: string, value: string): Promise<unknown>;
+  del(key: string): Promise<unknown>;
+  zRange(key: string, min: number, max: number, options?: { by: 'score' }): Promise<Array<{ member: string; score: number }>>;
 };
 
 type StoredPose = PoseUpdateRequest & { ts: number };
@@ -201,6 +207,7 @@ export async function storePose(
     tier: body.tier ?? 0,
     starIndex: body.starIndex ?? -1,
     bodyIndex: body.bodyIndex ?? -1,
+    skinId: body.skinId,
   } satisfies StoredPose);
   await store.hSet(hashKey, { [sid]: value });
 }
@@ -243,6 +250,7 @@ export async function listRoomPoses(
       y: data.y,
       angle: data.angle,
       shape: normalizeSharedShipShape(data.shape),
+      skinId: data.skinId,
     });
 
     // Bot poses: compute realistic movement from time alone
@@ -441,6 +449,17 @@ export async function loadProfile(
   if (raw.journeyDone === '1') {
     result.journeyDone = true;
   }
+  if (raw.coachStep) {
+    result.coachStep = raw.coachStep;
+  }
+  if (raw.wireframePref === '1') {
+    result.wireframePref = true;
+  }
+  if (raw.scannedBodies) {
+    try {
+      result.scannedBodies = JSON.parse(raw.scannedBodies);
+    } catch { /* ignore bad data */ }
+  }
   return result;
 }
 
@@ -449,10 +468,33 @@ export async function loadStarEconomy(
   username: string,
   starIndex: number,
   now = Date.now(),
+  callerSkinId?: string,
 ): Promise<StarEconomyResponse> {
   const economy = await loadEconomyProfile(store, username);
   const key = starKey(starIndex);
   const hadExistingData = key in economy.stars;
+
+  // Save caller's skin preference if provided (owner polling their own star)
+  // Don't overwrite a real skin preference with 'procedural' (localStorage may reset between sessions)
+  if (callerSkinId && hadExistingData) {
+    if (callerSkinId !== 'procedural' || !economy.preferredSkinId || economy.preferredSkinId === 'procedural') {
+      economy.preferredSkinId = callerSkinId;
+    }
+  }
+
+  // Infer preferredSkinId from existing buildings if still unset or 'procedural'
+  if ((!economy.preferredSkinId || economy.preferredSkinId === 'procedural') && hadExistingData) {
+    const starBuildings = economy.stars[key]?.buildings;
+    if (starBuildings) {
+      for (const b of Object.values(starBuildings) as StarBuildingState[]) {
+        if (b.level > 0 && b.skinId && b.skinId !== 'procedural') {
+          economy.preferredSkinId = b.skinId;
+          break;
+        }
+      }
+    }
+  }
+
   const rich = starRichness(starIndex, economy);
   const base = normalizeStarState(economy.stars[key] ?? {}, now, rich);
   const reconciledBuildings = reconcileStarBuildings(base.buildings, now);
@@ -481,19 +523,32 @@ export async function loadStarEconomy(
   const chargeKey = `complete_charges:${username.toLowerCase()}`;
   const charges = parseInt(await store.get(chargeKey) ?? '0', 10);
 
+  // Stamp preferredSkinId onto ALL buildings in response (response only, not persisted).
+  // This ensures all buildings display with the user's current skin preference,
+  // even if they were originally built with a different skin.
+  const responseBuildings = { ...ticked.buildings } as Record<BuildType, typeof ticked.buildings[BuildType]>;
+  const fallbackSkin = economy.preferredSkinId ?? 'raster';
+  for (const bt of Object.keys(responseBuildings) as BuildType[]) {
+    const b = responseBuildings[bt];
+    if (b.level > 0) {
+      responseBuildings[bt] = { ...b, skinId: fallbackSkin };
+    }
+  }
+
   return {
     starKey: key,
     starIndex,
     store: ticked.store,
     rates: ticked.rates,
     cap: ticked.cap,
-    buildings: ticked.buildings,
+    buildings: responseBuildings,
     shieldRaised: ticked.shieldRaised,
     defenseScore: computeDefenseScore(ticked.buildings, ticked.shieldRaised),
     lastTickMs: ticked.lastTickMs,
     completeCharges: charges,
     richness: rich,
     ...(activeBuffs.length > 0 ? { buffs: activeBuffs } : {}),
+    ...(economy.preferredSkinId ? { preferredSkinId: economy.preferredSkinId } : {}),
   };
 }
 
@@ -615,6 +670,7 @@ export async function startBuildingUpgrade(
     level: building.level,
     status: 'UPGRADING',
     completeAt: now + getBuildingDurationSeconds(body.buildType, targetLevel) * 1000 * buildMult,
+    skinId: body.skinId,
   };
   const nextCap = computeResourceCapFromBuildings(nextBuildings);
   const nextState: StarEconomyState = {
@@ -627,6 +683,10 @@ export async function startBuildingUpgrade(
   };
 
   economy.stars[key] = nextState;
+  // Also save skin preference when building/upgrading (skip procedural to protect real prefs)
+  if (body.skinId && body.skinId !== 'procedural') {
+    economy.preferredSkinId = body.skinId;
+  }
   await saveEconomyProfile(store, body.username, economy);
 
   return {
@@ -669,6 +729,9 @@ export async function saveProfile(
   if (body.discoveredStars !== undefined) fields.discoveredStars = JSON.stringify(body.discoveredStars);
   if (body.enhancedProbeStars !== undefined) fields.enhancedProbeStars = JSON.stringify(body.enhancedProbeStars);
   if (body.journeyDone !== undefined) fields.journeyDone = body.journeyDone ? '1' : '0';
+  if (body.coachStep !== undefined) fields.coachStep = body.coachStep;
+  if (body.wireframePref !== undefined) fields.wireframePref = body.wireframePref ? '1' : '0';
+  if ((body as Record<string, unknown>).scannedBodies !== undefined) fields.scannedBodies = JSON.stringify((body as Record<string, unknown>).scannedBodies);
   if (Object.keys(fields).length > 0) {
     await store.hSet(`profile:${body.username}`, fields);
   }
@@ -2011,4 +2074,249 @@ export async function getAdminPlayerStats(
   // Sort by playtime descending
   players.sort((a, b) => b.playtimeSeconds - a.playtimeSeconds);
   return { players };
+}
+
+// ── Returning Player Report ─────────────────────────────────────────────────
+
+const LAST_SEEN_FIELD = 'lastSeen';
+const LAST_STORE_FIELD = 'lastStore';
+
+/** Record player's last-seen timestamp and store snapshot (call on login). */
+export async function recordLastSeen(
+  store: RedisGameStore,
+  username: string,
+): Promise<number> {
+  const profileKey = `profile:${username}`;
+  const prevRaw = await store.hGet(profileKey, LAST_SEEN_FIELD);
+  const prevMs = prevRaw ? parseInt(prevRaw, 10) : 0;
+
+  // Snapshot current resource stores before updating lastSeen
+  const economy = await loadEconomyProfile(store, username);
+  const storeSnapshot: Record<string, { ore: number; food: number; energy: number; fuel: number }> = {};
+  for (const [sk, starData] of Object.entries(economy.stars)) {
+    if (starData.store) {
+      storeSnapshot[sk] = { ...starData.store };
+    }
+  }
+
+  await store.hSet(profileKey, {
+    [LAST_SEEN_FIELD]: Date.now().toString(),
+    [LAST_STORE_FIELD]: JSON.stringify(storeSnapshot),
+  });
+
+  return prevMs;
+}
+
+/** Build a returning player report based on what happened since lastSeen. */
+export async function buildReturningReport(
+  store: RedisGameStore,
+  username: string,
+  lastSeenMs: number,
+  postId?: string,
+): Promise<ReturningReport> {
+  const items: ReportItem[] = [];
+  const now = Date.now();
+  const awaySeconds = lastSeenMs > 0 ? Math.floor((now - lastSeenMs) / 1000) : 0;
+
+  // Skip report if player was away less than 2 minutes
+  if (awaySeconds < 120) return { items: [], awaySeconds };
+
+  const economy = await loadEconomyProfile(store, username);
+  const profileKey = `profile:${username}`;
+
+  // ── Build completions: check each star's buildings ──
+  const { BUILDING_CATALOG } = await import('../../shared/buildings');
+  for (const [sk, starData] of Object.entries(economy.stars)) {
+    if (!starData.buildings) continue;
+    const starIdx = parseInt(sk.replace('s:', ''), 10);
+    for (const [buildType, building] of Object.entries(starData.buildings)) {
+      const b = building as StarBuildingState;
+      if (b.completeAt && b.completeAt > lastSeenMs && b.completeAt <= now) {
+        const label = BUILDING_CATALOG[buildType as BuildType]?.label ?? buildType;
+        items.push({
+          icon: '\u2302',
+          text: `${label} LV${b.level} completed (star #${starIdx})`,
+          category: 'build',
+        });
+      }
+    }
+  }
+
+  // ── Ship build completions ──
+  const shipsRaw = await store.hGet(profileKey, 'ships');
+  if (shipsRaw) {
+    try {
+      const shipsProfile = JSON.parse(shipsRaw) as { stars?: Record<string, { building?: { typeId: number; completeAt: number } | null }> };
+      if (shipsProfile.stars) {
+        for (const [, starShips] of Object.entries(shipsProfile.stars)) {
+          if (starShips.building && starShips.building.completeAt > lastSeenMs && starShips.building.completeAt <= now) {
+            items.push({
+              icon: '\u2708',
+              text: 'Ship construction completed',
+              category: 'build',
+            });
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  // ── Resource accumulation since last login ──
+  const lastStoreRaw = await store.hGet(profileKey, LAST_STORE_FIELD);
+  if (lastStoreRaw) {
+    try {
+      const lastStores = JSON.parse(lastStoreRaw) as Record<string, { ore: number; food: number; energy: number; fuel: number }>;
+      let totalOre = 0, totalFood = 0, totalEnergy = 0, totalFuel = 0;
+      for (const [sk, starData] of Object.entries(economy.stars)) {
+        if (!starData.store) continue;
+        const prev = lastStores[sk];
+        if (!prev) continue;
+        const rich = starRichness(parseInt(sk.replace('s:', ''), 10), economy);
+        const normalized = normalizeStarState(starData, now, rich);
+        const ticked = tickStarEconomy(normalized, now);
+        totalOre += Math.max(0, Math.floor(ticked.store.ore - prev.ore));
+        totalFood += Math.max(0, Math.floor(ticked.store.food - prev.food));
+        totalEnergy += Math.max(0, Math.floor(ticked.store.energy - prev.energy));
+        totalFuel += Math.max(0, Math.floor(ticked.store.fuel - prev.fuel));
+      }
+      const parts: string[] = [];
+      if (totalOre > 0) parts.push(`+${totalOre} ore`);
+      if (totalFood > 0) parts.push(`+${totalFood} food`);
+      if (totalEnergy > 0) parts.push(`+${totalEnergy} energy`);
+      if (totalFuel > 0) parts.push(`+${totalFuel} fuel`);
+      if (parts.length > 0) {
+        items.push({
+          icon: '\u25A0',
+          text: `Resources gained: ${parts.join(', ')}`,
+          category: 'resources',
+        });
+      }
+    } catch { /* ignore parse errors */ }
+  }
+
+  // ── Phase 2: Visitors & Rumors from audit log ──
+  if (postId && lastSeenMs > 0) {
+    try {
+      const auditKey = `audit:${postId}`;
+      const entries = await store.zRange(auditKey, lastSeenMs, now, { by: 'score' });
+      const userLower = username.toLowerCase();
+
+      // Get player's claimed stars to detect visitors
+      const claims = await getClaimedStars(store, postId);
+      const myStarIndices = new Set(
+        claims.filter(c => c.username.toLowerCase() === userLower).map(c => c.starIndex),
+      );
+
+      const visitorsSet = new Set<string>();
+      const rumors: string[] = [];
+
+      for (const entry of entries) {
+        try {
+          const data = JSON.parse(entry.member) as { t: number; event: string; user?: string; [k: string]: unknown };
+          const eventUser = (data.user ?? '') as string;
+          if (eventUser.toLowerCase() === userLower) continue; // skip own events
+
+          if (data.event === 'login' && typeof data.homeStar === 'number') {
+            // Check if this player logged in at one of our stars (neighbor detection)
+            // Actually login doesn't mean they visited our star — they logged into their own
+            // We'll detect visitors via sensor alerts instead (future)
+          }
+
+          if (data.event === 'build' && eventUser) {
+            const buildType = data.type as string;
+            const catalog = (await import('../../shared/buildings')).BUILDING_CATALOG;
+            const label = catalog[buildType as BuildType]?.label ?? buildType;
+            rumors.push(`${eventUser} built a ${label}`);
+          }
+
+          if (data.event === 'colonize' && eventUser) {
+            const starName = data.starName as string | undefined;
+            rumors.push(`${eventUser} colonized ${starName ?? 'a new star'}`);
+          }
+
+          if (data.event === 'ship_buy' && eventUser) {
+            rumors.push(`${eventUser} acquired a new ship`);
+          }
+        } catch { /* skip malformed entries */ }
+      }
+
+      // Check sensor alerts for actual visitors to player's stars
+      for (const starIdx of myStarIndices) {
+        const alertKey = `sensor:${postId}:${userLower}:${starIdx}`;
+        const alerts = await store.zRange(alertKey, lastSeenMs, now, { by: 'score' });
+        for (const alert of alerts) {
+          try {
+            const data = JSON.parse(alert.member) as { intruder: string; [k: string]: unknown };
+            if (data.intruder) visitorsSet.add(data.intruder);
+          } catch { /* skip */ }
+        }
+      }
+
+      // Add visitor items
+      if (visitorsSet.size > 0) {
+        const visitors = [...visitorsSet].slice(0, 5);
+        items.push({
+          icon: '\u26A0',
+          text: `Visitors detected: ${visitors.join(', ')}`,
+          category: 'visitor',
+        });
+      }
+
+      // Add rumor items (limit to 5)
+      for (const rumor of rumors.slice(0, 5)) {
+        items.push({
+          icon: '\u2055',
+          text: rumor,
+          category: 'rumor',
+        });
+      }
+    } catch (err) {
+      console.error('[REPORT] audit/rumor error:', err);
+    }
+  }
+
+  // ── Phase 3: Leaderboard rank change ──
+  if (postId) {
+    try {
+      const lastRankRaw = await store.hGet(profileKey, 'lastRank');
+      const lastRank = lastRankRaw ? parseInt(lastRankRaw, 10) : 0;
+      // Compute current rank from player stats
+      const statsResponse = await getAdminPlayerStats(store, postId);
+      const sorted = statsResponse.players.sort((a, b) => b.totalBuildingLevels - a.totalBuildingLevels);
+      const currentRank = sorted.findIndex(p => p.username.toLowerCase() === username.toLowerCase()) + 1;
+      if (currentRank > 0) {
+        // Save current rank for next login comparison
+        await store.hSet(profileKey, { lastRank: currentRank.toString() });
+        if (lastRank > 0 && lastRank !== currentRank) {
+          const direction = currentRank < lastRank ? 'up' : 'down';
+          const arrow = currentRank < lastRank ? '\u2191' : '\u2193';
+          items.push({
+            icon: '\u2606',
+            text: `Rank: #${lastRank} \u2192 #${currentRank} (${arrow} moved ${direction})`,
+            category: 'resources',
+          });
+        }
+      }
+    } catch { /* ignore leaderboard errors */ }
+  }
+
+  // ── Away time summary ──
+  if (awaySeconds > 3600) {
+    const hours = Math.floor(awaySeconds / 3600);
+    const mins = Math.floor((awaySeconds % 3600) / 60);
+    items.unshift({
+      icon: '\u23F0',
+      text: `You were away for ${hours}h ${mins}m`,
+      category: 'resources',
+    });
+  } else if (awaySeconds > 120) {
+    const mins = Math.floor(awaySeconds / 60);
+    items.unshift({
+      icon: '\u23F0',
+      text: `You were away for ${mins} minutes`,
+      category: 'resources',
+    });
+  }
+
+  return { items, awaySeconds };
 }

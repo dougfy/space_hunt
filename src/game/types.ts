@@ -30,7 +30,7 @@ export interface FuelPod {
   kind: import('./constants').PodKind;
 }
 
-export type ShipShape = 'scout' | 'destroyer' | 'frigate' | 'battleship' | 'cruiser' | 'dreadnought';
+export type ShipShape = 'scout' | 'destroyer' | 'frigate' | 'battleship' | 'cruiser' | 'dreadnought' | 'colony';
 
 export enum ZoomState {
   Normal,
@@ -45,6 +45,7 @@ export interface Ghost {
   targetWorld: Vec2;
   targetAng: number;
   shape: ShipShape;
+  skinId?: string | undefined;
   curWorld: Vec2;
   curAng: number;
   hasCur: boolean;
@@ -77,7 +78,8 @@ export interface DockState {
   docked: boolean;
   targetType: DockTargetType;
   bodyIndex: number;          // index in galaxy.bodies (-1 for star)
-  featureIndex: number;       // index in body.features (-1 if docked to planet/star itself)
+  featureIndex: number;       // index in the dockable feature list (-1 if docked to planet/star itself)
+  featureType?: string;       // FeatureType of the docked feature, drives the action set
   targetName: string;
   targetLabel: string;        // e.g. "Terrestrial Planet", "Mine", "Station"
   approachTimer: number;      // 0–1 lerp progress during docking animation

@@ -368,7 +368,7 @@ api.post('/stars/reset', requireDev, async (c) => {
   const users = new Set(Object.values(allClaims).map(v => v.split(':')[0]));
   for (const user of users) {
     try {
-      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition', 'journeyDone', 'scannedBodies']);
+      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'lastPosition', 'journeyDone', 'coachStep', 'scannedBodies']);
     } catch { /* ignore */ }
   }
 
@@ -398,7 +398,7 @@ api.post('/admin/reset-all', requireDev, async (c) => {
   for (const user of users) {
     try {
       // Profile fields: economy, ships, stats, discoveredStars, enhancedProbeStars, lastPosition, journeyDone, scannedBodies
-      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'enhancedProbeStars', 'lastPosition', 'journeyDone', 'scannedBodies']);
+      await redis.hDel(`profile:${user}`, ['economy', 'ships', 'stats', 'discoveredStars', 'enhancedProbeStars', 'lastPosition', 'journeyDone', 'coachStep', 'scannedBodies']);
 
       // Achievements
       const achKeys = Object.keys(await redis.hGetAll(`achievements:${user}`));

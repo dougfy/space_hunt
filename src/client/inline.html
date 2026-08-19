@@ -12,6 +12,19 @@
       html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
       body { background: url('/loading.png') center/cover no-repeat #000; }
       #game-canvas { width: 100%; height: 100%; display: block; }
+      #loading-screen {
+        position: absolute; inset: 0; z-index: 9999;
+        background: #000; display: none; flex-direction: column;
+        align-items: center; justify-content: center; gap: 16px;
+      }
+      #loading-screen .title { color: #4fffb0; font: bold 18px monospace; letter-spacing: 2px; }
+      #loading-screen .spinner {
+        width: 32px; height: 32px; border: 3px solid rgba(79,255,176,0.2);
+        border-top-color: #4fffb0; border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      #loading-screen .sub { color: #3a7a5a; font: 10px monospace; }
+      @keyframes spin { to { transform: rotate(360deg); } }
 
       /* Overlay UI (inline mode only) */
       #overlay {
@@ -46,6 +59,10 @@
       }
       .icon-btn:hover { background: rgba(79, 255, 176, 0.1); }
       .icon-btn.active { background: rgba(79, 255, 176, 0.2); }
+      @media (max-width: 600px) {
+        .icon-btn { width: 28px; height: 28px; font-size: 13px; border-width: 1.5px; }
+        #icon-bar { gap: 4px; top: 8px; right: 8px; }
+      }
 
       #help-panel {
         display: none;
@@ -87,8 +104,13 @@
         color: #4fffb0;
         border-bottom-color: #4fffb0;
       }
-      .help-tab-content { display: none; }
+      .help-tab-content { display: none; max-height: min(60vh, 500px); }
       .help-tab-content.active { display: block; }
+      @media (max-width: 600px) {
+        .help-tab-btn { padding: 4px 6px; font-size: 8px; }
+        #help-panel { top: 42px; right: 4px; padding: 8px 10px; width: min(96vw, 360px); max-height: min(85vh, 580px); }
+        .help-tab-content { max-height: min(70vh, 480px); }
+      }
       #help-panel.visible { display: block; }
       #help-panel h3 {
         color: #4fffb0;
@@ -99,6 +121,26 @@
       }
       .help-row { margin: 3px 0; color: #5a9a7a; }
       .help-row b { color: #8ff7cf; }
+      .help-nav-btn {
+        flex: 1;
+        background: rgba(79, 255, 176, 0.1);
+        border: 1px solid rgba(79, 255, 176, 0.4);
+        color: #4fffb0;
+        font: bold 9px monospace;
+        padding: 6px 8px;
+        cursor: pointer;
+        text-align: center;
+      }
+      .help-nav-btn:hover { background: rgba(79, 255, 176, 0.2); }
+      .tree { font-size: 9px; font-family: monospace; }
+      .tree-node { padding: 2px 6px; margin: 2px 0; border-left: 2px solid rgba(79,255,176,0.3); position: relative; }
+      .tree-children { margin-left: 12px; }
+      .tree-node.station { color: #4fffb0; border-color: #4fffb0; }
+      .tree-node.res { color: #8ff7cf; border-color: #3a7a5a; }
+      .tree-node.dock { color: #64c8ff; border-color: #64c8ff; }
+      .tree-node.ship { color: #aaddff; border-color: #3a5a7a; }
+      .tree-node.defense { color: #ffcc44; border-color: #ffcc44; }
+      .tree-node.combat { color: #ff6644; border-color: #ff6644; }
       .help-block { margin-top: 10px; }
       .help-caption {
         margin: 3px 0 7px;
@@ -317,7 +359,15 @@
         pointer-events: auto;
         min-width: 260px;
         max-height: 80vh;
-        overflow: hidden;
+        overflow-y: auto;
+      }
+      @media (max-width: 600px) {
+        #admin-panel {
+          top: 40px; right: 4px; padding: 6px; min-width: 160px; gap: 2px;
+          max-height: 85vh;
+        }
+        #admin-panel button { font-size: 8px !important; padding: 4px 6px !important; }
+        #admin-panel h3 { font-size: 8px; margin: 0 0 2px 0; }
       }
       #admin-panel.visible { display: flex; }
       #admin-panel h3 {
@@ -414,9 +464,13 @@
   </head>
   <body>
     <canvas id="game-canvas"></canvas>
+    <div id="loading-screen">
+      <div class="title">VALCORDIA SPACE</div>
+      <div class="spinner"></div>
+      <div class="sub">initializing systems...</div>
+    </div>
     <div id="icon-bar">
       <button id="feedback-btn" class="icon-btn" title="Feedback" style="background:rgba(60,50,10,0.8);border-color:#ffcc44;color:#ffcc44;font-size:9px">FB</button>
-      <button id="skin-toggle-btn" class="icon-btn" title="Toggle Skin" style="background:rgba(80,20,120,0.8);border-color:#c090ff;color:#c090ff;font-size:9px">WIRE</button>
       <button id="settings-btn" class="icon-btn" title="Settings">&#x2699;</button>
       <button id="help-btn" class="icon-btn" title="Help">?</button>
       <button id="admin-btn" class="icon-btn" title="Admin" style="background:rgba(80,20,10,0.8);border-color:#ff6644;color:#ff6644">&#x2691;</button>
@@ -446,11 +500,111 @@
     </div>
     <div id="help-panel">
       <div class="help-tabs">
-        <button class="help-tab-btn active" data-help-tab="controls">Controls</button>
+        <button class="help-tab-btn active" data-help-tab="next">Next</button>
+        <button class="help-tab-btn" data-help-tab="gameplay">Guide</button>
+        <button class="help-tab-btn" data-help-tab="controls">Controls</button>
         <button class="help-tab-btn" data-help-tab="buildings">Buildings</button>
         <button class="help-tab-btn" data-help-tab="ships">Ships</button>
+        <button class="help-tab-btn" data-help-tab="tree">Tree</button>
       </div>
-      <div class="help-tab-content active" id="help-tab-controls">
+      <div class="help-tab-content" id="help-tab-tree">
+      <h3>Build Tree</h3>
+      <div class="tree">
+        <div class="tree-node station">Station Lv1
+          <div class="tree-children">
+            <div class="tree-node res">Mine</div>
+            <div class="tree-node res">Solar Array</div>
+            <div class="tree-node res">Habitat</div>
+            <div class="tree-node station">Station Lv2
+              <div class="tree-children">
+                <div class="tree-node res">Warehouse</div>
+                <div class="tree-node dock">Dock T1
+                  <div class="tree-children">
+                    <div class="tree-node ship">Scout</div>
+                    <div class="tree-node ship">Basic Probe</div>
+                    <div class="tree-node dock">Dock T1 Lv3
+                      <div class="tree-children">
+                        <div class="tree-node ship">Destroyer</div>
+                        <div class="tree-node ship">Colony Ship
+                          <div class="tree-children">
+                            <div class="tree-node ship">Freighter</div>
+                          </div>
+                        </div>
+                        <div class="tree-node ship">Enhanced Probe</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="tree-node station">Station Lv3
+                  <div class="tree-children">
+                    <div class="tree-node res">Refinery</div>
+                    <div class="tree-node defense">Shield <span style="font-size:7px;color:#ffcc44">gates solar exit</span>
+                      <div class="tree-children">
+                        <div class="tree-node defense">Cannon</div>
+                        <div class="tree-node combat">Wrecker</div>
+                        <div class="tree-node combat">Raider</div>
+                      </div>
+                    </div>
+                    <div class="tree-node dock">Dock T2
+                      <div class="tree-children">
+                        <div class="tree-node ship">Frigate</div>
+                        <div class="tree-node ship">Battleship</div>
+                      </div>
+                    </div>
+                    <div class="tree-node dock">Dock T3
+                      <div class="tree-children">
+                        <div class="tree-node ship">Cmd Cruiser</div>
+                        <div class="tree-node ship">Dreadnought</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </div>
+      <div class="help-tab-content active" id="help-tab-next">
+      <h3>What's Next?</h3>
+      <button id="replay-tutorial-btn" style="width:100%;background:rgba(80,45,0,0.75);border:1px solid #ffb84d;color:#ffb84d;font:bold 10px monospace;padding:6px 10px;border-radius:4px;cursor:pointer;margin-bottom:8px">↺ REPLAY TUTORIAL</button>
+      <div id="help-next-content">
+        <div class="help-row" style="color:#aaa">Determining your progress...</div>
+      </div>
+      <h3 style="margin-top:10px">Build Tree</h3>
+      <div class="help-caption">Station level unlocks all other structures.</div>
+      <div class="help-row"><b>Station Lv1</b> → Mine, Solar Array, Habitat</div>
+      <div class="help-row"><b>Station Lv2</b> → Warehouse, Dock T1</div>
+      <div class="help-row"><b>Station Lv3</b> → Refinery, Shield, Cannon</div>
+      <div class="help-row"><b>Dock T1 Lv1</b> → Scout, Freighter, Probe</div>
+      <div class="help-row"><b>Dock T1 Lv3</b> → Destroyer, Colony Ship, Raider</div>
+      <div class="help-row"><b>Dock T2</b> → Frigate, Battleship</div>
+      <div class="help-row"><b>Dock T3</b> → Command Cruiser, Dreadnought</div>
+      </div>
+      <div class="help-tab-content" id="help-tab-gameplay">
+      <h3>Getting Started</h3>
+      <div class="help-row">You begin <b>docked</b> at your home star. Build infrastructure, collect resources, and expand.</div>
+      <h3 style="margin-top:8px">First 5 Minutes</h3>
+      <div class="help-row">1. <b>Build a Mine</b> — start producing Ore</div>
+      <div class="help-row">2. <b>Undock</b> — tap UNDOCK to fly around</div>
+      <div class="help-row">3. <b>Collect pods</b> — fly through glowing pods for fuel &amp; resources</div>
+      <div class="help-row">4. <b>Explore</b> — fly near a planet and tap SCAN</div>
+      <div class="help-row">5. <b>Build more</b> — Solar Array for Energy, Habitat for Food</div>
+      <h3 style="margin-top:8px">Resources</h3>
+      <div class="help-row"><b>Ore</b> — from Mines, exploration, pods</div>
+      <div class="help-row"><b>Food</b> — from Habitats, exploration, pods</div>
+      <div class="help-row"><b>Energy</b> — from Solar Arrays, exploration, pods</div>
+      <div class="help-row"><b>Fuel</b> — from Refineries, pods. Required for travel</div>
+      <h3 style="margin-top:8px">Colonization</h3>
+      <div class="help-row">1. Build a <b>Colony Ship</b> at your Dock</div>
+      <div class="help-row">2. Fly to an <b>unclaimed star</b> in Galaxy view</div>
+      <div class="help-row">3. Dock at the station and <b>colonize</b></div>
+      <h3 style="margin-top:8px">Combat</h3>
+      <div class="help-row">Build <b>Shields</b> and <b>Cannons</b> to defend your stars</div>
+      <div class="help-row">Build <b>Raiders</b> to attack other players</div>
+      <div class="help-row">Upgrade your ship: Scout → Destroyer → Frigate → Battleship</div>
+      </div>
+      <div class="help-tab-content" id="help-tab-controls">
       <h3>Controls</h3>
       <div class="help-row"><b>Click</b> — move to target</div>
       <div class="help-row"><b>WASD / Arrows / hjkl</b> — rotate &amp; thrust</div>
@@ -462,118 +616,25 @@
       <div class="help-row">Fly near a belt ring to explore it</div>
       <div class="help-row">Collect fuel pods to keep moving</div>
       </div>
+      <div class="help-row">Collect fuel pods to keep moving</div>
+      </div>
       <div class="help-tab-content" id="help-tab-buildings">
       <div class="help-block">
-        <h3>Build Progression</h3>
-        <div class="help-caption">Station level unlocks higher structure tiers. Mine boosts ore, Solar boosts energy, Hab supports expansion.</div>
-
-        <div class="icon-family">
-          <h4>Station I-VIII</h4>
-          <div class="icon-strip">
-            <div class="icon-card"><img src="/icons/station-level-1.svg" alt="Station I" /><span class="icon-tier">I</span></div>
-            <div class="icon-card"><img src="/icons/station-level-2.svg" alt="Station II" /><span class="icon-tier">II</span></div>
-            <div class="icon-card"><img src="/icons/station-level-3.svg" alt="Station III" /><span class="icon-tier">III</span></div>
-            <div class="icon-card"><img src="/icons/station-level-4.svg" alt="Station IV" /><span class="icon-tier">IV</span></div>
-            <div class="icon-card"><img src="/icons/station-level-5.svg" alt="Station V" /><span class="icon-tier">V</span></div>
-            <div class="icon-card"><img src="/icons/station-level-6.svg" alt="Station VI" /><span class="icon-tier">VI</span></div>
-            <div class="icon-card"><img src="/icons/station-level-7.svg" alt="Station VII" /><span class="icon-tier">VII</span></div>
-            <div class="icon-card"><img src="/icons/station-level-8.svg" alt="Station VIII" /><span class="icon-tier">VIII</span></div>
-          </div>
-        </div>
-
-        <div class="icon-family">
-          <h4>Mine I-VIII</h4>
-          <div class="icon-strip">
-            <div class="icon-card"><img src="/icons/mine-level-1.svg" alt="Mine I" /><span class="icon-tier">I</span></div>
-            <div class="icon-card"><img src="/icons/mine-level-2.svg" alt="Mine II" /><span class="icon-tier">II</span></div>
-            <div class="icon-card"><img src="/icons/mine-level-3.svg" alt="Mine III" /><span class="icon-tier">III</span></div>
-            <div class="icon-card"><img src="/icons/mine-level-4.svg" alt="Mine IV" /><span class="icon-tier">IV</span></div>
-            <div class="icon-card"><img src="/icons/mine-level-5.svg" alt="Mine V" /><span class="icon-tier">V</span></div>
-            <div class="icon-card"><img src="/icons/mine-level-6.svg" alt="Mine VI" /><span class="icon-tier">VI</span></div>
-            <div class="icon-card"><img src="/icons/mine-level-7.svg" alt="Mine VII" /><span class="icon-tier">VII</span></div>
-            <div class="icon-card"><img src="/icons/mine-level-8.svg" alt="Mine VIII" /><span class="icon-tier">VIII</span></div>
-          </div>
-        </div>
-
-        <div class="icon-family">
-          <h4>Solar Array I-VIII</h4>
-          <div class="icon-strip">
-            <div class="icon-card"><img src="/icons/solar-array-level-1.svg" alt="Solar I" /><span class="icon-tier">I</span></div>
-            <div class="icon-card"><img src="/icons/solar-array-level-2.svg" alt="Solar II" /><span class="icon-tier">II</span></div>
-            <div class="icon-card"><img src="/icons/solar-array-level-3.svg" alt="Solar III" /><span class="icon-tier">III</span></div>
-            <div class="icon-card"><img src="/icons/solar-array-level-4.svg" alt="Solar IV" /><span class="icon-tier">IV</span></div>
-            <div class="icon-card"><img src="/icons/solar-array-level-5.svg" alt="Solar V" /><span class="icon-tier">V</span></div>
-            <div class="icon-card"><img src="/icons/solar-array-level-6.svg" alt="Solar VI" /><span class="icon-tier">VI</span></div>
-            <div class="icon-card"><img src="/icons/solar-array-level-7.svg" alt="Solar VII" /><span class="icon-tier">VII</span></div>
-            <div class="icon-card"><img src="/icons/solar-array-level-8.svg" alt="Solar VIII" /><span class="icon-tier">VIII</span></div>
-          </div>
-        </div>
-
-        <div class="icon-family">
-          <h4>Hab I-VIII</h4>
-          <div class="icon-strip">
-            <div class="icon-card"><img src="/icons/hab-level-1.svg" alt="Hab I" /><span class="icon-tier">I</span></div>
-            <div class="icon-card"><img src="/icons/hab-level-2.svg" alt="Hab II" /><span class="icon-tier">II</span></div>
-            <div class="icon-card"><img src="/icons/hab-level-3.svg" alt="Hab III" /><span class="icon-tier">III</span></div>
-            <div class="icon-card"><img src="/icons/hab-level-4.svg" alt="Hab IV" /><span class="icon-tier">IV</span></div>
-            <div class="icon-card"><img src="/icons/hab-level-5.svg" alt="Hab V" /><span class="icon-tier">V</span></div>
-            <div class="icon-card"><img src="/icons/hab-level-6.svg" alt="Hab VI" /><span class="icon-tier">VI</span></div>
-            <div class="icon-card"><img src="/icons/hab-level-7.svg" alt="Hab VII" /><span class="icon-tier">VII</span></div>
-            <div class="icon-card"><img src="/icons/hab-level-8.svg" alt="Hab VIII" /><span class="icon-tier">VIII</span></div>
-          </div>
-        </div>
-
-        <div class="icon-family">
-          <h4>Space Dock T1-T3</h4>
-          <div class="help-caption">Required to build ships. Higher tiers unlock more powerful vessels.</div>
-          <div class="icon-strip">
-            <div class="icon-card"><img src="/icons/dock-level-1.svg" alt="Dock T1" /><span class="icon-tier">T1</span></div>
-            <div class="icon-card"><img src="/icons/dock-level-2.svg" alt="Dock T2" /><span class="icon-tier">T2</span></div>
-            <div class="icon-card"><img src="/icons/dock-level-3.svg" alt="Dock T3" /><span class="icon-tier">T3</span></div>
-          </div>
+        <h3>Buildings <span id="bldg-page-label" style="color:#5a9a7a;font-size:9px"></span></h3>
+        <div id="bldg-page-content"></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="help-nav-btn" id="bldg-prev">◀ Prev</button>
+          <button class="help-nav-btn" id="bldg-next">Next ▶</button>
         </div>
       </div>
       </div>
       <div class="help-tab-content" id="help-tab-ships">
       <div class="help-block">
-        <h3>Ship Types</h3>
-        <div class="help-caption">Ships are built at a Space Dock. Each type has unique stats and dock prerequisites.</div>
-
-        <div class="icon-family">
-          <h4>Dock T1 Lv1</h4>
-          <div class="icon-strip">
-            <div class="icon-card"><img src="/icons/ship-scout.svg" alt="Scout" /><span class="icon-tier">Scout</span></div>
-            <div class="icon-card"><img src="/icons/ship-freighter.svg" alt="Freighter" /><span class="icon-tier">Freighter</span></div>
-            <div class="icon-card"><img src="/icons/ship-probe-basic.svg" alt="B-Probe" /><span class="icon-tier">B-Probe</span></div>
-          </div>
-        </div>
-
-        <div class="icon-family">
-          <h4>Dock T1 Lv3</h4>
-          <div class="icon-strip">
-            <div class="icon-card"><img src="/icons/ship-destroyer.svg" alt="Destroyer" /><span class="icon-tier">Destroyer</span></div>
-            <div class="icon-card"><img src="/icons/ship-colony.svg" alt="Colony Ship" /><span class="icon-tier">Colony</span></div>
-            <div class="icon-card"><img src="/icons/ship-troop-transport.svg" alt="Troop Transport" /><span class="icon-tier">Troop</span></div>
-            <div class="icon-card"><img src="/icons/ship-probe-enhanced.svg" alt="E-Probe" /><span class="icon-tier">E-Probe</span></div>
-            <div class="icon-card"><img src="/icons/ship-wrecker.svg" alt="Wrecker" /><span class="icon-tier">Wrecker</span></div>
-            <div class="icon-card"><img src="/icons/ship-raider.svg" alt="Raider" /><span class="icon-tier">Raider</span></div>
-          </div>
-        </div>
-
-        <div class="icon-family">
-          <h4>Dock T2</h4>
-          <div class="icon-strip">
-            <div class="icon-card"><img src="/icons/ship-frigate.svg" alt="Frigate" /><span class="icon-tier">Frigate</span></div>
-            <div class="icon-card"><img src="/icons/ship-battleship.svg" alt="Battleship" /><span class="icon-tier">Battleship</span></div>
-          </div>
-        </div>
-
-        <div class="icon-family">
-          <h4>Dock T3</h4>
-          <div class="icon-strip">
-            <div class="icon-card"><img src="/icons/ship-command-cruiser.svg" alt="Command Cruiser" /><span class="icon-tier">Cmd Cruiser</span></div>
-            <div class="icon-card"><img src="/icons/ship-dreadnought.svg" alt="Dreadnought" /><span class="icon-tier">Dreadnought</span></div>
-          </div>
+        <h3>Ships <span id="ship-page-label" style="color:#5a9a7a;font-size:9px"></span></h3>
+        <div id="ship-page-content"></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="help-nav-btn" id="ship-prev">◀ Prev</button>
+          <button class="help-nav-btn" id="ship-next">Next ▶</button>
         </div>
       </div>
       </div>
@@ -581,6 +642,10 @@
     <div id="settings-panel">
       <h3>Ship Name</h3>
       <input id="ship-name-input" type="text" maxlength="16" placeholder="pilot" autocomplete="off" />
+      <div style="margin-top:10px;display:flex;align-items:center;gap:6px;font:10px monospace;color:#5a7a6a">
+        <input type="checkbox" id="wireframe-pref-toggle" style="accent-color:#4fffb0" />
+        <label for="wireframe-pref-toggle" style="cursor:pointer">Wireframe Mode (all visuals)</label>
+      </div>
       <h3 style="margin-top:10px">Steering</h3>
       <div id="steering-info" style="font-size:10px;color:#5a7a6a;margin:4px 0">Auto-detects: click=mouse, WASD/arrows=keyboard</div>
       <h3 style="margin-top:10px">Nearby Ships</h3>

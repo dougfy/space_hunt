@@ -7,7 +7,7 @@ console.log(`[STARTUP] game.ts module executing, t=${(performance.now() - ((glob
 import { context, requestExpandedMode } from '@devvit/web/client';
 import { telemetry } from '@devvit/analytics/client/reddit';
 import versionJson from '../../version.json';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingSeedBots, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getTestState, confirmSkinPicker, getSoundHistory, showBuildError, setBuildCooldown } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, startCoach, restoreCoach, getCoachStep, coachAdvance, isCoachActive, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingSeedBots, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getTestState, confirmSkinPicker, getSoundHistory, showBuildError, setBuildCooldown } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
@@ -301,6 +301,7 @@ if (storedSkinId === 'scifi') {
 // Start rendering immediately (splash/preview mode — no networking yet)
 const _tSplash = performance.now();
 const _tPageLoad = performance.now();
+let _profileProcessed = false;
 console.log(`[STARTUP] t=0ms — module init complete, starting splash`);
 // Stop the lightweight splash animation before the game engine takes over
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -397,15 +398,21 @@ function loadPlayerProfile(): Promise<void> {
         setWireframePref(profile.wireframePref);
         console.log(`[PROFILE] wireframe pref: ${profile.wireframePref}`);
       }
-      // Skip journey/tutorial if already completed on server, or if returning player
+      // New players get the coach marks; the legacy idle hints are for players who
+      // have already seen the tutorial and have stalled without doing anything.
       if (profile.journeyDone || profile.lastPosition) {
-        skipJourney();
+        startJourney();
         journeyStart(); // always start a telemetry journey so progress events have a journeyId
         journeyProgress(0.01, 'returned_player');
       } else {
-        startJourney();
+        skipJourney();
+        startCoach();
         journeyStart();
         journeyProgress(0.01, 'game_start');
+      }
+      // Resume an interrupted coach sequence regardless of returning-player status
+      if (profile.coachStep && profile.coachStep !== 'done') {
+        restoreCoach(profile.coachStep);
       }
       // Show/hide debug UI based on server dev mode flag
       const debugDisplay = profile.devMode ? '' : 'none';
@@ -413,8 +420,12 @@ function loadPlayerProfile(): Promise<void> {
         document.getElementById(id)?.style.setProperty('display', debugDisplay);
       }
       console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — profile processing complete`);
+      _profileProcessed = true;
     })
-    .catch((err) => { console.error(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — profile load error:`, err); });
+    .catch((err) => {
+      console.error(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — profile load error:`, err);
+      _profileProcessed = true;
+    });
   
   return profileReady;
 }
@@ -1558,6 +1569,7 @@ let _lastSavedPosition = '';
 let _lastSavedDiscovered = '';
 let _lastSavedVisited = '';
 let _lastSavedJourneyDone = false;
+let _lastSavedCoachStep = '';
 let _resetPerformed = false;
 function savePositionIfChanged() {
   if (_resetPerformed) return; // block saves after admin reset
@@ -1577,11 +1589,13 @@ function savePositionIfChanged() {
   const discoveredKey = discovered.join(',');
   const visitedKey = visited.join(',');
   const journeyDone = isJourneyDone();
+  const coachStep = getCoachStep();
   const posChanged = pos !== _lastSavedPosition;
   const discoveredChanged = discoveredKey !== _lastSavedDiscovered;
   const visitedChanged = visitedKey !== _lastSavedVisited;
   const journeyChanged = journeyDone && !_lastSavedJourneyDone;
-  if (!posChanged && !discoveredChanged && !visitedChanged && !journeyChanged) return;
+  const coachChanged = coachStep !== _lastSavedCoachStep;
+  if (!posChanged && !discoveredChanged && !visitedChanged && !journeyChanged && !coachChanged) return;
   // Track star discovery milestone
   if (discoveredChanged && discovered.length >= 2) {
     journeyProgress(0.75, 'star_discovered');
@@ -1590,6 +1604,7 @@ function savePositionIfChanged() {
   _lastSavedPosition = pos;
   _lastSavedDiscovered = discoveredKey;
   _lastSavedVisited = visitedKey;
+  _lastSavedCoachStep = coachStep;
   if (journeyDone) _lastSavedJourneyDone = true;
   // Always send BOTH fields — Devvit hSet may replace the entire hash
   const payload: Record<string, unknown> = {
@@ -1598,6 +1613,7 @@ function savePositionIfChanged() {
     discoveredStars: discovered,
     enhancedProbeStars: visited,
     journeyDone,
+    coachStep,
     scannedBodies: Array.from(_scannedBodies),
     wireframePref: getWireframePref(),
   };
@@ -2008,10 +2024,23 @@ helpBtn.addEventListener('click', (e) => {
   settingsPanel.classList.remove('visible');
   feedbackPanel.classList.remove('visible');
   helpPanel.classList.toggle('visible');
-  if (helpPanel.classList.contains('visible')) updateHelpNextTab();
+  if (helpPanel.classList.contains('visible')) {
+    updateHelpNextTab();
+    coachAdvance('congrats');
+  }
 });
 helpPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
 helpPanel.addEventListener('click', (e) => e.stopPropagation());
+
+const replayTutorialBtn = document.getElementById('replay-tutorial-btn');
+replayTutorialBtn?.addEventListener('pointerdown', (e) => e.stopPropagation());
+replayTutorialBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  helpPanel.classList.remove('visible');
+  skipJourney(); // legacy idle hints must not compete with the coach
+  startCoach(true);
+  console.log('[COACH] replay requested from help panel');
+});
 
 // ── Help "Next" tab — dynamic suggestions based on player progress ──────────
 function updateHelpNextTab() {
@@ -2131,7 +2160,20 @@ function showFeedbackPanel(): void {
 
 // Auto-show the feedback dialog after 5 minutes of play
 const FEEDBACK_DELAY_MS = 5 * 60 * 1000;
-setTimeout(showFeedbackPanel, FEEDBACK_DELAY_MS);
+let feedbackTimerStarted = false;
+function startFeedbackTimer(): void {
+  if (feedbackTimerStarted) return;
+  feedbackTimerStarted = true;
+  console.log('[FEEDBACK] starting 5 minute timer');
+  setTimeout(showFeedbackPanel, FEEDBACK_DELAY_MS);
+}
+
+// The clock only starts once the tutorial is finished, so it can't interrupt onboarding.
+const feedbackGate = setInterval(() => {
+  if (!_profileProcessed || isCoachActive()) return;
+  clearInterval(feedbackGate);
+  startFeedbackTimer();
+}, 2_000);
 
 feedbackBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 feedbackBtn.addEventListener('click', (e) => {
@@ -2240,6 +2282,7 @@ console.log('[ADMIN] elements:', !!adminBtn, !!adminPanel, !!adminStatus, 'usern
 if (adminBtn && adminPanel && ADMIN_USERS.some(u => u.toLowerCase() === username.toLowerCase())) {
   adminBtn.style.display = 'inline-flex';
   setIsAdmin(true);
+  startCoach(true); // admin always sees the coach marks (review mode)
   console.log('[ADMIN] button shown');
 }
 

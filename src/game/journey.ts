@@ -2,6 +2,7 @@
 // Tracks player's tutorial journey. Shows contextual hints via tab pulse + voice.
 
 import { playSound } from './audio';
+import { ENABLE_JOURNEY_HINTS } from '../shared/feature-flags';
 
 export type JourneyStep = 'first_action' | 'done';
 
@@ -70,6 +71,7 @@ export function journeyAction(): void {
 
 /** Update journey timers. Call each frame with current time. */
 export function updateJourney(): void {
+  if (!ENABLE_JOURNEY_HINTS) return;
   if (_completed || _currentStep === 'done') return;
 
   // Wait for game to stabilize (60 frames) before starting the idle timer
@@ -122,6 +124,7 @@ export function updateJourney(): void {
 
 /** Get the current pulse alpha boost (0.0 = no pulse, 0.0–1.0 = pulse intensity). */
 export function getJourneyPulseAlpha(): number {
+  if (!ENABLE_JOURNEY_HINTS) return 0;
   if (!_pulseActive) return 0;
   const t = (performance.now() - _pulseStartTime) / PULSE_DURATION;
   if (t >= 1) return 0;

@@ -16,7 +16,9 @@ import { getShipSprite, preloadShipSprites } from './ship-sprites';
 import { getAsteroidSurfaceInfo } from './asteroids';
 import type { StarVisualTone } from './ownership-contracts';
 import { playSound } from './audio';
+import { f } from './font';
 import { getJourneyPulseAlpha } from './journey';
+import { isCoachActive, getCoachStep, coachAdvance, dismissCoach, getCoachPulse, ackCoachStep, isCoachAcked } from './coach';
 import { FLEET_COMMAND_SENDER } from '../shared/feature-flags';
 
 // ── View mode helper ────────────────────────────────────────────────────────
@@ -409,7 +411,7 @@ export function drawPlayerFleetAtStar(
         const label = catalogEntry ? `${catalogEntry.name}${entry.count > 1 ? ' x' + entry.count : ''}` : '';
         if (label) {
           ctx.save();
-          ctx.font = 'bold 9px monospace';
+          ctx.font = f(9, 'bold');
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
           ctx.fillStyle = FLEET_COLOR;
@@ -456,7 +458,7 @@ export function drawForeignShipsAtStar(
         const screenH = r.height / (window.devicePixelRatio || 1);
         const labelSc = worldToScreen(pos, camera, screenW, screenH);
         ctx.save();
-        ctx.font = 'bold 10px monospace';
+        ctx.font = f(10, 'bold');
         ctx.textAlign = 'center';
         ctx.textBaseline = 'bottom';
         ctx.fillStyle = ENEMY_COLOR;
@@ -472,7 +474,7 @@ export function drawForeignShipsAtStar(
 export function drawShipStatus(r: Renderer, fuelUnits: number, fuelCapacity: number, shieldPercent: number): void {
   const { ctx } = r;
   ctx.save();
-  ctx.font = 'bold 12px monospace';
+  ctx.font = f(12, 'bold');
   ctx.textBaseline = 'top';
   const y0 = 52; // below system info panel
   const fuelPct = fuelCapacity > 0 ? (fuelUnits / fuelCapacity) * 100 : 0;
@@ -499,7 +501,7 @@ export function drawHUD(
   const screenH = r.height / (window.devicePixelRatio || 1);
 
   ctx.save();
-  ctx.font = 'bold 14px monospace';
+  ctx.font = f(14, 'bold');
   ctx.textBaseline = 'top';
 
   // Fuel display
@@ -514,12 +516,12 @@ export function drawHUD(
 
   if (isLow && lowFuelBlink) {
     ctx.fillStyle = '#FF5A3D';
-    ctx.font = 'bold 12px monospace';
+    ctx.font = f(12, 'bold');
     ctx.fillText('⚠ LOW FUEL', 12, 50);
   }
 
   // Bottom hint bar
-  ctx.font = '11px sans-serif';
+  ctx.font = f(11, '', 'sans-serif');
   ctx.fillStyle = 'rgba(255,255,255,0.6)';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
@@ -548,7 +550,7 @@ export function drawAsteroidLabel(
   if (sc.x < -50 || sc.x > screenW + 50 || sc.y < -20 || sc.y > screenH + 20) return;
 
   ctx.save();
-  ctx.font = 'bold 13px sans-serif';
+  ctx.font = f(13, 'bold', 'sans-serif');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
@@ -575,7 +577,7 @@ export function drawGhostLabel(
   const sc = worldToScreen(pos, camera, screenW, screenH);
 
   ctx.save();
-  ctx.font = '12px sans-serif';
+  ctx.font = f(12, '', 'sans-serif');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillStyle = GHOST_PALETTE[Math.abs(slot - 1) % GHOST_PALETTE.length] ?? G_BRIGHT;
@@ -595,7 +597,7 @@ export function drawPlayerLabel(
   const sc = worldToScreen(pos, camera, screenW, screenH);
 
   ctx.save();
-  ctx.font = 'bold 13px sans-serif';
+  ctx.font = f(13, 'bold', 'sans-serif');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
 
@@ -654,7 +656,7 @@ export function drawShootingHUD(
   // ── Shields percentage (next to fuel, at y=48) ──
   const shieldPercent = Math.round((shooting.hp / PLAYER_MAX_HP) * 100);
   const shieldColor = shieldPercent <= 33 ? '#FF5A3D' : '#4fffb0';
-  ctx.font = 'bold 14px monospace';
+  ctx.font = f(14, 'bold');
   ctx.textBaseline = 'top';
   ctx.fillStyle = shieldColor;
   if (shooting.invulnRemaining > 0) {
@@ -929,7 +931,7 @@ export function drawGalaxyZoomButtons(r: Renderer, currentZoom: number, minZoom:
   ctx.lineWidth = 1.5;
   ctx.stroke();
   ctx.fillStyle = canZoomIn ? G_BRIGHT : G_DIM;
-  ctx.font = 'bold 14px monospace';
+  ctx.font = f(14, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('+', pp.x, pp.y);
@@ -945,7 +947,7 @@ export function drawGalaxyZoomButtons(r: Renderer, currentZoom: number, minZoom:
   ctx.lineWidth = 1.5;
   ctx.stroke();
   ctx.fillStyle = canZoomOut ? G_BRIGHT : G_DIM;
-  ctx.font = 'bold 14px monospace';
+  ctx.font = f(14, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('\u2013', mp.x, mp.y); // en-dash for minus
@@ -1005,7 +1007,7 @@ export function drawSkinToggleButton(r: Renderer): void {
   ctx.lineWidth = 1.5;
   ctx.stroke();
   ctx.fillStyle = '#c090ff';
-  ctx.font = 'bold 11px monospace';
+  ctx.font = f(11, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(label, pos.x + SKIN_BTN_W / 2, pos.y + SKIN_BTN_H / 2);
@@ -1407,13 +1409,44 @@ export function drawGalaxyModeToggle(r: Renderer): void {
   ctx.stroke();
 
   ctx.fillStyle = textColor;
-  ctx.font = 'bold 10px monospace';
+  ctx.font = f(10, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(label, btnX + MODE_BTN_W / 2, btnY + MODE_BTN_H / 2);
   ctx.restore();
 
   _galaxyModeBtn = { x: btnX, y: btnY, w: MODE_BTN_W, h: MODE_BTN_H };
+
+  // Escape hatch — always available so no panel state can strand the player here.
+  const exitY = btnY - MODE_BTN_H - 6;
+  ctx.save();
+  roundedRect(ctx, btnX, exitY, MODE_BTN_W, MODE_BTN_H, 4);
+  ctx.fillStyle = 'rgba(10, 30, 50, 0.85)';
+  ctx.fill();
+  roundedRect(ctx, btnX, exitY, MODE_BTN_W, MODE_BTN_H, 4);
+  ctx.strokeStyle = 'rgba(120, 200, 255, 0.9)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(160, 215, 255, 1.0)';
+  ctx.font = f(10, 'bold');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('◄ SYSTEM', btnX + MODE_BTN_W / 2, exitY + MODE_BTN_H / 2);
+  ctx.restore();
+
+  _galaxyExitBtn = { x: btnX, y: exitY, w: MODE_BTN_W, h: MODE_BTN_H };
+}
+
+let _galaxyExitBtn: { x: number; y: number; w: number; h: number } | null = null;
+
+/** Hit-test the galaxy "return to system" escape hatch. */
+export function hitTestGalaxyExitBtn(sx: number, sy: number): boolean {
+  if (!_galaxyExitBtn) return false;
+  const b = _galaxyExitBtn;
+  if (sx < b.x || sx > b.x + b.w || sy < b.y || sy > b.y + b.h) return false;
+  closeAllPanels();
+  playSound('click');
+  return true;
 }
 
 /** Draw a mode banner at the top of the galaxy view */
@@ -1437,7 +1470,7 @@ export function drawGalaxyModeBanner(r: Renderer): void {
   ctx.stroke();
 
   // Mode label (below the GALAXY tier HUD)
-  ctx.font = '9px monospace';
+  ctx.font = f(9);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillStyle = bannerColor;
@@ -1519,7 +1552,7 @@ export function drawGalaxyView(
 
     if (showNames) {
       ctx.save();
-      ctx.font = 'bold 10px monospace';
+      ctx.font = f(10, 'bold');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       if (tone === 'blue') {
@@ -1539,7 +1572,7 @@ export function drawGalaxyView(
 
       // ── Trading station icon (only after probed/visited) ──
       if (_postId && isTradingStation(_postId, star.index) && star.discoveryLevel !== 'none') {
-        ctx.font = 'bold 9px monospace';
+        ctx.font = f(9, 'bold');
         ctx.fillStyle = 'rgb(255, 215, 0)'; // gold
         ctx.fillText('⚖', sx, sy - rayLen - 6);
       }
@@ -1550,7 +1583,7 @@ export function drawGalaxyView(
         const totalShips = fleetState.ships.reduce((sum, s) => sum + s.count, 0);
         if (totalShips > 0) {
           const badgeText = `${totalShips}`;
-          ctx.font = 'bold 7px monospace';
+          ctx.font = f(7, 'bold');
           const tw = ctx.measureText(badgeText).width;
           const bw = tw + 6;
           const bh = 10;
@@ -1576,7 +1609,7 @@ export function drawGalaxyView(
         const totalForeign = foreignFleet.ships.reduce((sum, s) => sum + s.count, 0);
         if (totalForeign > 0) {
           const fbText = `${totalForeign}`;
-          ctx.font = 'bold 7px monospace';
+          ctx.font = f(7, 'bold');
           const ftw = ctx.measureText(fbText).width;
           const fbw = ftw + 6;
           const fbh = 10;
@@ -1652,18 +1685,18 @@ export function drawGalaxyView(
 
   // ── Sector title (top-left) ──
   ctx.save();
-  ctx.font = 'bold 16px monospace';
+  ctx.font = f(17, 'bold');
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText('KORVUS SECTOR', 14, 14);
-  ctx.font = '11px monospace';
+  ctx.font = f(11);
   ctx.fillStyle = G_MED;
   ctx.fillText('LOCAL STAR MAP', 14, 34);
   // Home star indicator
   const homeStar = galaxy.stars[galaxy.homeStarIndex];
   if (homeStar) {
-    ctx.font = '10px monospace';
+    ctx.font = f(10);
     ctx.fillStyle = 'rgba(79, 255, 176, 0.85)';
     ctx.fillText(`HOME: ${homeStar.name.toUpperCase()}`, 14, 50);
   }
@@ -1733,7 +1766,7 @@ export function drawGalaxyView(
     ctx.fillStyle = 'rgba(0, 10, 5, 0.85)';
     const bannerH = 24;
     ctx.fillRect(0, screenH - bannerH - 4, screenW, bannerH + 4);
-    ctx.font = 'bold 10px monospace';
+    ctx.font = f(10, 'bold');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = G_BRIGHT;
@@ -1758,7 +1791,7 @@ export function drawGalaxyView(
     roundedRect(ctx, cancelX, cancelY, cancelW, 18, 3);
     ctx.stroke();
     ctx.fillStyle = 'rgba(255, 100, 80, 0.9)';
-    ctx.font = 'bold 8px monospace';
+    ctx.font = f(8, 'bold');
     ctx.fillText('CANCEL', cancelX + cancelW / 2, cancelY + 9);
     ctx.restore();
 
@@ -1811,13 +1844,13 @@ export function drawGalaxyView(
       const xBtnY = cardY + 4;
       _starInfoDismissBtn = { x: xBtnX, y: xBtnY, w: xBtnSize, h: xBtnSize };
       ctx.fillStyle = 'rgba(255, 100, 80, 0.7)';
-      ctx.font = 'bold 10px monospace';
+      ctx.font = f(10, 'bold');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('✕', xBtnX + xBtnSize / 2, xBtnY + xBtnSize / 2);
 
       // Star name (hide for undiscovered)
-      ctx.font = 'bold 11px monospace';
+      ctx.font = f(11, 'bold');
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillStyle = G_BRIGHT;
@@ -1842,7 +1875,7 @@ export function drawGalaxyView(
         statusText = 'PROBED';
         statusColor = 'rgba(100, 220, 240, 0.9)'; // cyan
       }
-      ctx.font = '9px monospace';
+      ctx.font = f(9);
       ctx.fillStyle = statusColor;
       ctx.fillText(statusText, cardX + 8, cardY + 24);
 
@@ -1892,7 +1925,7 @@ export function drawGalaxyView(
       roundedRect(ctx, vBtnX, vBtnY, vBtnW, vBtnH, 3);
       ctx.stroke();
       ctx.fillStyle = G_BRIGHT;
-      ctx.font = 'bold 9px monospace';
+      ctx.font = f(9, 'bold');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('\u21D2 VISIT', vBtnX + vBtnW / 2, vBtnY + vBtnH / 2);
@@ -2000,7 +2033,7 @@ export function drawSystemView(
 
   // Star name next to star
   ctx.save();
-  ctx.font = 'bold 11px monospace';
+  ctx.font = f(11, 'bold');
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   if (starTone === 'blue') {
@@ -2046,7 +2079,7 @@ export function drawSystemView(
 
       // Belt name
       ctx.save();
-      ctx.font = '9px monospace';
+      ctx.font = f(9);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
       ctx.fillStyle = G_MED;
@@ -2118,7 +2151,7 @@ export function drawSystemView(
       }
       // Planet name
       ctx.save();
-      ctx.font = '10px monospace';
+      ctx.font = f(10);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = G_BRIGHT;
@@ -2151,7 +2184,7 @@ export function drawSystemView(
               ctx.drawImage(icon, offsetX, offsetY, iconSize, iconSize);
               if (entry.count > 1) {
                 ctx.save();
-                ctx.font = 'bold 7px monospace';
+                ctx.font = f(7, 'bold');
                 ctx.textAlign = 'left';
                 ctx.textBaseline = 'top';
                 ctx.fillStyle = '#4fffb0';
@@ -2170,19 +2203,19 @@ export function drawSystemView(
   ctx.save();
   // Starburst icon
   drawStarburst(ctx, 24, 18, 3, 8, 0.8);
-  ctx.font = 'bold 14px monospace';
+  ctx.font = f(14, 'bold');
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText(`${starName.toUpperCase()} SYSTEM`, 38, 12);
-  ctx.font = '10px monospace';
+  ctx.font = f(10);
   ctx.fillStyle = G_MED;
   ctx.fillText('LOCAL NAVIGATION', 38, 30);
 
   // System metadata
   const starClass = ['O5V', 'B3V', 'A2V', 'F8V', 'G2V', 'K1V', 'M4V'][(star?.seed ?? 0) % 7];
   const sysId = `${starName.substring(0, 2).toUpperCase()}-${((star?.seed ?? 0) % 9000 + 1000)}`;
-  ctx.font = '9px monospace';
+  ctx.font = f(9);
   ctx.fillStyle = G_DIM;
   ctx.fillText(`STAR CLASS: ${starClass}`, 14, 50);
   ctx.fillText(`SYSTEM ID: ${sysId}`, 14, 62);
@@ -2199,7 +2232,7 @@ export function drawSystemView(
   ctx.fillRect(legX, legY, legW, legH);
   drawPanelBorder(ctx, legX, legY, legW, legH);
 
-  ctx.font = 'bold 9px monospace';
+  ctx.font = f(9, 'bold');
   ctx.fillStyle = G_BRIGHT;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
@@ -2210,7 +2243,7 @@ export function drawSystemView(
     { label: 'PLANET', draw: () => { ctx.beginPath(); ctx.arc(legX + 16, legY + 40, 4, 0, Math.PI * 2); ctx.strokeStyle = G_BRIGHT; ctx.lineWidth = 1; ctx.stroke(); } },
     { label: 'BELT', draw: () => { ctx.beginPath(); for (let i = 0; i < 5; i++) { ctx.moveTo(legX + 12 + i * 3, legY + 54); ctx.arc(legX + 12 + i * 3, legY + 54, 1.2, 0, Math.PI * 2); } ctx.fillStyle = G_DIM; ctx.fill(); } },
   ];
-  ctx.font = '9px monospace';
+  ctx.font = f(9);
   ctx.fillStyle = G_MED;
   for (const item of items) {
     item.draw();
@@ -2242,13 +2275,13 @@ export function drawSystemView(
   ctx.fillRect(infoX, infoY, infoW, infoH);
   drawPanelBorder(ctx, infoX, infoY, infoW, infoH);
 
-  ctx.font = 'bold 9px monospace';
+  ctx.font = f(9, 'bold');
   ctx.fillStyle = G_BRIGHT;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillText('SYSTEM INFO', infoX + 8, infoY + 6);
 
-  ctx.font = '8px monospace';
+  ctx.font = f(8);
   ctx.fillStyle = G_MED;
   const planets = bodies.filter(b => b.type === 'planet').length;
   const belts = bodies.filter(b => b.type === 'belt').length;
@@ -2294,7 +2327,7 @@ export function drawDebugBounds(
   ctx.stroke();
   ctx.setLineDash([]);
   // Label
-  ctx.font = '9px monospace';
+  ctx.font = f(9);
   ctx.fillStyle = 'rgba(255, 80, 80, 0.8)';
   ctx.textAlign = 'center';
   ctx.fillText(`EXIT r=${SYSTEM_EXIT_RADIUS}`, starSc.x, starSc.y - exitPx - 6);
@@ -2312,7 +2345,7 @@ export function drawDebugBounds(
     ctx.stroke();
     ctx.setLineDash([]);
     // Label
-    ctx.font = '8px monospace';
+    ctx.font = f(8);
     ctx.fillStyle = 'rgba(80, 255, 180, 0.8)';
     ctx.textAlign = 'center';
     ctx.fillText(`ENTER r=${BODY_ENTER_RADIUS}`, sc.x, sc.y - radiusPx - 4);
@@ -2337,7 +2370,7 @@ export function drawDebugBounds(
     ctx.stroke();
     ctx.setLineDash([]);
     // Label
-    ctx.font = '8px monospace';
+    ctx.font = f(8);
     ctx.fillStyle = 'rgba(255, 200, 50, 0.8)';
     ctx.textAlign = 'center';
     ctx.fillText(`BELT ±${beltTolerance} (d=${body.orbitDist.toFixed(1)})`, starSc.x, starSc.y - outerPx - 4);
@@ -2348,8 +2381,7 @@ export function drawDebugBounds(
 
 // ── Planet Debug Bounds ──────────────────────────────────────────────────────
 
-import { DOCK_TRIGGER_RADIUS, DOCK_FEATURE_RADIUS } from './dock';
-
+import { DOCK_TRIGGER_RADIUS, DOCK_FEATURE_RADIUS, setDockFeatureProvider } from './dock';
 export function drawPlanetDebugBounds(
   r: Renderer,
   camera: Camera,
@@ -2379,7 +2411,7 @@ export function drawPlanetDebugBounds(
   ctx.arc(planetSc.x, planetSc.y, planetDockPx, 0, Math.PI * 2);
   ctx.strokeStyle = 'rgba(255, 200, 50, 0.6)';
   ctx.stroke();
-  ctx.font = '7px monospace';
+  ctx.font = f(7);
   ctx.fillStyle = 'rgba(255, 200, 50, 0.8)';
   ctx.textAlign = 'center';
   ctx.fillText('ORBIT', planetSc.x, planetSc.y - planetDockPx - 3);
@@ -2419,7 +2451,7 @@ export function drawPlanetDebugBounds(
   ctx.lineWidth = 1;
   ctx.strokeRect(tlSc.x, tlSc.y, brSc.x - tlSc.x, brSc.y - tlSc.y);
   ctx.setLineDash([]);
-  ctx.font = '7px monospace';
+  ctx.font = f(7);
   ctx.fillStyle = 'rgba(255, 80, 80, 0.7)';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
@@ -2496,6 +2528,8 @@ function getEffectiveFeatures(body: SystemBody, starIndex: number, bodyIndex: nu
   return builtExtensions.length === 0 ? baseFeatures : [...baseFeatures, ...builtExtensions];
 }
 
+setDockFeatureProvider(getEffectiveFeatures);
+
 export function drawPlanetView(
   r: Renderer,
   camera: Camera,
@@ -2523,6 +2557,7 @@ export function drawPlanetView(
   // Planet is at world origin (0,0) in the planet view
   const planetWorldPos = vec2(0, 0);
   const sc = worldToScreen(planetWorldPos, camera, screenW, screenH);
+  _coachPlanetRing = { x: sc.x, y: sc.y, r: DOCK_TRIGGER_RADIUS / wpp };
 
   // Central planet (modest size — ~1/10 of screen, smaller on mobile)
   const planetScale = isMobileView() ? 2 : 3;
@@ -2602,7 +2637,7 @@ export function drawPlanetView(
 
   // ── 3. Planet name above ──
   ctx.save();
-  ctx.font = 'bold 14px monospace';
+  ctx.font = f(14, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
   ctx.fillStyle = G_BRIGHT;
@@ -2611,7 +2646,7 @@ export function drawPlanetView(
 
   // ── 4. "ORBIT FOR CONTACT" below ──
   ctx.save();
-  ctx.font = '9px monospace';
+  ctx.font = f(9);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_MED;
@@ -2667,13 +2702,13 @@ export function drawPlanetView(
       const leftSide = !isMobileView() && feat.angle > Math.PI / 2 && feat.angle < Math.PI * 1.5;
       const nameOffset = leftSide ? -24 : 24;
 
-      ctx.font = isMobileView() ? 'bold 7px monospace' : 'bold 9px monospace';
+      ctx.font = isMobileView() ? f(7, 'bold') : f(9, 'bold');
       ctx.textAlign = leftSide ? 'right' : 'left';
       ctx.textBaseline = 'bottom';
       ctx.fillStyle = G_BRIGHT;
       ctx.fillText(feat.name, fx + nameOffset, fy - 6);
 
-      ctx.font = isMobileView() ? '6px monospace' : '8px monospace';
+      ctx.font = isMobileView() ? f(7) : f(8);
       ctx.fillStyle = G_MED;
       ctx.textBaseline = 'top';
       ctx.fillText(FEATURE_LABELS[feat.type] || feat.type, fx + nameOffset, fy + 6);
@@ -2685,9 +2720,9 @@ export function drawPlanetView(
   ctx.save();
   const mob = isMobileView();
   const hx = mob ? 8 : 14;  // left margin
-  const titleFont = mob ? 'bold 11px monospace' : 'bold 14px monospace';
-  const subFont = mob ? '8px monospace' : '10px monospace';
-  const infoFont = mob ? 'bold 7px monospace' : 'bold 9px monospace';
+  const titleFont = mob ? f(11, 'bold') : f(14, 'bold');
+  const subFont = mob ? f(8) : f(10);
+  const infoFont = mob ? f(7, 'bold') : f(9, 'bold');
   const lineH = mob ? 10 : 12;
   ctx.font = titleFont;
   ctx.textAlign = 'left';
@@ -2758,13 +2793,13 @@ export function drawPlanetView(
     ctx.fillRect(legX, legY, legW, legH);
     drawPanelBorder(ctx, legX, legY, legW, legH);
 
-    ctx.font = 'bold 9px monospace';
+    ctx.font = f(9, 'bold');
     ctx.fillStyle = G_BRIGHT;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillText('FEATURES', legX + 8, legY + 6);
 
-    ctx.font = '8px monospace';
+    ctx.font = f(8);
     ctx.fillStyle = G_MED;
     for (const [i, feat] of effectiveFeatures.entries()) {
       const label = FEATURE_LABELS[feat.type] || feat.type;
@@ -2870,13 +2905,21 @@ export function togglePlanetPanel(index: number): 'fleet-opened' | 'fleet-closed
   if (index < 0 || index >= PANEL_TABS.length) return null;
   const wasOpen = _openPanel === index;
   _openPanel = wasOpen ? -1 : index;
-  // If fleet panel (3) just closed and we have a return tier, schedule revert
-  if (wasOpen && index === 3 && _galaxyJumpReturnTier) {
-    _pendingTierRevert = _galaxyJumpReturnTier;
-    _galaxyJumpReturnTier = null;
-  }
+  if (index === 1 && !wasOpen) coachAdvance('upgrade_station');
+  if (wasOpen && index === 3) queueFleetRevert();
   if (index === 3) return wasOpen ? 'fleet-closed' : 'fleet-opened';
   return null;
+}
+
+/**
+ * Hand the galaxy-jump breadcrumb to the game loop so it returns the player to the
+ * tier they came from. Every path that closes the fleet panel must go through here —
+ * dropping the breadcrumb instead strands the player on the galaxy map.
+ */
+function queueFleetRevert(): void {
+  if (!_galaxyJumpReturnTier) return;
+  _pendingTierRevert = _galaxyJumpReturnTier;
+  _galaxyJumpReturnTier = null;
 }
 
 export function setGalaxyJumpReturnTier(tier: 'system' | 'local' | 'planet'): void {
@@ -2890,12 +2933,12 @@ export function isFleetPanelOpen(): boolean {
 export function closeFleetPanel(): void {
   if (_openPanel === 3) {
     _openPanel = -1;
-    _galaxyJumpReturnTier = null;
+    queueFleetRevert();
   }
 }
 
 export function closeAllPanels(): void {
-  if (_openPanel === 3) _galaxyJumpReturnTier = null;
+  if (_openPanel === 3) queueFleetRevert();
   _openPanel = -1;
 }
 
@@ -2926,6 +2969,9 @@ export function hitTestPlanetPanels(
 ): number {
   const tabRects = getPanelTabRects(screenH);
   const tabX = screenW - TAB_W;
+
+  // Coach "GOT IT" button sits above everything else
+  if (hitTestCoach(sx, sy)) return -2;
 
   // Check if click is on a tab
   for (let i = 0; i < tabRects.length; i++) {
@@ -3350,6 +3396,7 @@ function hitTestBuildPanel(sx: number, sy: number): void {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
       if (btn.enabled) {
         _pendingExtensionAction = btn.action;
+        if (btn.action === 'upgrade_station') coachAdvance('pick_skin');
         playSound('click');
       } else if (btn.lockReason) {
         _lockFlash = { action: btn.action, expireMs: Date.now() + 3000 };
@@ -3439,6 +3486,7 @@ export function drawPlanetPanels(
 ) {
   const tabRects = getPanelTabRects(screenH);
   const tabX = screenW - TAB_W;
+  _coachBuildTabRect = null;
 
   ctx.save();
 
@@ -3459,6 +3507,8 @@ export function drawPlanetPanels(
       || (i === 3 && _panelsShipShape === 'scout');
     if (isHidden) continue; // skip rendering this tab entirely
 
+    if (i === 1 && !isDisabled) _coachBuildTabRect = { x: tabX - 4, y: ty, w: TAB_W + 4, h: TAB_H };
+
     // Journey pulse: brighten non-disabled tabs
     const pulseAlpha = getJourneyPulseAlpha();
     const hasPulse = pulseAlpha > 0 && !isDisabled && !isOpen;
@@ -3474,7 +3524,7 @@ export function drawPlanetPanels(
     ctx.stroke();
 
     // Icon at top of tab
-    ctx.font = '12px monospace';
+    ctx.font = f(12);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : hasPulse ? `rgba(79, 255, 176, ${0.5 + pulseAlpha * 0.5})` : G_BRIGHT;
@@ -3484,7 +3534,7 @@ export function drawPlanetPanels(
     ctx.save();
     ctx.translate(tabX + TAB_W / 2, ty + TAB_H / 2 + 6);
     ctx.rotate(-Math.PI / 2);
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : G_MED;
@@ -3500,7 +3550,7 @@ export function drawPlanetPanels(
       ctx.beginPath();
       ctx.arc(badgeX, badgeY, 5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.font = 'bold 6px monospace';
+      ctx.font = f(7, 'bold');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#fff';
@@ -3560,7 +3610,7 @@ export function drawPlanetPanels(
       ctx.lineWidth = 1;
       roundedRect(ctx, panelX, panelY, panelW, bodyH, 4);
       ctx.stroke();
-      ctx.font = '9px monospace';
+      ctx.font = f(9);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = G_FAINT;
@@ -3571,7 +3621,371 @@ export function drawPlanetPanels(
     }
   }
 
+  drawCoachOverlay(ctx, screenW, screenH);
+
   ctx.restore();
+}
+
+// ── Coach marks (first-session tutorial) ─────────────────────────────────────
+
+/** BUILD tab rect captured during the last panel draw (null when unavailable). */
+let _coachBuildTabRect: { x: number; y: number; w: number; h: number } | null = null;
+/** Rect of the primary (GOT IT) button drawn by the last coach overlay. */
+let _coachGotItButton: { x: number; y: number; w: number; h: number } | null = null;
+/** Rect of the SKIP button shown once a step has been acknowledged. */
+let _coachSkipButton: { x: number; y: number; w: number; h: number } | null = null;
+
+const COACH_COPY: Record<string, { step: string; title: string[]; lines: string[]; nudge: string }> = {
+  open_build: { step: '1/7', title: ['OPEN YOUR BASE', 'BUILD CONTROL'], lines: ['Tap the BUILD tab to open', 'your starbase menu.'], nudge: 'NOW PRESS BUILD' },
+  upgrade_station: { step: '2/7', title: ['UPGRADE THE STATION'], lines: ['Tap STATION to upgrade your', 'base. Higher levels unlock', 'more buildings and ships.'], nudge: 'NOW PRESS STATION' },
+  pick_skin: { step: '3/7', title: ['SELECT YOUR LOOK'], lines: ['Other players see your style.', 'Pick a station skin to start', 'the upgrade.'], nudge: 'NOW PICK A STYLE' },
+  undock: { step: '4/7', title: ['LEAVE THE STATION'], lines: ['Tap UNDOCK to release your', 'ship and fly free.'], nudge: 'NOW PRESS UNDOCK' },
+  navigate_dock: { step: '5/7', title: ['FLY TO THE PLANET'], lines: ['Tap where you want to go,', 'or steer with WASD. You dock', 'on reaching the orbit ring.'], nudge: 'FLY INTO THE ORBIT RING' },
+  scan: { step: '6/7', title: ['SCAN THE SURFACE'], lines: ['Tap SCAN to survey the planet', 'for resources, blueprints', 'and anomalies.'], nudge: 'NOW PRESS SCAN' },
+  help: { step: '7/7', title: ['THE MANUAL'], lines: ['Your scan is running. Tap ?', 'any time to re-read the', 'controls and guides.'], nudge: 'NOW PRESS ?' },
+};
+
+/** Buttons on the final congratulations card. */
+let _coachCongratsButtons: Array<{ x: number; y: number; w: number; h: number; id: 'finish' | 'controls' }> = [];
+
+/** Screen rect of an HTML overlay button — the icon bar sits on top of the canvas. */
+function domButtonRect(id: string): { x: number; y: number; w: number; h: number } | null {
+  const el = document.getElementById(id);
+  const canvas = document.getElementById('game-canvas');
+  if (!el || !canvas) return null;
+  const r = el.getBoundingClientRect();
+  const c = canvas.getBoundingClientRect();
+  if (r.width === 0 || r.height === 0) return null;
+  return { x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height };
+}
+
+/** Planet orbit ring projected to screen space, captured during the planet-tier draw. */
+let _coachPlanetRing: { x: number; y: number; r: number } | null = null;
+
+function drawCoachOverlay(ctx: CanvasRenderingContext2D, screenW: number, screenH: number): void {
+  _coachGotItButton = null;
+  _coachSkipButton = null;
+  _coachCongratsButtons = [];
+  if (!isCoachActive()) {
+    drawHelpReminder(ctx);
+    return;
+  }
+
+  const step = getCoachStep();
+  if (step === 'congrats') {
+    drawCoachCongrats(ctx, screenW, screenH);
+    return;
+  }
+  if (step === 'navigate_dock') {
+    const ring = _coachPlanetRing;
+    if (!ring || _panelsDocked) return;
+    drawCoachCallout(ctx, screenW, screenH, step,
+      { x: ring.x - ring.r, y: ring.y - ring.r, w: ring.r * 2, h: ring.r * 2 }, 'above', true);
+    return;
+  }
+
+  let target: { x: number; y: number; w: number; h: number } | null = null;
+  if (step === 'open_build') {
+    target = _coachBuildTabRect;
+  } else if (step === 'upgrade_station' && _openPanel === 1) {
+    const btn = _lastExtensionButtons.find((b) => b.action === 'upgrade_station');
+    if (btn) target = { x: btn.x, y: btn.y, w: btn.w, h: btn.h };
+  } else if (step === 'help') {
+    target = domButtonRect('help-btn');
+  }
+  if (!target) return;
+  drawCoachCallout(ctx, screenW, screenH, step, target, 'left');
+}
+
+/** Ring the ? icon while the idle hint pulses — reminds stalled players the tutorial exists. */
+function drawHelpReminder(ctx: CanvasRenderingContext2D): void {
+  const alpha = getJourneyPulseAlpha();
+  if (alpha <= 0) return;
+  const b = domButtonRect('help-btn');
+  if (!b) return;
+  ctx.save();
+  ctx.strokeStyle = `rgba(255, 184, 77, ${0.3 + alpha * 0.7})`;
+  ctx.lineWidth = 2;
+  roundedRect(ctx, b.x - 4, b.y - 4, b.w + 8, b.h + 8, 5);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Final card: congratulate, then offer to finish or continue to another tutorial. */
+function drawCoachCongrats(ctx: CanvasRenderingContext2D, screenW: number, screenH: number): void {
+  const AMBER = '#ffb84d';
+  const boxW = Math.min(250, screenW - 24);
+  const boxH = 152;
+  const boxX = (screenW - boxW) / 2;
+  const boxY = Math.max(8, (screenH - boxH) / 2);
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.fillRect(0, 0, screenW, screenH);
+
+  ctx.fillStyle = 'rgba(10, 6, 0, 0.96)';
+  roundedRect(ctx, boxX, boxY, boxW, boxH, 6);
+  ctx.fill();
+  ctx.strokeStyle = AMBER;
+  ctx.lineWidth = 2;
+  roundedRect(ctx, boxX, boxY, boxW, boxH, 6);
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.font = f(12, 'bold');
+  ctx.fillStyle = AMBER;
+  ctx.fillText('WELL DONE, COMMANDER', boxX + boxW / 2, boxY + 12);
+
+  ctx.font = f(7);
+  ctx.fillStyle = G_BRIGHT;
+  const lines = [
+    'Your base is upgrading and you',
+    'have surveyed your first planet.',
+    'The galaxy is yours to claim.',
+  ];
+  for (const [i, line] of lines.entries()) {
+    ctx.fillText(line, boxX + boxW / 2, boxY + 32 + i * 11);
+  }
+
+  ctx.font = f(7, 'bold');
+  ctx.fillStyle = 'rgba(255, 184, 77, 0.65)';
+  ctx.textAlign = 'left';
+  ctx.fillText('MORE TUTORIALS', boxX + 14, boxY + 72);
+
+  const itemW = boxW - 28;
+  const itemH = 20;
+  const itemX = boxX + 14;
+  const itemY = boxY + 84;
+  _coachCongratsButtons.push({ x: itemX, y: itemY, w: itemW, h: itemH, id: 'controls' });
+  roundedRect(ctx, itemX, itemY, itemW, itemH, 3);
+  ctx.fillStyle = 'rgba(80, 45, 0, 0.6)';
+  ctx.fill();
+  roundedRect(ctx, itemX, itemY, itemW, itemH, 3);
+  ctx.strokeStyle = AMBER;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.font = f(8, 'bold');
+  ctx.fillStyle = AMBER;
+  ctx.textBaseline = 'middle';
+  ctx.fillText('1.  CONTROLS & STEERING', itemX + 8, itemY + itemH / 2);
+
+  const fw = 92;
+  const fh = 18;
+  const fx = boxX + boxW / 2 - fw / 2;
+  const fy = boxY + boxH - fh - 10;
+  _coachCongratsButtons.push({ x: fx, y: fy, w: fw, h: fh, id: 'finish' });
+  roundedRect(ctx, fx, fy, fw, fh, 3);
+  ctx.strokeStyle = 'rgba(255, 184, 77, 0.55)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.font = f(8, 'bold');
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255, 184, 77, 0.8)';
+  ctx.fillText('END TUTORIAL', fx + fw / 2, fy + fh / 2);
+
+  ctx.restore();
+}
+
+/** Coach callout for the skin picker modal — drawn on top of the modal itself. */
+export function drawCoachOverSkinPicker(ctx: CanvasRenderingContext2D, screenW: number, screenH: number): void {
+  if (!isCoachActive() || getCoachStep() !== 'pick_skin') return;
+  const btn = _skinPickerBtns[0];
+  if (!btn) return;
+  drawCoachCallout(ctx, screenW, screenH, 'pick_skin', { x: btn.x, y: btn.y, w: btn.w, h: btn.h }, 'above');
+}
+
+/** Coach callout for the dock panel buttons — the panel draws after the tab strip. */
+function drawCoachOverDockPanel(ctx: CanvasRenderingContext2D, screenW: number, screenH: number): void {
+  if (!isCoachActive()) return;
+  const step = getCoachStep();
+  const wanted = step === 'undock' ? 'leave' : step === 'scan' ? 'scan' : null;
+  if (!wanted) return;
+  const btn = _lastDockButtons.find((b) => b.action === wanted);
+  if (!btn) return;
+  drawCoachCallout(ctx, screenW, screenH, step, { x: btn.x, y: btn.y, w: btn.w, h: btn.h }, 'above');
+}
+
+function drawCoachCallout(
+  ctx: CanvasRenderingContext2D,
+  screenW: number, screenH: number,
+  step: string,
+  target: { x: number; y: number; w: number; h: number },
+  placement: 'left' | 'above',
+  circle = false,
+): void {
+  const copy = COACH_COPY[step];
+  if (!copy) return;
+
+  const pulse = getCoachPulse();
+  const AMBER = '#ffb84d';
+
+  ctx.save();
+
+  // Highlight ring around the target
+  if (circle) {
+    const cx = target.x + target.w / 2;
+    const cy = target.y + target.h / 2;
+    const rad = target.w / 2;
+    ctx.strokeStyle = `rgba(255, 184, 77, ${0.55 + pulse * 0.45})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(255, 184, 77, ${0.12 + pulse * 0.18})`;
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad + 4 + pulse * 4, 0, Math.PI * 2);
+    ctx.stroke();
+  } else {
+    ctx.strokeStyle = `rgba(255, 184, 77, ${0.55 + pulse * 0.45})`;
+    ctx.lineWidth = 2;
+    roundedRect(ctx, target.x - 3, target.y - 3, target.w + 6, target.h + 6, 5);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(255, 184, 77, ${0.12 + pulse * 0.18})`;
+    ctx.lineWidth = 6;
+    roundedRect(ctx, target.x - 5 - pulse * 3, target.y - 5 - pulse * 3, target.w + 10 + pulse * 6, target.h + 10 + pulse * 6, 7);
+    ctx.stroke();
+  }
+
+  // Callout box, beside or above the target depending on available room
+  const acked = isCoachAcked();
+  const boxW = Math.min(acked ? 132 : 176, screenW - 16);
+  const lineH = 11;
+  const titleH = copy.title.length * 11;
+  const boxH = acked ? 30 : 15 + titleH + 4 + copy.lines.length * lineH + 20;
+  let boxX: number;
+  let boxY: number;
+  if (placement === 'above') {
+    boxX = target.x + target.w / 2 - boxW / 2;
+    boxY = target.y - 10 - boxH;
+  } else {
+    boxX = target.x - 12 - boxW;
+    boxY = target.y + target.h / 2 - boxH / 2;
+    if (boxX < 6) boxX = Math.min(target.x, screenW - boxW - 6);
+  }
+  boxX = Math.max(6, Math.min(boxX, screenW - boxW - 6));
+  boxY = Math.max(6, Math.min(boxY, screenH - boxH - 6));
+
+  ctx.fillStyle = 'rgba(10, 6, 0, 0.94)';
+  roundedRect(ctx, boxX, boxY, boxW, boxH, 5);
+  ctx.fill();
+  ctx.strokeStyle = AMBER;
+  ctx.lineWidth = 1.5;
+  roundedRect(ctx, boxX, boxY, boxW, boxH, 5);
+  ctx.stroke();
+
+  // Pointer arrow toward the target
+  if (placement === 'above' && boxY + boxH <= target.y) {
+    const ax = Math.max(boxX + 10, Math.min(target.x + target.w / 2, boxX + boxW - 10));
+    ctx.fillStyle = AMBER;
+    ctx.beginPath();
+    ctx.moveTo(ax - 6, boxY + boxH);
+    ctx.lineTo(ax, boxY + boxH + 8);
+    ctx.lineTo(ax + 6, boxY + boxH);
+    ctx.closePath();
+    ctx.fill();
+  } else if (placement === 'left' && boxX + boxW <= target.x) {
+    const arrowY = Math.max(boxY + 10, Math.min(target.y + target.h / 2, boxY + boxH - 10));
+    ctx.fillStyle = AMBER;
+    ctx.beginPath();
+    ctx.moveTo(boxX + boxW, arrowY - 6);
+    ctx.lineTo(boxX + boxW + 8, arrowY);
+    ctx.lineTo(boxX + boxW, arrowY + 6);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Header
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+
+  if (acked) {
+    // Collapsed nudge: keep pointing at the target, offer SKIP to bail out
+    ctx.font = f(8, 'bold');
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = `rgba(255, 184, 77, ${0.7 + pulse * 0.3})`;
+    ctx.fillText(copy.nudge, boxX + 10, boxY + boxH / 2);
+
+    const sw = 30;
+    const sh = 12;
+    const sx2 = boxX + boxW - sw - 8;
+    const sy2 = boxY + boxH / 2 - sh / 2;
+    _coachSkipButton = { x: sx2, y: sy2, w: sw, h: sh };
+    roundedRect(ctx, sx2, sy2, sw, sh, 3);
+    ctx.strokeStyle = 'rgba(255, 184, 77, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.font = f(7, 'bold');
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255, 184, 77, 0.7)';
+    ctx.fillText('SKIP', sx2 + sw / 2, sy2 + sh / 2);
+
+    ctx.restore();
+    return;
+  }
+
+  ctx.font = f(7, 'bold');
+  ctx.fillStyle = 'rgba(255, 184, 77, 0.65)';
+  ctx.fillText(`TUTORIAL ${copy.step}`, boxX + 10, boxY + 8);
+  ctx.font = f(9, 'bold');
+  ctx.fillStyle = AMBER;
+  for (const [i, t] of copy.title.entries()) {
+    ctx.fillText(t, boxX + 10, boxY + 19 + i * 11);
+  }
+
+  ctx.font = f(7);
+  ctx.fillStyle = G_BRIGHT;
+  for (const [i, line] of copy.lines.entries()) {
+    ctx.fillText(line, boxX + 10, boxY + 23 + titleH + i * lineH);
+  }
+
+  // GOT IT button
+  const gw = 46;
+  const gh = 13;
+  const gx = boxX + boxW - gw - 8;
+  const gy = boxY + boxH - gh - 6;
+  _coachGotItButton = { x: gx, y: gy, w: gw, h: gh };
+  roundedRect(ctx, gx, gy, gw, gh, 3);
+  ctx.fillStyle = 'rgba(80, 45, 0, 0.75)';
+  ctx.fill();
+  roundedRect(ctx, gx, gy, gw, gh, 3);
+  ctx.strokeStyle = AMBER;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.font = f(7, 'bold');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = AMBER;
+  ctx.fillText('GOT IT', gx + gw / 2, gy + gh / 2);
+
+  ctx.restore();
+}
+
+/** Returns true when the click landed on a coach button. */
+function hitTestCoach(sx: number, sy: number): boolean {
+  if (!isCoachActive()) return false;
+  for (const b of _coachCongratsButtons) {
+    if (sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
+      dismissCoach();
+      playSound('click');
+      // The controls guide lives in the HTML help panel
+      if (b.id === 'controls') document.getElementById('help-btn')?.click();
+      return true;
+    }
+  }
+  const skip = _coachSkipButton;
+  if (skip && sx >= skip.x && sx <= skip.x + skip.w && sy >= skip.y && sy <= skip.y + skip.h) {
+    dismissCoach();
+    playSound('click');
+    return true;
+  }
+  const b = _coachGotItButton;
+  if (!b) return false;
+  if (sx < b.x || sx > b.x + b.w || sy < b.y || sy > b.y + b.h) return false;
+  ackCoachStep();
+  playSound('click');
+  return true;
 }
 
 // ── Panel body renderers ──────────────────────────────────────────────────
@@ -3590,7 +4004,7 @@ function drawPanelFrame(
   ctx.stroke();
 
   // Title
-  ctx.font = 'bold 9px monospace';
+  ctx.font = f(9, 'bold');
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_BRIGHT;
@@ -3614,7 +4028,7 @@ function drawStatusPanelBody(
   const bodyH = Math.max(TAB_H, statusRows.length * ROW_H + PANEL_PAD * 2 + 24);
   drawPanelFrame(ctx, x, y, w, bodyH, 'STATUS', '\u25B3');
 
-  ctx.font = '8px monospace';
+  ctx.font = f(8);
   ctx.fillStyle = G_MED;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
@@ -3636,7 +4050,7 @@ function drawTradePanelBody(
   if (!_tradeStationInfo || !_postId || _panelsStarIndex == null || _tradeStationInfo.starIndex !== _panelsStarIndex) {
     const bodyH = TAB_H;
     drawPanelFrame(ctx, x, y, w, bodyH, 'TRADE', '\u2696');
-    ctx.font = '8px monospace';
+    ctx.font = f(8);
     ctx.fillStyle = G_MED;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -3665,7 +4079,7 @@ function drawTradePanelBody(
   drawPanelFrame(ctx, x, y, w, bodyH, 'TRADE', '\u2696');
 
   // Stock header
-  ctx.font = '7px monospace';
+  ctx.font = f(7);
   ctx.fillStyle = G_MED;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
@@ -3690,7 +4104,7 @@ function drawTradePanelBody(
 
     // Label
     const shortNames: Record<string, string> = { ore: 'ORE', food: 'FOOD', energy: 'ENRG', fuel: 'FUEL' };
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.fillStyle = G_BRIGHT;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
@@ -3729,7 +4143,7 @@ function drawBuildPanelBody(
   const energyNow = Math.floor(serverEcon?.store.energy ?? 0);
   const fuelNow = Math.floor(serverEcon?.store.fuel ?? 0);
   const stationLevel = serverEcon?.buildings.station.level ?? 1;
-  ctx.font = '7px monospace';
+  ctx.font = f(7);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_MED;
@@ -3756,7 +4170,7 @@ function drawBuildPanelBody(
     ctx.strokeStyle = '#ffb84d';
     ctx.lineWidth = 1;
     ctx.stroke();
-    ctx.font = 'bold 6px monospace';
+    ctx.font = f(7, 'bold');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ffb84d';
@@ -3849,19 +4263,19 @@ function drawBuildPanelBody(
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillStyle = enabled ? G_BRIGHT : G_MED;
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.fillText(tierLabel, bx + extBtnW / 2, by + 4);
 
-    ctx.font = '6px monospace';
+    ctx.font = f(7);
     if (isMaxLevel) {
       ctx.fillStyle = G_MED;
       ctx.fillText(isStationUpgrade ? 'MAX' : `LV ${toRoman(level)}`, bx + extBtnW / 2, by + 18);
       // Show flash message if station-capped
       if (lockReason && _lockFlash && _lockFlash.action === ext.action && _lockFlash.expireMs > Date.now()) {
         ctx.fillStyle = '#ffb84d';
-        ctx.font = '5px monospace';
+        ctx.font = f(6);
         ctx.fillText(lockReason, bx + extBtnW / 2, by + 30);
-        ctx.font = '6px monospace';
+        ctx.font = f(7);
       }
     } else if (isActive) {
       const remainingSec = serverBuilding?.completeAt != null ? Math.max(0, Math.ceil((serverBuilding.completeAt - nowMs) / 1000)) : 0;
@@ -3888,9 +4302,9 @@ function drawBuildPanelBody(
             ? (level >= 1 ? `LV ${toRoman(level)}` : 'BUSY')
             : isLocked ? 'LOCKED' : 'NEED RES';
       ctx.fillStyle = isFlashing ? '#ffb84d' : enabled ? G_BRIGHT : G_MED;
-      ctx.font = isFlashing ? '5px monospace' : '6px monospace';
+      ctx.font = isFlashing ? f(6) : f(7);
       ctx.fillText(statusLabel, bx + extBtnW / 2, by + 30);
-      ctx.font = '6px monospace';
+      ctx.font = f(7);
     }
   }
 
@@ -3953,7 +4367,7 @@ function drawShipsPanelBody(
   drawPanelFrame(ctx, x, y, w, bodyH, 'SHIPS', '\u{1F680}');
 
   // Header: dock level
-  ctx.font = '7px monospace';
+  ctx.font = f(7);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_MED;
@@ -3965,7 +4379,7 @@ function drawShipsPanelBody(
 
   // ── UPGRADE section (top, orange) ──
   if (upgradeEntries.length > 0 || isUpgradeBuildActive) {
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#ffb84d';
@@ -3999,10 +4413,10 @@ function drawShipsPanelBody(
 
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
-        ctx.font = 'bold 7px monospace';
+        ctx.font = f(7, 'bold');
         ctx.fillStyle = '#ffb84d';
         ctx.fillText(`UPGRADING \u2192 ${buildCatalog.name.toUpperCase()}`, bx + 32, by + 6);
-        ctx.font = '6px monospace';
+        ctx.font = f(7);
         ctx.fillText(`${progress}% (${remaining}s)`, bx + 32, by + 18);
 
         const barX = bx + 32;
@@ -4047,7 +4461,7 @@ function drawShipsPanelBody(
 
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      ctx.font = 'bold 7px monospace';
+      ctx.font = f(7, 'bold');
       ctx.fillStyle = enabled || isUpgradeBuild ? '#ffb84d' : '#997733';
       ctx.fillText(`${ue.from.name.toUpperCase()} \u2192 ${ue.to.name.toUpperCase()}`, bx + 32, by + 4);
 
@@ -4055,7 +4469,7 @@ function drawShipsPanelBody(
         const remaining = Math.max(0, Math.ceil((buildingShip!.completeAt - nowMs) / 1000));
         const totalBuild = ue.to.buildSeconds;
         const progress = Math.max(0, Math.min(100, Math.floor(((totalBuild - remaining) / totalBuild) * 100)));
-        ctx.font = '6px monospace';
+        ctx.font = f(7);
         ctx.fillStyle = '#ffb84d';
         ctx.fillText(`UPGRADING ${progress}% (${remaining}s)`, bx + 32, by + 16);
         const barX = bx + 32;
@@ -4066,7 +4480,7 @@ function drawShipsPanelBody(
         ctx.fillStyle = '#ffb84d';
         ctx.fillRect(barX, by + 28, fillW, 4);
       } else {
-        ctx.font = '6px monospace';
+        ctx.font = f(7);
         ctx.fillStyle = '#997733';
         ctx.fillText(`${ue.to.cost.ore}/${ue.to.cost.food}/${ue.to.cost.energy}  ${ue.to.buildSeconds}s`, bx + 32, by + 16);
         const actionLabel = ue.dockLocked ? `NEED DOCK LV ${ue.to.dockLevel}` : enabled ? 'UPGRADE' : 'NEED RES';
@@ -4080,7 +4494,7 @@ function drawShipsPanelBody(
 
   // ── BUILD section (Basic Probe + Colony Ship) ──
   if (availableShips.length > 0) {
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = G_BRIGHT;
@@ -4095,7 +4509,7 @@ function drawShipsPanelBody(
         const totalBuild = bEntry.buildSeconds;
         const progress = Math.max(0, Math.min(100, Math.floor(((totalBuild - remaining) / totalBuild) * 100)));
         ctx.fillStyle = G_BRIGHT;
-        ctx.font = '7px monospace';
+        ctx.font = f(7);
         ctx.fillText(`BUILDING: ${bEntry.name.toUpperCase()} ${progress}%  (${remaining}s)`, x + PANEL_PAD + 40, cursorY - 12);
         // Progress bar
         const barX = x + PANEL_PAD;
@@ -4148,9 +4562,9 @@ function drawShipsPanelBody(
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillStyle = enabled ? G_BRIGHT : G_MED;
-      ctx.font = 'bold 7px monospace';
+      ctx.font = f(7, 'bold');
       ctx.fillText(entry.name.toUpperCase(), bx + 30, by + 4);
-      ctx.font = '6px monospace';
+      ctx.font = f(7);
       ctx.fillStyle = dockLocked ? 'rgba(255, 100, 80, 0.7)' : G_DIM;
       if (dockLocked) {
         ctx.fillText(`DOCK LV${entry.dockLevel} REQ`, bx + 30, by + 14);
@@ -4280,7 +4694,7 @@ function drawFleetGalaxyView(
   const bodyH = Math.max(TAB_H, lineCount * ROW_H + PANEL_PAD * 2 + 28);
   drawPanelFrame(ctx, x, y, w, bodyH, 'FLEET \u2014 ALL STARS', '\u2694');
 
-  ctx.font = '8px monospace';
+  ctx.font = f(8);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
 
@@ -4324,11 +4738,11 @@ function drawFleetGalaxyView(
         roundedRect(ctx, btnX, btnY, btnW, btnH, 2);
         ctx.stroke();
         ctx.fillStyle = needsFuel ? '#ffb84d' : G_BRIGHT;
-        ctx.font = '7px monospace';
+        ctx.font = f(7);
         ctx.textAlign = 'center';
         ctx.fillText(needsFuel ? 'FUEL' : 'SEND', btnX + btnW / 2, btnY + 1.5);
         ctx.textAlign = 'left';
-        ctx.font = '8px monospace';
+        ctx.font = f(8);
         _fleetSendButtons.push({ x: btnX, y: btnY, w: btnW, h: btnH, starIndex: e.starIndex, shipTypeId: s.typeId });
 
         cy += ROW_H;
@@ -4355,11 +4769,11 @@ function drawFleetGalaxyView(
         ctx.fillStyle = '#ffb84d'; // AMBER
         ctx.fillText(`  ${entry.name} x${t.count}`, x + PANEL_PAD, cy);
         ctx.fillStyle = 'rgba(255, 184, 77, 0.6)';
-        ctx.font = '7px monospace';
+        ctx.font = f(7);
         ctx.textAlign = 'right';
         ctx.fillText(`${fromName}\u2192${toName} ${timeStr}`, x + w - PANEL_PAD, cy + 1);
         ctx.textAlign = 'left';
-        ctx.font = '8px monospace';
+        ctx.font = f(8);
         cy += ROW_H;
       }
     }
@@ -4396,11 +4810,11 @@ function drawFleetGalaxyView(
         roundedRect(ctx, cancelX, cancelY, cancelW, cancelH, 2);
         ctx.stroke();
         ctx.fillStyle = 'rgba(255, 100, 80, 0.8)';
-        ctx.font = '7px monospace';
+        ctx.font = f(7);
         ctx.textAlign = 'center';
         ctx.fillText('STOP', cancelX + cancelW / 2, cancelY + 1.5);
         ctx.textAlign = 'left';
-        ctx.font = '8px monospace';
+        ctx.font = f(8);
         _fleetCancelRouteButtons.push({ x: cancelX, y: cancelY, w: cancelW, h: cancelH, routeId: route.id });
         cy += ROW_H;
 
@@ -4410,9 +4824,9 @@ function drawFleetGalaxyView(
           ? ` [${Math.floor(route.cargo.ore)}o/${Math.floor(route.cargo.food)}f/${Math.floor(route.cargo.energy)}e]`
           : '';
         ctx.fillStyle = 'rgba(68, 170, 255, 0.6)';
-        ctx.font = '7px monospace';
+        ctx.font = f(7);
         ctx.fillText(`    ${legLabel} ${timeStr}${cargoStr}`, x + PANEL_PAD, cy);
-        ctx.font = '8px monospace';
+        ctx.font = f(8);
         cy += ROW_H;
       }
     }
@@ -4445,9 +4859,9 @@ function drawFleetGalaxyView(
           ? ` [${Math.floor(route.cargo.ore)}o/${Math.floor(route.cargo.food)}f/${Math.floor(route.cargo.energy)}e]`
           : '';
         ctx.fillStyle = 'rgba(255, 68, 68, 0.6)';
-        ctx.font = '7px monospace';
+        ctx.font = f(7);
         ctx.fillText(`    ${legLabel} ${timeStr}${cargoStr}`, x + PANEL_PAD, cy);
-        ctx.font = '8px monospace';
+        ctx.font = f(8);
         cy += ROW_H;
       }
     }
@@ -4461,9 +4875,9 @@ function drawFleetGalaxyView(
   if (_lockFlash && _lockFlash.expireMs > Date.now() && _lockFlash.action.startsWith('NEED')) {
     cy += ROW_H;
     ctx.fillStyle = '#ffb84d';
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillText(_lockFlash.action, x + PANEL_PAD, cy);
-    ctx.font = '8px monospace';
+    ctx.font = f(8);
   }
 
   // POST button (share fleet to comments)
@@ -4479,11 +4893,11 @@ function drawFleetGalaxyView(
     roundedRect(ctx, btnX, btnY, btnW, btnH, 2);
     ctx.stroke();
     ctx.fillStyle = onCooldown ? 'rgba(100,100,100,0.5)' : '#4f4';
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.textAlign = 'center';
     ctx.fillText(onCooldown ? '...' : 'POST', btnX + btnW / 2, btnY + 1.5);
     ctx.textAlign = 'left';
-    ctx.font = '8px monospace';
+    ctx.font = f(8);
     if (!onCooldown) {
       _fleetShareButton = { x: btnX, y: btnY, w: btnW, h: btnH };
     }
@@ -4517,7 +4931,7 @@ export function drawFleetLocalView(
   const bodyH = Math.max(TAB_H, (rows.length + 2) * ROW_H + PANEL_PAD * 2 + 28);
   drawPanelFrame(ctx, x, y, w, bodyH, 'FLEET', '\u2694');
 
-  ctx.font = '8px monospace';
+  ctx.font = f(8);
   ctx.fillStyle = G_MED;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
@@ -4540,7 +4954,7 @@ export function drawFleetLocalView(
   roundedRect(ctx, btnX, btnY, btnW, btnH, 3);
   ctx.stroke();
   ctx.fillStyle = G_BRIGHT;
-  ctx.font = 'bold 8px monospace';
+  ctx.font = f(8, 'bold');
   ctx.textAlign = 'center';
   ctx.fillText('\u2191 GALAXY MAP', btnX + btnW / 2, btnY + 3.5);
   ctx.textAlign = 'left';
@@ -4561,13 +4975,13 @@ export function drawTierHUD(
   const x = align === 'center' ? screenW / 2 : screenW - 12;
 
   ctx.save();
-  ctx.font = 'bold 12px monospace';
+  ctx.font = f(12, 'bold');
   ctx.textAlign = align;
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText(tierName, x, 12);
   if (locationName) {
-    ctx.font = '11px monospace';
+    ctx.font = f(11);
     ctx.fillStyle = G_MED;
     ctx.fillText(locationName, x, 28);
   }
@@ -4611,7 +5025,7 @@ function drawComsPanelBody(
     ctx.strokeStyle = active ? G_BRIGHT : G_MED;
     ctx.lineWidth = 0.5;
     ctx.strokeRect(tx, ty, tabW, tabH);
-    ctx.font = `bold 7px monospace`;
+    ctx.font = f(7, 'bold');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = active ? G_BRIGHT : G_MED;
@@ -4659,7 +5073,7 @@ function drawLeaderboardBody(
   drawPanelFrame(ctx, x, y, w, bodyH, 'LEADERBOARD', '\u{1F3C6}');
 
   if (players.length === 0) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -4675,7 +5089,7 @@ function drawLeaderboardBody(
       ctx.strokeStyle = '#a060ff';
       ctx.lineWidth = 0.5;
       ctx.strokeRect(btnX, btnY, btnW, btnH);
-      ctx.font = 'bold 6px monospace';
+      ctx.font = f(7, 'bold');
       ctx.fillStyle = '#c090ff';
       ctx.fillText('SEED TEST DATA', btnX + btnW / 2, btnY + btnH / 2);
       _leaderboardSeedButton = { x: btnX, y: btnY, w: btnW, h: btnH };
@@ -4693,7 +5107,7 @@ function drawLeaderboardBody(
     power: x + w - PANEL_PAD,
   };
 
-  ctx.font = 'bold 6px monospace';
+  ctx.font = f(7, 'bold');
   ctx.textBaseline = 'middle';
   ctx.fillStyle = G_DIM;
   const hdrY = y + headerH - 4;
@@ -4719,14 +5133,14 @@ function drawLeaderboardBody(
 
     // Rank medal colors
     const rankColor = entry.rank === 1 ? '#ffd700' : entry.rank === 2 ? '#c0c0c0' : entry.rank === 3 ? '#cd7f32' : G_MED;
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = rankColor;
     ctx.fillText(`${entry.rank}`, colX.rank, ry + rowH / 2);
 
     // Player name (truncated)
-    ctx.font = isMe ? 'bold 7px monospace' : '7px monospace';
+    ctx.font = isMe ? f(7, 'bold') : f(7);
     ctx.fillStyle = isMe ? '#0f0' : G_BRIGHT;
     const maxNameW = colX.stars - colX.name - 4;
     let displayName = entry.username;
@@ -4737,7 +5151,7 @@ function drawLeaderboardBody(
     ctx.fillText(displayName, colX.name, ry + rowH / 2);
 
     // Stats columns
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_MED;
     ctx.textAlign = 'left';
     ctx.fillText(`${entry.starCount}`, colX.stars, ry + rowH / 2);
@@ -4758,7 +5172,7 @@ function drawLeaderboardBody(
     ctx.strokeStyle = '#a060ff';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(seedBtnX, seedBtnY, seedBtnW, seedBtnH);
-    ctx.font = 'bold 6px monospace';
+    ctx.font = f(7, 'bold');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#c090ff';
@@ -4808,7 +5222,7 @@ function drawAllianceNoneView(
   x: number, y: number, w: number,
 ): number {
   let cy = y + 4;
-  ctx.font = '8px monospace';
+  ctx.font = f(8);
   ctx.textAlign = 'center';
   ctx.fillStyle = G_DIM;
   ctx.fillText('No Alliance', x + w / 2, cy + 6);
@@ -4823,7 +5237,7 @@ function drawAllianceNoneView(
   ctx.strokeStyle = G_BRIGHT;
   ctx.lineWidth = 0.5;
   ctx.strokeRect(bx, cy, btnW, btnH);
-  ctx.font = 'bold 7px monospace';
+  ctx.font = f(7, 'bold');
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText('CREATE ALLIANCE', x + w / 2, cy + btnH / 2 + 1);
   _allianceButtons.push({ action: 'create', x: bx, y: cy, w: btnW, h: btnH });
@@ -4836,7 +5250,7 @@ function drawAllianceNoneView(
     ctx.strokeStyle = '#ffcc00';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(bx, cy, btnW, btnH);
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.fillStyle = '#ffcc00';
     ctx.fillText(`INVITES (${_allianceInvites.length})`, x + w / 2, cy + btnH / 2 + 1);
     _allianceButtons.push({ action: 'view_invites', x: bx, y: cy, w: btnW, h: btnH });
@@ -4850,7 +5264,7 @@ function drawAllianceNoneView(
     ctx.strokeStyle = '#cc66ff';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(bx, cy, btnW, btnH);
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.fillStyle = '#cc66ff';
     ctx.fillText(_pendingBotTest ? 'RUNNING...' : 'TEST BOTS', x + w / 2, cy + btnH / 2 + 1);
     _allianceButtons.push({ action: 'test_bots', x: bx, y: cy, w: btnW, h: btnH });
@@ -4862,7 +5276,7 @@ function drawAllianceNoneView(
     ctx.strokeStyle = '#66ccff';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(bx, cy, btnW, btnH);
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.fillStyle = '#66ccff';
     ctx.fillText('TEST ADMIN', x + w / 2, cy + btnH / 2 + 1);
     _allianceButtons.push({ action: 'test_admin', x: bx, y: cy, w: btnW, h: btnH });
@@ -4874,7 +5288,7 @@ function drawAllianceNoneView(
     ctx.strokeStyle = '#00ffcc';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(bx, cy, btnW, btnH);
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.fillStyle = '#00ffcc';
     ctx.fillText('CHECK TEST', x + w / 2, cy + btnH / 2 + 1);
     _allianceButtons.push({ action: 'test_check', x: bx, y: cy, w: btnW, h: btnH });
@@ -4887,7 +5301,7 @@ function drawAllianceNoneView(
       ctx.strokeStyle = '#ffcc00';
       ctx.lineWidth = 0.5;
       ctx.strokeRect(bx, cy, btnW, btnH);
-      ctx.font = 'bold 7px monospace';
+      ctx.font = f(7, 'bold');
       ctx.fillStyle = '#ffcc00';
       ctx.fillText('COPY BOT LOG', x + w / 2, cy + btnH / 2 + 1);
       _allianceButtons.push({ action: 'copy_bot_log', x: bx, y: cy, w: btnW, h: btnH });
@@ -4909,13 +5323,13 @@ function drawAllianceHomeView(
   let cy = y + 2;
 
   // Alliance name header
-  ctx.font = 'bold 8px monospace';
+  ctx.font = f(8, 'bold');
   ctx.textAlign = 'center';
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText(a.name.toUpperCase(), x + w / 2, cy + 7);
   cy += 14;
 
-  ctx.font = '7px monospace';
+  ctx.font = f(7);
   ctx.fillStyle = G_DIM;
   ctx.fillText(`${a.members.length}/10 members`, x + w / 2, cy + 5);
   cy += 12;
@@ -4927,7 +5341,7 @@ function drawAllianceHomeView(
   const membersToShow = a.members.slice(0, maxShow);
   for (const member of membersToShow) {
     const isManager = member === a.manager;
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = isManager ? '#ffcc00' : G_MED;
     const label = isManager ? `★ ${member} (MGR)` : `  ${member}`;
     ctx.fillText(label, x + 6, cy + 9);
@@ -4941,7 +5355,7 @@ function drawAllianceHomeView(
       ctx.strokeStyle = '#ff5050';
       ctx.lineWidth = 0.5;
       ctx.strokeRect(kickX, cy + 1, kickW, memberH - 2);
-      ctx.font = 'bold 6px monospace';
+      ctx.font = f(7, 'bold');
       ctx.textAlign = 'center';
       ctx.fillStyle = '#ff5050';
       ctx.fillText('KICK', kickX + kickW / 2, cy + 9);
@@ -4951,7 +5365,7 @@ function drawAllianceHomeView(
     cy += memberH;
   }
   if (a.members.length > maxShow) {
-    ctx.font = '6px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.fillText(`  +${a.members.length - maxShow} more`, x + 6, cy + 6);
     cy += 10;
@@ -4971,7 +5385,7 @@ function drawAllianceHomeView(
   ctx.strokeStyle = G_BRIGHT;
   ctx.lineWidth = 0.5;
   ctx.strokeRect(bx, cy, btnW, btnH);
-  ctx.font = 'bold 7px monospace';
+  ctx.font = f(7, 'bold');
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText('ALLIANCE CHAT', x + w / 2, cy + btnH / 2 + 1);
   _allianceButtons.push({ action: 'chat', x: bx, y: cy, w: btnW, h: btnH });
@@ -4984,7 +5398,7 @@ function drawAllianceHomeView(
     ctx.strokeStyle = '#66ccff';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(bx, cy, btnW, btnH);
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.fillStyle = '#66ccff';
     ctx.fillText('INVITE PLAYER', x + w / 2, cy + btnH / 2 + 1);
     _allianceButtons.push({ action: 'invite_view', x: bx, y: cy, w: btnW, h: btnH });
@@ -4997,7 +5411,7 @@ function drawAllianceHomeView(
   ctx.strokeStyle = '#ff5050';
   ctx.lineWidth = 0.5;
   ctx.strokeRect(bx, cy, btnW, btnH);
-  ctx.font = 'bold 7px monospace';
+  ctx.font = f(7, 'bold');
   ctx.fillStyle = '#ff5050';
   ctx.fillText('LEAVE ALLIANCE', x + w / 2, cy + btnH / 2 + 1);
   _allianceButtons.push({ action: 'leave', x: bx, y: cy, w: btnW, h: btnH });
@@ -5010,7 +5424,7 @@ function drawAllianceHomeView(
     ctx.strokeStyle = '#00ffcc';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(bx, cy, btnW, btnH);
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.fillStyle = '#00ffcc';
     ctx.fillText('CHECK TEST', x + w / 2, cy + btnH / 2 + 1);
     _allianceButtons.push({ action: 'test_check', x: bx, y: cy, w: btnW, h: btnH });
@@ -5022,7 +5436,7 @@ function drawAllianceHomeView(
       ctx.strokeStyle = '#ffcc00';
       ctx.lineWidth = 0.5;
       ctx.strokeRect(bx, cy, btnW, btnH);
-      ctx.font = 'bold 7px monospace';
+      ctx.font = f(7, 'bold');
       ctx.fillStyle = '#ffcc00';
       ctx.fillText('COPY BOT LOG', x + w / 2, cy + btnH / 2 + 1);
       _allianceButtons.push({ action: 'copy_bot_log', x: bx, y: cy, w: btnW, h: btnH });
@@ -5048,14 +5462,14 @@ function drawAllianceChatView(
   ctx.strokeStyle = G_BRIGHT;
   ctx.lineWidth = 0.5;
   ctx.strokeRect(x + 4, cy, backW, backH);
-  ctx.font = 'bold 6px monospace';
+  ctx.font = f(7, 'bold');
   ctx.textAlign = 'center';
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText('BACK', x + 4 + backW / 2, cy + backH / 2 + 1);
   _comsBackButton = { x: x + 4, y: cy, w: backW, h: backH };
 
   // Header
-  ctx.font = 'bold 7px monospace';
+  ctx.font = f(7, 'bold');
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText(_allianceInfo!.name.toUpperCase(), x + w / 2, cy + 7);
   cy += backH + 4;
@@ -5063,7 +5477,7 @@ function drawAllianceChatView(
   // Messages
   const msgs = _allianceChat;
   if (msgs.length === 0) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.textAlign = 'center';
     ctx.fillStyle = G_DIM;
     ctx.fillText('No messages yet', x + w / 2, cy + 8);
@@ -5080,16 +5494,16 @@ function drawAllianceChatView(
     for (const msg of pageItems) {
       const isSystem = msg.from === '__system__';
       if (isSystem) {
-        ctx.font = 'italic 6px monospace';
+        ctx.font = f(7, 'italic');
         ctx.fillStyle = '#ffcc00';
         ctx.fillText(`  ${msg.text}`, x + 4, cy + 7);
         cy += 12;
       } else {
-        ctx.font = 'bold 6px monospace';
+        ctx.font = f(7, 'bold');
         ctx.fillStyle = G_BRIGHT;
         ctx.fillText(msg.from, x + 4, cy + 7);
         cy += 9;
-        ctx.font = '6px monospace';
+        ctx.font = f(7);
         ctx.fillStyle = G_MED;
         // Wrap long text
         const maxChars = Math.floor((w - 12) / 4);
@@ -5102,7 +5516,7 @@ function drawAllianceChatView(
     // Pagination
     if (totalPages > 1) {
       ctx.textAlign = 'center';
-      ctx.font = '6px monospace';
+      ctx.font = f(7);
       ctx.fillStyle = G_DIM;
       ctx.fillText(`${_allianceChatPage + 1}/${totalPages}`, x + w / 2, cy + 6);
 
@@ -5113,7 +5527,7 @@ function drawAllianceChatView(
         ctx.strokeStyle = G_BRIGHT;
         ctx.lineWidth = 0.5;
         ctx.strokeRect(pbx, cy, 24, 10);
-        ctx.font = 'bold 6px monospace';
+        ctx.font = f(7, 'bold');
         ctx.fillStyle = G_BRIGHT;
         ctx.fillText('PREV', pbx + 12, cy + 6);
         _allianceChatPageButtons.push({ dir: 'prev', x: pbx, y: cy, w: 24, h: 10 });
@@ -5125,7 +5539,7 @@ function drawAllianceChatView(
         ctx.strokeStyle = G_BRIGHT;
         ctx.lineWidth = 0.5;
         ctx.strokeRect(nbx, cy, 24, 10);
-        ctx.font = 'bold 6px monospace';
+        ctx.font = f(7, 'bold');
         ctx.fillStyle = G_BRIGHT;
         ctx.fillText('NEXT', nbx + 12, cy + 6);
         _allianceChatPageButtons.push({ dir: 'next', x: nbx, y: cy, w: 24, h: 10 });
@@ -5143,7 +5557,7 @@ function drawAllianceChatView(
   ctx.strokeStyle = G_BRIGHT;
   ctx.lineWidth = 0.5;
   ctx.strokeRect(bx, cy, btnW, btnH);
-  ctx.font = 'bold 7px monospace';
+  ctx.font = f(7, 'bold');
   ctx.textAlign = 'center';
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText('SEND MESSAGE', x + w / 2, cy + btnH / 2 + 1);
@@ -5168,19 +5582,19 @@ function drawAllianceInvitesView(
   ctx.strokeStyle = G_BRIGHT;
   ctx.lineWidth = 0.5;
   ctx.strokeRect(x + 4, cy, backW, backH);
-  ctx.font = 'bold 6px monospace';
+  ctx.font = f(7, 'bold');
   ctx.textAlign = 'center';
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText('BACK', x + 4 + backW / 2, cy + backH / 2 + 1);
   _comsBackButton = { x: x + 4, y: cy, w: backW, h: backH };
 
-  ctx.font = 'bold 7px monospace';
+  ctx.font = f(7, 'bold');
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText('PENDING INVITES', x + w / 2, cy + 7);
   cy += backH + 4;
 
   if (_allianceInvites.length === 0) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.fillText('No invites', x + w / 2, cy + 8);
     return cy - y + 16;
@@ -5189,10 +5603,10 @@ function drawAllianceInvitesView(
   ctx.textAlign = 'left';
   for (const inv of _allianceInvites) {
     // Alliance name + invited by
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.fillStyle = G_MED;
     ctx.fillText(inv.allianceName, x + 6, cy + 8);
-    ctx.font = '6px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.fillText(`from ${inv.invitedBy}`, x + 6, cy + 17);
 
@@ -5209,7 +5623,7 @@ function drawAllianceInvitesView(
     ctx.strokeStyle = G_BRIGHT;
     ctx.lineWidth = 0.5;
     ctx.strokeRect(joinX, cy + 2, joinW, btnH);
-    ctx.font = 'bold 6px monospace';
+    ctx.font = f(7, 'bold');
     ctx.fillStyle = G_BRIGHT;
     ctx.fillText('JOIN', joinX + joinW / 2, cy + 2 + btnH / 2 + 1);
     _allianceButtons.push({ action: `join:${inv.allianceId}`, x: joinX, y: cy + 2, w: joinW, h: btnH });
@@ -5219,7 +5633,7 @@ function drawAllianceInvitesView(
     ctx.strokeStyle = '#ff5050';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(rejectX, cy + 2, rejectW, btnH);
-    ctx.font = 'bold 6px monospace';
+    ctx.font = f(7, 'bold');
     ctx.fillStyle = '#ff5050';
     ctx.fillText('REJECT', rejectX + rejectW / 2, cy + 2 + btnH / 2 + 1);
     _allianceButtons.push({ action: `reject:${inv.allianceId}`, x: rejectX, y: cy + 2, w: rejectW, h: btnH });
@@ -5246,13 +5660,13 @@ function drawAllianceInvitePlayerView(
   ctx.strokeStyle = G_BRIGHT;
   ctx.lineWidth = 0.5;
   ctx.strokeRect(x + 4, cy, backW, backH);
-  ctx.font = 'bold 6px monospace';
+  ctx.font = f(7, 'bold');
   ctx.textAlign = 'center';
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText('BACK', x + 4 + backW / 2, cy + backH / 2 + 1);
   _comsBackButton = { x: x + 4, y: cy, w: backW, h: backH };
 
-  ctx.font = 'bold 7px monospace';
+  ctx.font = f(7, 'bold');
   ctx.fillStyle = G_BRIGHT;
   ctx.fillText('INVITE PLAYER', x + w / 2, cy + 7);
   cy += backH + 4;
@@ -5262,7 +5676,7 @@ function drawAllianceInvitePlayerView(
   const candidates = _knownPlayerNames.filter(n => !members.has(n.toLowerCase()));
 
   if (candidates.length === 0) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.fillText('No players to invite', x + w / 2, cy + 8);
     return cy - y + 16;
@@ -5271,7 +5685,7 @@ function drawAllianceInvitePlayerView(
   ctx.textAlign = 'left';
   const rowH = 16;
   for (const player of candidates.slice(0, 6)) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_MED;
     ctx.fillText(player, x + 6, cy + 10);
 
@@ -5282,7 +5696,7 @@ function drawAllianceInvitePlayerView(
     if (_allianceInvitedPlayers.has(player)) {
       ctx.fillStyle = 'rgba(100,200,255,0.05)';
       ctx.fillRect(invX, cy + 1, invW, rowH - 2);
-      ctx.font = 'bold 6px monospace';
+      ctx.font = f(7, 'bold');
       ctx.fillStyle = G_DIM;
       ctx.fillText('SENT', invX + invW / 2, cy + 9);
     } else {
@@ -5291,7 +5705,7 @@ function drawAllianceInvitePlayerView(
       ctx.strokeStyle = '#66ccff';
       ctx.lineWidth = 0.5;
       ctx.strokeRect(invX, cy + 1, invW, rowH - 2);
-      ctx.font = 'bold 6px monospace';
+      ctx.font = f(7, 'bold');
       ctx.fillStyle = '#66ccff';
       ctx.fillText('INVITE', invX + invW / 2, cy + 9);
       _allianceButtons.push({ action: `invite:${player}`, x: invX, y: cy + 1, w: invW, h: rowH - 2 });
@@ -5322,12 +5736,12 @@ function drawComsContacts(
   drawPanelFrame(ctx, x, y, w, bodyH, 'COMMS', '\u{1F4E1}');
 
   if (contactCount === 0) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('NO CONTACTS DISCOVERED', x + w / 2, y + headerH + 20);
-    ctx.font = '6px monospace';
+    ctx.font = f(7);
     ctx.fillText('Use Enhanced Probes or visit', x + w / 2, y + headerH + 34);
     ctx.fillText('foreign stars to discover players', x + w / 2, y + headerH + 44);
     return bodyH;
@@ -5354,14 +5768,14 @@ function drawComsContacts(
     }
 
     // Player name
-    ctx.font = 'bold 8px monospace';
+    ctx.font = f(8, 'bold');
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = hasUnread ? G_BRIGHT : G_MED;
     ctx.fillText(player, x + PANEL_PAD + (hasUnread ? 12 : 2), cy + contactH / 2);
 
     // Message icon
-    ctx.font = '8px monospace';
+    ctx.font = f(8);
     ctx.textAlign = 'right';
     ctx.fillStyle = G_DIM;
     ctx.fillText('\u{1F4AC}', x + w - PANEL_PAD, cy + contactH / 2);
@@ -5402,7 +5816,7 @@ function drawDMConversation(
   ctx.fillRect(backX, backY, backW, backH);
   ctx.strokeStyle = G_DIM;
   ctx.strokeRect(backX, backY, backW, backH);
-  ctx.font = 'bold 7px monospace';
+  ctx.font = f(7, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = G_MED;
@@ -5410,7 +5824,7 @@ function drawDMConversation(
   _comsBackButton = { x: backX, y: backY, w: backW, h: backH };
 
   if (_dmLoading) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -5419,12 +5833,12 @@ function drawDMConversation(
   }
 
   if (_dmMessages.length === 0) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('No messages yet', x + w / 2, y + headerH + 20);
-    ctx.font = '6px monospace';
+    ctx.font = f(7);
     ctx.fillText('Tap SEND to start a conversation', x + w / 2, y + headerH + 34);
   } else {
     // Show most recent messages
@@ -5444,7 +5858,7 @@ function drawDMConversation(
       const videoMatch = msg.body.match(/^\[VIDEO:([^\]]+)\]\s*/);
 
       // Author + time
-      ctx.font = 'bold 6px monospace';
+      ctx.font = f(7, 'bold');
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillStyle = isFleetCommand ? '#c090ff' : isSystem ? '#fc0' : isMe ? '#4af' : G_BRIGHT;
@@ -5460,7 +5874,7 @@ function drawDMConversation(
         const flagY = my + 1;
         ctx.fillStyle = 'rgba(255, 80, 80, 0.15)';
         ctx.fillRect(flagX, flagY, flagW, flagH);
-        ctx.font = '7px monospace';
+        ctx.font = f(7);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = 'rgba(255, 80, 80, 0.6)';
@@ -5482,7 +5896,7 @@ function drawDMConversation(
         ctx.strokeStyle = `rgba(192, 144, 255, ${0.6 * pulse})`;
         ctx.lineWidth = 0.5;
         ctx.strokeRect(btnX, btnY, btnW, btnH);
-        ctx.font = 'bold 7px monospace';
+        ctx.font = f(7, 'bold');
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = `rgba(192, 144, 255, ${0.9 * pulse})`;
@@ -5491,14 +5905,14 @@ function drawDMConversation(
         // Show text after video tag
         const textAfter = msg.body.slice(videoMatch[0].length);
         if (textAfter) {
-          ctx.font = '6px monospace';
+          ctx.font = f(7);
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
           ctx.fillStyle = 'rgba(192, 144, 255, 0.6)';
           ctx.fillText(textAfter.slice(0, 30), btnX + btnW + 4, btnY + btnH / 2);
         }
       } else {
-        ctx.font = '7px monospace';
+        ctx.font = f(7);
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
         ctx.fillStyle = isFleetCommand ? 'rgba(192, 144, 255, 0.8)' : isSystem ? 'rgba(255, 204, 0, 0.8)' : isMe ? 'rgba(68, 170, 255, 0.7)' : G_MED;
@@ -5523,7 +5937,7 @@ function drawDMConversation(
     ctx.strokeStyle = G_MED;
     ctx.lineWidth = 0.5;
     ctx.strokeRect(sendX, sendY, sendW, sendH);
-    ctx.font = 'bold 8px monospace';
+    ctx.font = f(8, 'bold');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = G_BRIGHT;
@@ -5537,7 +5951,7 @@ function drawDMConversation(
     const alpha = Math.min(reportRemaining / 1000, 1.0);
     ctx.fillStyle = `rgba(0, 200, 100, ${0.15 * alpha})`;
     ctx.fillRect(x + 4, y + headerH, w - 8, 16);
-    ctx.font = 'bold 7px monospace';
+    ctx.font = f(7, 'bold');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = `rgba(100, 255, 150, ${alpha})`;
@@ -5574,7 +5988,7 @@ function drawPublicContactList(
   const allY = y + headerH;
   ctx.fillStyle = 'rgba(255, 136, 0, 0.06)';
   ctx.fillRect(x + 4, allY, w - 8, contactH - 2);
-  ctx.font = 'bold 8px monospace';
+  ctx.font = f(8, 'bold');
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#f80';
@@ -5582,7 +5996,7 @@ function drawPublicContactList(
   _comsContactButtons.push({ name: '__PUBLIC_ALL__', x: x + 4, y: allY, w: w - 8, h: contactH - 2 });
 
   if (players.length === 0) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -5598,14 +6012,14 @@ function drawPublicContactList(
     ctx.fillStyle = 'rgba(255, 136, 0, 0.03)';
     ctx.fillRect(x + 4, cy, w - 8, contactH - 2);
 
-    ctx.font = 'bold 8px monospace';
+    ctx.font = f(8, 'bold');
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = G_MED;
     ctx.fillText(player, x + PANEL_PAD + 2, cy + contactH / 2);
 
     // Icon
-    ctx.font = '8px monospace';
+    ctx.font = f(8);
     ctx.textAlign = 'right';
     ctx.fillStyle = G_DIM;
     ctx.fillText('\u{1F4E2}', x + w - PANEL_PAD, cy + contactH / 2);
@@ -5653,7 +6067,7 @@ function drawPublicPlayerView(
   ctx.fillRect(backX, backY, backW, backH);
   ctx.strokeStyle = 'rgba(255, 136, 0, 0.4)';
   ctx.strokeRect(backX, backY, backW, backH);
-  ctx.font = 'bold 7px monospace';
+  ctx.font = f(7, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#f80';
@@ -5663,7 +6077,7 @@ function drawPublicPlayerView(
   const contentTop = y + headerH;
 
   if (_publicLoading) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -5672,12 +6086,12 @@ function drawPublicPlayerView(
   }
 
   if (relevant.length === 0) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(`No messages with ${player}`, x + w / 2, contentTop + 20);
-    ctx.font = '6px monospace';
+    ctx.font = f(7);
     ctx.fillText('Send the first public message!', x + w / 2, contentTop + 34);
   } else {
     // Show most recent messages involving this player (newest at bottom)
@@ -5691,7 +6105,7 @@ function drawPublicPlayerView(
       const my = contentTop + i * msgH;
 
       // Author + time
-      ctx.font = 'bold 6px monospace';
+      ctx.font = f(7, 'bold');
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillStyle = comment.author.toLowerCase() === player.toLowerCase() ? '#f80' : '#4af';
@@ -5699,7 +6113,7 @@ function drawPublicPlayerView(
       ctx.fillText(`${comment.author}  ${timeStr}`, x + PANEL_PAD, my + 2);
 
       // Message body
-      ctx.font = '7px monospace';
+      ctx.font = f(7);
       ctx.fillStyle = G_MED;
       const maxChars = Math.floor((w - PANEL_PAD * 2) / 4.2);
       const bodyText = comment.body.length > maxChars ? comment.body.slice(0, maxChars - 1) + '\u2026' : comment.body;
@@ -5717,7 +6131,7 @@ function drawPublicPlayerView(
   ctx.strokeStyle = '#f80';
   ctx.lineWidth = 0.5;
   ctx.strokeRect(sendX, sendY, sendW, sendBtnH);
-  ctx.font = 'bold 8px monospace';
+  ctx.font = f(8, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#f80';
@@ -5759,7 +6173,7 @@ function drawPublicComments(
   ctx.fillRect(backX, backY, backW, backH);
   ctx.strokeStyle = 'rgba(255, 136, 0, 0.4)';
   ctx.strokeRect(backX, backY, backW, backH);
-  ctx.font = 'bold 7px monospace';
+  ctx.font = f(7, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#f80';
@@ -5769,7 +6183,7 @@ function drawPublicComments(
   const contentTop = y + headerH;
 
   if (_publicLoading) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -5778,12 +6192,12 @@ function drawPublicComments(
   }
 
   if (_publicComments.length === 0) {
-    ctx.font = '7px monospace';
+    ctx.font = f(7);
     ctx.fillStyle = G_DIM;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('No public messages yet', x + w / 2, contentTop + 40);
-    ctx.font = '6px monospace';
+    ctx.font = f(7);
     ctx.fillText('Be the first to post!', x + w / 2, contentTop + 54);
   } else {
     // Show in chat order (oldest first, newest at bottom) — page 0 = most recent page
@@ -5806,7 +6220,7 @@ function drawPublicComments(
       const my = contentTop + i * msgH;
 
       // Author + time
-      ctx.font = 'bold 6px monospace';
+      ctx.font = f(7, 'bold');
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillStyle = '#f80';
@@ -5814,7 +6228,7 @@ function drawPublicComments(
       ctx.fillText(`${comment.author}  ${timeStr}`, x + PANEL_PAD, my + 2);
 
       // Message body
-      ctx.font = '7px monospace';
+      ctx.font = f(7);
       ctx.fillStyle = G_MED;
       const maxChars = Math.floor((w - PANEL_PAD * 2 - 20) / 4.2);
       const bodyText = comment.body.length > maxChars ? comment.body.slice(0, maxChars - 1) + '\u2026' : comment.body;
@@ -5822,7 +6236,7 @@ function drawPublicComments(
 
       // Reply count indicator
       if (comment.replies.length > 0) {
-        ctx.font = '6px monospace';
+        ctx.font = f(7);
         ctx.fillStyle = G_DIM;
         ctx.textAlign = 'right';
         ctx.fillText(`${comment.replies.length}\u{1F4AC}`, x + w - PANEL_PAD, my + 6);
@@ -5838,7 +6252,7 @@ function drawPublicComments(
       ctx.strokeStyle = 'rgba(255, 136, 0, 0.3)';
       ctx.lineWidth = 0.3;
       ctx.strokeRect(replyX, replyY, replyW, replyH);
-      ctx.font = '5px monospace';
+      ctx.font = f(6);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#f80';
@@ -5861,7 +6275,7 @@ function drawPublicComments(
         ctx.strokeStyle = 'rgba(255, 136, 0, 0.4)';
         ctx.lineWidth = 0.3;
         ctx.strokeRect(prevX, pageY, pageBtnW, pageBtnH);
-        ctx.font = 'bold 6px monospace';
+        ctx.font = f(7, 'bold');
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#f80';
@@ -5870,7 +6284,7 @@ function drawPublicComments(
       }
 
       // Page indicator
-      ctx.font = '6px monospace';
+      ctx.font = f(7);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = G_DIM;
@@ -5884,7 +6298,7 @@ function drawPublicComments(
         ctx.strokeStyle = 'rgba(255, 136, 0, 0.4)';
         ctx.lineWidth = 0.3;
         ctx.strokeRect(nextX, pageY, pageBtnW, pageBtnH);
-        ctx.font = 'bold 6px monospace';
+        ctx.font = f(7, 'bold');
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#f80';
@@ -5903,7 +6317,7 @@ function drawPublicComments(
   ctx.strokeStyle = '#f80';
   ctx.lineWidth = 0.5;
   ctx.strokeRect(postX, postY, postW, postBtnH);
-  ctx.font = 'bold 8px monospace';
+  ctx.font = f(8, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#f80';
@@ -6115,7 +6529,7 @@ interface DockButton {
 let _lastDockButtons: DockButton[] = [];
 
 type DockExtensionAction = 'upgrade_station' | 'extend_habitat' | 'extend_ore' | 'extend_defense' | 'extend_warehouse' | 'extend_dock' | 'extend_shield' | 'extend_cannon' | 'extend_refinery';
-export type DockPanelAction = DockAction | DockExtensionAction | 'buy_ships' | 'debug_complete' | 'toggle_shield';
+export type DockPanelAction = DockAction | DockExtensionAction | 'buy_ships' | 'debug_complete' | 'toggle_shield' | 'refuel';
 
 let _completeButton: { x: number; y: number; w: number; h: number } | null = null;
 
@@ -6248,7 +6662,7 @@ export function drawReportBadge(r: Renderer, elapsedTime: number): void {
   ctx.globalAlpha = 1;
 
   // Icon
-  ctx.font = 'bold 9px monospace';
+  ctx.font = f(9, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ffffff';
@@ -6312,7 +6726,7 @@ export function drawReportPanel(r: Renderer): void {
   ctx.stroke();
 
   // Title
-  ctx.font = 'bold 13px monospace';
+  ctx.font = f(13, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ffaa44';
@@ -6340,7 +6754,7 @@ export function drawReportPanel(r: Renderer): void {
       : item.category === 'visitor' ? '#ff8844'
       : '#cccccc';
 
-    ctx.font = '10px monospace';
+    ctx.font = f(10);
     ctx.fillStyle = color;
     ctx.fillText(`${item.icon} ${item.text}`, px + 12, iy + lineH / 2);
   }
@@ -6359,7 +6773,7 @@ export function drawReportPanel(r: Renderer): void {
   ctx.strokeStyle = '#ffaa44';
   ctx.lineWidth = 1;
   ctx.stroke();
-  ctx.font = 'bold 9px monospace';
+  ctx.font = f(9, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ffdd88';
@@ -6412,7 +6826,7 @@ export function drawSkinPicker(r: Renderer): void {
 
   // Title
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 16px monospace';
+  ctx.font = f(17, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const pickerLabel = _skinPickerBuildType === 'station' ? 'STATION' :
@@ -6505,7 +6919,7 @@ export function drawSkinPicker(r: Renderer): void {
       ctx.fillStyle = '#222';
       ctx.fillRect(imgX, imgY, previewSize, previewSize);
       ctx.fillStyle = '#666';
-      ctx.font = '20px monospace';
+      ctx.font = f(20);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('\u{1F512}', imgX + previewSize / 2, imgY + previewSize / 2);
@@ -6529,14 +6943,14 @@ export function drawSkinPicker(r: Renderer): void {
       ctx.lineWidth = 1.5;
       ctx.stroke();
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 11px monospace';
+      ctx.font = f(11, 'bold');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(skin.label, btnX + btnW / 2, btnY + btnH / 2);
       _skinPickerBtns.push({ x: btnX, y: btnY, w: btnW, h: btnH, skinId: skin.id });
     } else {
       ctx.fillStyle = '#555';
-      ctx.font = '10px monospace';
+      ctx.font = f(10);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('COMING SOON', cellX + colW / 2, btnY + btnH / 2);
@@ -6563,11 +6977,13 @@ export function drawSkinPicker(r: Renderer): void {
   ctx.lineWidth = 1;
   ctx.stroke();
   ctx.fillStyle = '#ffaa88';
-  ctx.font = 'bold 10px monospace';
+  ctx.font = f(10, 'bold');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('CANCEL', cancelX + cancelW / 2, cancelY + cancelH / 2);
   _skinPickerCancelBtn = { x: cancelX, y: cancelY, w: cancelW, h: cancelH };
+
+  drawCoachOverSkinPicker(ctx, screenW, screenH);
 
   ctx.restore();
 }
@@ -6575,6 +6991,8 @@ export function drawSkinPicker(r: Renderer): void {
 /** Hit test the skin picker overlay. Returns true if the picker consumed the tap. */
 export function hitTestSkinPicker(screenX: number, screenY: number): boolean {
   if (!_skinPickerVisible) return false;
+
+  if (hitTestCoach(screenX, screenY)) return true;
 
   // Check cancel button first
   if (_skinPickerCancelBtn) {
@@ -6611,6 +7029,7 @@ export function hitTestSkinPicker(screenX: number, screenY: number): boolean {
       }
       _skinPickerVisible = false;
       _skinPickerBtns = [];
+      coachAdvance('undock');
       // If picker was shown before a build, now fire the build
       if (_skinPickerPendingBuild) {
         _skinPickerPendingBuild = false;
@@ -7015,6 +7434,7 @@ export function getTestState(): {
   shipBuilding: { typeId: number; completeAt: number; progress: number } | null;
   ships: Array<{ typeId: number; count: number }> | null;
   activeSkinId: string;
+  coach: { active: boolean; step: string };
 } {
   const econ = _lastEconomyStarIndex != null ? _serverEconomyByStarIndex.get(_lastEconomyStarIndex) : null;
   const fleet = _lastEconomyStarIndex != null ? _serverShipsByStarIndex.get(_lastEconomyStarIndex) : null;
@@ -7050,6 +7470,7 @@ export function getTestState(): {
     } : null,
     ships: fleet?.ships ?? null,
     activeSkinId: getActiveSkinId(),
+    coach: { active: isCoachActive(), step: getCoachStep() },
   };
 }
 
@@ -7089,7 +7510,7 @@ export function drawDockPanel(
   ctx.stroke();
 
   // Orbit status text
-  ctx.font = 'bold 9px monospace';
+  ctx.font = f(9, 'bold');
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = G_BRIGHT;
@@ -7112,7 +7533,7 @@ export function drawDockPanel(
     roundedRect(ctx, adX, adY, adW, adH, 3);
     ctx.stroke();
 
-    ctx.font = 'bold 9px monospace';
+    ctx.font = f(9, 'bold');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgb(255, 100, 80)';
@@ -7145,6 +7566,11 @@ export function drawDockPanel(
     orbitBtns.push({ action: 'toggle_shield', label: shLabel, icon: '\u26E8', color: isCharging ? '#ffdc64' : shieldRaised ? '#64c8ff' : '#ff6666' });
   }
   for (const act of DOCK_ACTIONS) {
+    // Space Dock offers a refuel instead of a surface scan
+    if (act.action === 'scan' && dock.featureType === 'dock') {
+      orbitBtns.push({ action: 'refuel', label: 'REFUEL', icon: '\u26FD', color: '#ffdc64' });
+      continue;
+    }
     orbitBtns.push(act);
   }
 
@@ -7184,20 +7610,20 @@ export function drawDockPanel(
         ctx.fill();
       }
 
-      ctx.font = '10px monospace';
+      ctx.font = f(10);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = color;
       ctx.fillText(act.icon, bx + 12, by + btnH / 2);
 
-      ctx.font = '7px monospace';
+      ctx.font = f(7);
       ctx.fillText(act.label, bx + 36, by + btnH / 2);
     } else {
       _lastDockButtons.push({ action: act.action as DockAction, label: act.label, icon: act.icon, x: bx, y: by, w: thisW, h: btnH });
 
       const enabled = dock.docked || act.action === 'leave';
       // Journey pulse on UNDOCK button so player knows how to leave
-      const undockPulse = act.action === 'leave' ? getJourneyPulseAlpha() : 0;
+      const undockPulse = (act.action === 'leave' && dock.docked) ? getJourneyPulseAlpha() : 0;
       const hasUndockPulse = undockPulse > 0;
 
       ctx.strokeStyle = hasUndockPulse ? `rgba(79, 255, 176, ${0.4 + undockPulse * 0.6})` : enabled ? G_BRIGHT : G_FAINT;
@@ -7205,13 +7631,13 @@ export function drawDockPanel(
       roundedRect(ctx, bx, by, thisW, btnH, 3);
       ctx.stroke();
 
-      ctx.font = '10px monospace';
+      ctx.font = f(10);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = hasUndockPulse ? `rgba(79, 255, 176, ${0.6 + undockPulse * 0.4})` : enabled ? G_BRIGHT : G_FAINT;
       ctx.fillText(act.icon, bx + 12, by + btnH / 2);
 
-      ctx.font = '7px monospace';
+      ctx.font = f(7);
       ctx.fillText(act.label, bx + 32, by + btnH / 2);
     }
   }
@@ -7234,7 +7660,7 @@ export function drawDockPanel(
     roundedRect(ctx, popX, popY, popW, popH, 4);
     ctx.stroke();
 
-    ctx.font = '9px monospace';
+    ctx.font = f(9);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = _lastExploreResult.kind === 'nothing' ? '#aaa' : G_BRIGHT;
@@ -7269,7 +7695,7 @@ export function drawDockPanel(
       roundedRect(ctx, colBtnX, colBtnY, colBtnW, colBtnH, 5);
       ctx.fill();
 
-      ctx.font = 'bold 11px monospace';
+      ctx.font = f(11, 'bold');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = `rgba(79, 255, 176, ${0.8 + 0.2 * pulse})`;
@@ -7279,11 +7705,14 @@ export function drawDockPanel(
     }
   }
 
+  drawCoachOverDockPanel(ctx, screenW, screenH);
+
   ctx.restore();
 }
 
 /** Hit-test dock panel buttons (orbit bar). Returns the action if clicked, null otherwise. */
 export function hitTestDockPanel(screenPos: Vec2): DockPanelAction | null {
+  if (hitTestCoach(screenPos.x, screenPos.y)) return null;
   // Check SHIELD TOGGLE button
   if (_shieldToggleButton) {
     const b = _shieldToggleButton;

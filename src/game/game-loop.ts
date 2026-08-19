@@ -25,12 +25,12 @@ import {
   drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds, closeAllPanels, isAnyPanelOpen,
   worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
-  setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert,
+  setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert, showBuildError,
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
   drawGalaxyZoomButtons, hitTestGalaxyZoomButtons, setHomeStarIndex,
 
   selectGalaxyStar, deselectGalaxyStar, getSelectedStarIndex, hitTestStarInfoDismiss, hitTestStarInfoVisit,
-  drawGalaxyModeToggle, drawGalaxyModeBanner, hitTestGalaxyModeBtn, toggleGalaxyMode, setGalaxyMode, getGalaxyMode,
+  drawGalaxyModeToggle, drawGalaxyModeBanner, hitTestGalaxyModeBtn, hitTestGalaxyExitBtn, toggleGalaxyMode, setGalaxyMode, getGalaxyMode,
   setGalaxyJumpReturnTier, isFleetPanelOpen, closeFleetPanel,
   getPostId, triggerExplore,
   drawSkinPicker, hitTestSkinPicker,
@@ -45,6 +45,8 @@ import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition
 import { checkDocking, updateDocking, undock } from './dock';
 import type { DockAction } from './dock';
 import { initJourney, skipJourney, journeyAction, updateJourney, isJourneyDone as _isJourneyDone } from './journey';
+import { coachAdvance } from './coach';
+import { f } from './font';
 
 let gameState: GameState | null = null;
 let renderer: Renderer | null = null;
@@ -84,6 +86,33 @@ export function consumePendingRefuel(): { starIndex: number; amount: number } | 
   const r = _pendingRefuel;
   _pendingRefuel = null;
   return r;
+}
+
+// ── Space Dock refuel ──
+// TODO: cooldown is client-side only — move to a server Redis key (attack plan #37).
+const SPACE_DOCK_REFUEL_COOLDOWN_MS = 5 * 60 * 1000;
+let _lastSpaceDockRefuelMs = 0;
+
+function handleSpaceDockRefuel(): void {
+  if (!gameState) return;
+  const remainingMs = SPACE_DOCK_REFUEL_COOLDOWN_MS - (Date.now() - _lastSpaceDockRefuelMs);
+  if (_lastSpaceDockRefuelMs > 0 && remainingMs > 0) {
+    showBuildError(`REFUEL READY IN ${Math.ceil(remainingMs / 1000)}s`);
+    playSound('click');
+    return;
+  }
+  const cap = FUEL_CAPACITY_BY_SHAPE[gameState.shipShape];
+  const needed = cap - gameState.fuelUnits;
+  if (needed <= 0) {
+    showBuildError('FUEL ALREADY FULL');
+    playSound('click');
+    return;
+  }
+  _lastSpaceDockRefuelMs = Date.now();
+  _pendingRefuel = { starIndex: gameState.galaxy.currentStarIndex, amount: Math.ceil(needed) };
+  gameState.fuelUnits = cap;
+  playSound('click');
+  console.log('[DOCK] space dock refuel:', Math.ceil(needed), 'units');
 }
 
 // ── Known players (discovered via probes/visits) ──
@@ -617,13 +646,17 @@ function update(dt: number): void {
         }
         undock(gameState);
         journeyAction();
+        coachAdvance('navigate_dock');
         devvitCb?.onMilestone?.('first_move');
       } else if (dockAction === 'scan') {
         playSound('begin_scan');
         // Trigger planet exploration
         triggerExplore(gameState.galaxy.currentStarIndex, gameState.galaxy.currentBodyIndex);
         journeyAction();
+        coachAdvance('help');
         console.log('[DOCK] SCAN triggered at star', gameState.galaxy.currentStarIndex, 'body', gameState.galaxy.currentBodyIndex);
+      } else if (dockAction === 'refuel') {
+        handleSpaceDockRefuel();
       } else if (dockAction === 'ships' || dockAction === 'buy_ships') {
         playSound('click');
         // Ship panel toggle/buy handled inside hitTestDockPanel
@@ -666,11 +699,13 @@ function update(dt: number): void {
       else playSound(Math.random() < 0.5 ? 'undocking' : 'undocking_alt');
       undock(gameState);
       journeyAction();
+      coachAdvance('navigate_dock');
       devvitCb?.onMilestone?.('first_move');
     } else if (action === 'scan' && gameState.dock) {
       playSound('begin_scan');
       triggerExplore(gameState.galaxy.currentStarIndex, gameState.galaxy.currentBodyIndex);
       journeyAction();
+      coachAdvance('help');
       console.log('[KEY] SCAN triggered at star', gameState.galaxy.currentStarIndex, 'body', gameState.galaxy.currentBodyIndex);
     } else if (action === 'close_panel') {
       closeAllPanels();
@@ -775,7 +810,27 @@ function update(dt: number): void {
 
   // Handle galaxy mode toggle button tap
   if (gameState.galaxy.tier === NavigationTier.Galaxy && inputState.pointerDown && inputState.pointerPos) {
-    if (hitTestGalaxyModeBtn(inputState.pointerPos.x, inputState.pointerPos.y)) {
+    if (hitTestGalaxyExitBtn(inputState.pointerPos.x, inputState.pointerPos.y)) {
+      // Unconditional exit — works even when no return-tier breadcrumb survives
+      const starIdx = gameState.galaxy.currentStarIndex >= 0
+        ? gameState.galaxy.currentStarIndex
+        : gameState.galaxy.homeStarIndex;
+      const star = gameState.galaxy.stars[starIdx];
+      if (star) {
+        gameState.galaxy.currentStarIndex = starIdx;
+        gameState.galaxy.bodies = generateSystem(star, getPostId());
+        gameState.galaxy.tier = NavigationTier.System;
+        const center = SYSTEM_SIZE / 2;
+        gameState.ship.pos = vec2(center, center + 20);
+        gameState.ship.vel = { x: 0, y: 0 };
+        gameState.ship.thrust = false;
+        gameState.dock = null;
+        _savedDock = null;
+        setGalaxyMode('nav');
+        cancelTransferMode();
+      }
+      inputState.pointerDown = false;
+    } else if (hitTestGalaxyModeBtn(inputState.pointerPos.x, inputState.pointerPos.y)) {
       toggleGalaxyMode();
       inputState.pointerDown = false;
     }
@@ -1317,12 +1372,12 @@ function render(): void {
       const ctx = renderer.ctx;
       const alpha = Math.min(1, _warpFuelWarningTimer / 0.5);
       ctx.save();
-      ctx.font = 'bold 13px monospace';
+      ctx.font = f(13, 'bold');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = `rgba(255, 160, 40, ${alpha})`;
       ctx.fillText('INSUFFICIENT FUEL FOR WARP', screenW / 2, screenH * 0.18);
-      ctx.font = '11px monospace';
+      ctx.font = f(11);
       ctx.fillStyle = `rgba(200, 220, 210, ${alpha * 0.85})`;
       ctx.fillText('Refuel at a station before traveling', screenW / 2, screenH * 0.18 + 20);
       ctx.restore();
@@ -1370,12 +1425,12 @@ function render(): void {
       const ctx = renderer.ctx;
       const alpha = Math.min(1, _scoutWarningTimer / 0.5); // fade out in last 0.5s
       ctx.save();
-      ctx.font = 'bold 13px monospace';
+      ctx.font = f(13, 'bold');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = `rgba(255, 80, 60, ${alpha})`;
       ctx.fillText('SCOUT RANGE EXCEEDED', screenW / 2, screenH * 0.18);
-      ctx.font = '11px monospace';
+      ctx.font = f(11);
       ctx.fillStyle = `rgba(200, 220, 210, ${alpha * 0.85})`;
       ctx.fillText('Upgrade ship at station to leave system', screenW / 2, screenH * 0.18 + 20);
       ctx.restore();
@@ -1461,12 +1516,12 @@ function render(): void {
       const ctx = renderer.ctx;
       const alpha = Math.min(1, _dockWarningTimer / 0.5);
       ctx.save();
-      ctx.font = 'bold 13px monospace';
+      ctx.font = f(13, 'bold');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = `rgba(255, 100, 80, ${alpha})`;
       ctx.fillText('UNDOCK TO MOVE', screenW / 2, screenH * 0.18);
-      ctx.font = '11px monospace';
+      ctx.font = f(11);
       ctx.fillStyle = `rgba(200, 220, 210, ${alpha * 0.85})`;
       ctx.fillText('Press UNDOCK to leave station', screenW / 2, screenH * 0.18 + 20);
       ctx.restore();
@@ -1508,7 +1563,7 @@ function render(): void {
     const alpha = Math.max(0, 1 - ft.age / 1.5);
     renderer.ctx.save();
     renderer.ctx.globalAlpha = alpha;
-    renderer.ctx.font = 'bold 14px monospace';
+    renderer.ctx.font = f(14, 'bold');
     renderer.ctx.fillStyle = ft.color;
     renderer.ctx.textAlign = 'center';
     renderer.ctx.fillText(ft.text, scr.x, scr.y);

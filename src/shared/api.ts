@@ -19,7 +19,7 @@ export type DecrementResponse = {
   count: number;
 };
 
-export type SharedShipShape = 'scout' | 'destroyer' | 'frigate' | 'battleship' | 'cruiser' | 'dreadnought';
+export type SharedShipShape = 'scout' | 'destroyer' | 'frigate' | 'battleship' | 'cruiser' | 'dreadnought' | 'colony';
 
 export function normalizeSharedShipShape(shape: string | undefined): SharedShipShape {
   switch (shape) {
@@ -29,6 +29,7 @@ export function normalizeSharedShipShape(shape: string | undefined): SharedShipS
     case 'battleship':
     case 'cruiser':
     case 'dreadnought':
+    case 'colony':
       return shape;
     default:
       return 'scout';
@@ -49,6 +50,7 @@ export type PoseUpdateRequest = {
   tier?: number;
   starIndex?: number;
   bodyIndex?: number;
+  skinId?: string;
 };
 
 export type RoomPosesQuery = {
@@ -65,6 +67,7 @@ export type RoomPoseItem = {
   y: number;
   angle: number;
   shape: SharedShipShape;
+  skinId?: string;
 };
 
 export type RoomPosesResponse = {
@@ -115,8 +118,11 @@ export type PlayerProfileResponse = {
   claimed?: Array<{ starIndex: number; username: string }>;
   discoveredStars?: number[];
   enhancedProbeStars?: number[];  // stars discovered by enhanced probe
+  scannedBodies?: string[];       // "starIndex:bodyIndex" keys for bodies that show raster
   journeyDone?: boolean;
+  coachStep?: string;             // coach mark tutorial progress ('done' when finished)
   devMode?: boolean;
+  wireframePref?: boolean;        // global wireframe mode — everything renders as wireframe
 };
 
 export type ResourceStore = {
@@ -141,6 +147,7 @@ export type StarBuildingState = {
   level: number;
   status: BuildStatus;
   completeAt: number | null;
+  skinId?: string;
 };
 
 export type StarBuildingsState = Record<BuildType, StarBuildingState>;
@@ -173,6 +180,7 @@ export type StarEconomyResponse = {
   completeCharges?: number;
   richness?: ResourceStore;
   buffs?: ActiveBuff[];
+  preferredSkinId?: string;
 };
 
 export type ToggleShieldRequest = {
@@ -191,6 +199,7 @@ export type BuildBuildingRequest = {
   username: string;
   starIndex: number;
   buildType: BuildType;
+  skinId?: string;
 };
 
 export type BuildBuildingResponse = StarEconomyResponse & {
@@ -204,6 +213,21 @@ export type SaveProfileRequest = {
   discoveredStars?: number[];
   enhancedProbeStars?: number[];
   journeyDone?: boolean;
+  coachStep?: string;
+  wireframePref?: boolean;
+};
+
+// ── Returning Player Report ─────────────────────────────────────────────────
+
+export type ReportItem = {
+  icon: string;      // short emoji/symbol
+  text: string;      // human-readable line
+  category: 'build' | 'resources' | 'visitor' | 'rumor';
+};
+
+export type ReturningReport = {
+  items: ReportItem[];
+  awaySeconds: number;  // how long the player was gone
 };
 
 // ── Ship Types ──────────────────────────────────────────────────────────────
