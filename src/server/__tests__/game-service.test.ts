@@ -162,11 +162,11 @@ describe('game service backend routines', () => {
     const econ = await loadStarEconomy(store, 'pilot', 2, now);
 
     expect(econ.starIndex).toBe(2);
-    expect(econ.store).toEqual({ ore: 640, food: 640, energy: 640 });
+    expect(econ.store).toEqual({ ore: 640, food: 640, energy: 640, fuel: 0 });
     expect(econ.cap).toBe(1600);
     expect(econ.buildings.station.level).toBe(1);
     expect(econ.buildings.mine.status).toBe('READY');
-    expect(store.data['profile:pilot']?.economy).toBeDefined();
+    expect(store.data['profile:pilot']?.economy).toBeUndefined();
   });
 
   it('applies elapsed-time production and clamps to cap', async () => {
@@ -196,7 +196,7 @@ describe('game service backend routines', () => {
 
     expect(econ.store.ore).toBe(1600);
     expect(econ.store.food).toBe(1600);
-    expect(econ.store.energy).toBe(1600);
+    expect(econ.store.energy).toBe(1589);
     expect(econ.lastTickMs).toBe(70_000);
   });
 
@@ -218,7 +218,7 @@ describe('game service backend routines', () => {
 
     const econ = await loadStarEconomy(store, 'pilot', 4, 40_000);
 
-    expect(econ.store).toEqual({ ore: 700, food: 710, energy: 720 });
+    expect(econ.store).toEqual({ ore: 700, food: 710, energy: 720, fuel: 0 });
     expect(econ.lastTickMs).toBe(50_000);
   });
 
@@ -251,7 +251,7 @@ describe('game service backend routines', () => {
     expect(econ.buildings.mine.status).toBe('ACTIVE');
     expect(econ.buildings.warehouse.level).toBe(1);
     expect(econ.cap).toBe(2000);
-    expect(econ.rates).toEqual({ ore: 147, food: 84, energy: 84 });
+    expect(econ.rates).toEqual({ ore: 148, food: 34, energy: 102, fuel: 12.5 });
   });
 
   it('starts a building upgrade by deducting resources and setting completion state', async () => {
@@ -265,8 +265,8 @@ describe('game service backend routines', () => {
 
     expect(response.ok).toBe(true);
     expect(response.buildings.mine.status).toBe('UPGRADING');
-    expect(response.buildings.mine.completeAt).toBe(400_000);
-    expect(response.store).toEqual({ ore: 380, food: 520, energy: 460 });
+    expect(response.buildings.mine.completeAt).toBe(220_000);
+    expect(response.store).toEqual({ ore: 380, food: 520, energy: 460, fuel: 0 });
   });
 
   it('rejects locked or unaffordable building upgrades', async () => {

@@ -58,12 +58,12 @@ describe('reduceStarOwnership', () => {
 });
 
 describe('galaxy view model', () => {
-  it('maps home, undiscovered, and discovered foreign stars to blue, green, and white tones', () => {
+  it('maps home, unowned, and foreign-owned stars to current tones', () => {
     const galaxy: GalaxyState = {
       tier: NavigationTier.Galaxy,
       stars: [
         { index: 0, pos: vec2(10, 10), seed: 1, name: 'Home', bodyCount: 1, owner: 'player', discovered: true, discoveryLevel: 'visited' },
-        { index: 1, pos: vec2(20, 20), seed: 2, name: 'Unknown', bodyCount: 1, owner: 'foreign', discovered: false, discoveryLevel: 'none' },
+        { index: 1, pos: vec2(20, 20), seed: 2, name: 'Unknown', bodyCount: 1, owner: 'none', discovered: false, discoveryLevel: 'none' },
         { index: 2, pos: vec2(30, 30), seed: 3, name: 'Foreign', bodyCount: 1, owner: 'foreign', discovered: true, discoveryLevel: 'visited' },
       ],
       homeStarIndex: 0,
@@ -77,12 +77,12 @@ describe('galaxy view model', () => {
 
     const view = buildGalaxyViewModel(galaxy);
 
-    expect(view.stars.map((star) => star.tone)).toEqual(['blue', 'yellow', 'green']);
+    expect(view.stars.map((star) => star.tone)).toEqual(['blue', 'yellow', 'red']);
   });
 
   it('derives tones without renderer dependencies', () => {
     expect(getGalaxyStarTone({ index: 0, owner: 'player', discovered: true, discoveryLevel: 'visited' }, 0)).toBe('blue');
-    expect(getGalaxyStarTone({ index: 1, owner: 'foreign', discovered: false, discoveryLevel: 'none' }, 0)).toBe('yellow');
-    expect(getGalaxyStarTone({ index: 2, owner: 'foreign', discovered: true, discoveryLevel: 'visited' }, 0)).toBe('green');
+    expect(getGalaxyStarTone({ index: 1, owner: 'none', discovered: false, discoveryLevel: 'none' }, 0)).toBe('yellow');
+    expect(getGalaxyStarTone({ index: 2, owner: 'foreign', discovered: true, discoveryLevel: 'visited' }, 0)).toBe('red');
   });
 });

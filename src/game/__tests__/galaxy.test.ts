@@ -174,7 +174,7 @@ describe('applyTransition — ring model', () => {
       const foreignStar = galaxy.stars.find((star) => star.index !== galaxy.homeStarIndex);
 
       expect(foreignStar).toBeDefined();
-      expect(foreignStar!.owner).toBe('foreign');
+      expect(foreignStar!.owner).toBe('none');
       expect(foreignStar!.discovered).toBe(false);
 
       galaxy.tier = NavigationTier.Galaxy;
@@ -193,7 +193,7 @@ describe('applyTransition — ring model', () => {
       const visitedStar = galaxy.stars[foreignStar!.index];
       if (!visitedStar) throw new Error('Expected visited star');
       expect(visitedStar.discovered).toBe(true);
-      expect(visitedStar.owner).toBe('foreign');
+      expect(visitedStar.owner).toBe('none');
     });
   });
 
