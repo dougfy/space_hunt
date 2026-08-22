@@ -1,0 +1,25 @@
+{"ts":"2026-08-11T23:00:26Z","user":"LegitimateTree5933","event":"progress","details":"0.07 first_dock"}
+{"ts":"2026-08-11T23:00:26Z","user":"WeirdAd4511","event":"progress","details":"0.15 first_building"}
+{"ts":"2026-08-11T23:00:26Z","user":"WeirdAd4511","event":"progress","details":"0.15 first_upgrade"}
+{"ts":"2026-08-11T23:01:13Z","user":"LegitimateTree5933","event":"progress","details":"0.15 first_upgrade"}
+{"ts":"2026-08-11T23:01:14Z","user":"LegitimateTree5933","event":"progress","details":"0.15 first_building"}
+{"ts":"2026-08-11T23:30:32Z","user":"WeirdAd4511","event":"journey_started","details":"ffab44db-26d3-4f13-9042-0676f3c13d59"}
+{"ts":"2026-08-11T23:30:33Z","user":"WeirdAd4511","event":"app_ready","details":""}
+{"ts":"2026-08-11T23:30:33Z","user":"WeirdAd4511","event":"journey_started","details":"daa098e1-263b-4645-8c9a-68fe7e61f9be"}
+{"ts":"2026-08-11T23:30:33Z","user":"WeirdAd4511","event":"progress","details":"0.01 returned_player"}
+{"ts":"2026-08-11T23:30:33Z","user":"WeirdAd4511","event":"progress","details":"0.1 home_star_claimed"}
+{"ts":"2026-08-11T23:30:38Z","user":"WeirdAd4511","event":"progress","details":"0.75 star_discovered"}
+{"ts":"2026-08-12T00:00:32Z","user":"WeirdAd4511","event":"journey_ended","details":"incomplete"}
+{"ts":"2026-08-12T00:00:32Z","user":"WeirdAd4511","event":"progress","details":"0 idle_timeout"}
+{"ts":"2026-08-12T00:00:34Z","user":"WeirdAd4511","event":"journey_started","details":"268ee30a-c561-47fa-82ff-2d7f204455f0"}
+{"ts":"2026-08-12T00:00:34Z","user":"WeirdAd4511","event":"app_ready","details":""}
+{"ts":"2026-08-12T00:00:34Z","user":"WeirdAd4511","event":"progress","details":"0.01 returned_player"}
+{"ts":"2026-08-12T00:00:34Z","user":"WeirdAd4511","event":"progress","details":"0.1 home_star_claimed"}
+{"ts":"2026-08-12T00:00:39Z","user":"WeirdAd4511","event":"progress","details":"0.75 star_discovered"}
+{"ts":"2026-08-12T00:30:34Z","user":"WeirdAd4511","event":"journey_ended","details":"incomplete"}
+{"ts":"2026-08-12T00:30:34Z","user":"WeirdAd4511","event":"progress","details":"0 idle_timeout"}
+{"ts":"2026-08-12T00:30:36Z","user":"WeirdAd4511","event":"journey_started","details":"9e9c6e20-5997-4a25-a83a-7c73dcca0229"}
+{"ts":"2026-08-12T00:30:36Z","user":"WeirdAd4511","event":"app_ready","details":""}
+{"ts":"2026-08-12T00:30:36Z","user":"WeirdAd4511","event":"progress","details":"0.1 home_star_claimed"}
+{"ts":"2026-08-12T00:30:36Z","user":"WeirdAd4511","event":"progress","details":"0.01 returned_player"}
+{"ts":"2026-08-12T00:30:42Z","user":"WeirdAd4511","event":"progress","details":"0.75 star_discovered"}
