@@ -108,7 +108,54 @@ assets/
 
 ## Current Version
 
-v1.0.0
+v1.3.67
+
+## Changelog (since v1.3.0 — last approved)
+
+### v1.3.44–1.3.67 (Aug 11–12, 2026)
+
+**Journey Telemetry (State-Based)**
+- Replaced arbitrary milestone events with build-tree-depth progress calculation
+- Progress now reflects actual player state: buildings, ships, stars discovered, colonized
+- Journey 1 completes at star colonization (progress = 1.0)
+- Server-side telemetry logs include username for playtest monitoring
+- `journeyAction()` fires on every meaningful server interaction (build, buy_ship, colonize, explore, trade, transfer, raid)
+
+**Mobile UI Overhaul**
+- View mode detection: `isMobile`, `isPortrait` flags exposed to renderer
+- Planet + orbit ring scale down proportionally on mobile
+- HUD text (top-left info panel) uses smaller fonts on mobile, stays on-screen
+- Feature labels always render to the right on mobile (no left-side overflow)
+- Icon bar buttons shrink on mobile (28px vs 36px)
+- Admin panel compact layout on mobile
+- Recenter button repositioned above orbit bar on mobile
+- Planet tier exit boundary uses actual screen aspect ratio (fixes stuck-on-mobile bug)
+
+**Help Panel Redesign**
+- 6 tabs: Next, Guide, Controls, Buildings, Ships, Tree
+- "Next" tab: dynamic suggestions based on journey milestone completion
+- "Guide" tab: gameplay quickstart (from USER_GUIDE.md content)
+- "Tree" tab: full HTML build dependency tree with color-coded nodes
+- Buildings/Ships: paginated with Prev/Next buttons (no scrolling — Reddit compliance)
+- Tapping an icon shows info description below
+
+**Performance**
+- Bundle size reduced from 155MB → 34MB (removed _reference images, intermediates, backups)
+- Asset preloading deferred to after splash render (non-blocking first paint)
+- Loading screen: CSS-only spinner shown during JS load, hidden when game starts
+- 8-second safety timeout prevents infinite loading state
+- Ship icon 404s fixed (corrected path to wireframe SVGs)
+- WIRE button removed from icon bar (admin-only via settings)
+
+**Bug Fixes**
+- Fixed "DOCK TO ACCESS" black rectangle artifact persisting after tier change
+- Fixed Planet tier exit not working on mobile (hardcoded aspect ratio)
+- Devvit upgraded to 0.14.0
+
+**Playtest Monitoring Tools**
+- `playtest-monitor.sh` — streams telemetry from devvit logs with formatted output
+- `playtest-sankey.py` — generates Plotly funnel + Sankey charts from JSONL logs
+- Cannon icons use scifi PNGs (wireframe SVGs don't exist for cannons)
 
 ## Reddit App Review Compliance
 

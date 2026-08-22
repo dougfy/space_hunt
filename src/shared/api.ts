@@ -121,6 +121,8 @@ export type PlayerProfileResponse = {
   scannedBodies?: string[];       // "starIndex:bodyIndex" keys for bodies that show raster
   journeyDone?: boolean;
   coachStep?: string;             // coach mark tutorial progress ('done' when finished)
+  coachSkipped?: boolean;         // dismissed early — resumable but won't auto-start
+  fontScale?: string;             // 'small' | 'medium' | 'large'
   devMode?: boolean;
   wireframePref?: boolean;        // global wireframe mode — everything renders as wireframe
 };
@@ -214,6 +216,8 @@ export type SaveProfileRequest = {
   enhancedProbeStars?: number[];
   journeyDone?: boolean;
   coachStep?: string;
+  coachSkipped?: boolean;
+  fontScale?: string;
   wireframePref?: boolean;
 };
 

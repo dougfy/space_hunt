@@ -44,6 +44,7 @@ export interface PlanetFeature {
   angle: number;   // offset angle from planet center (radians)
   dist: number;    // distance from planet center in world units
   level?: number;  // building level (for icon rendering)
+  skinId?: string; // owner's skin when built (for multiplayer rendering)
 }
 
 export interface SystemBody {
@@ -356,7 +357,7 @@ export function checkTierTransition(
     // Check exit: ship reaches edge of planet view (camera is fixed at origin with orthoSize=3.2)
     // Boundary is 1/10 inset from visible edge on all sides
     const halfH = 3.2; // orthoSize
-    const aspect = 1.5; // approximate screen aspect
+    const aspect = (typeof window !== 'undefined' && window.innerWidth > 0) ? window.innerWidth / window.innerHeight : 1.5;
     const exitX = halfH * aspect * 0.9;
     const exitY = halfH * 0.9;
     if (Math.abs(shipPos.x) > exitX || Math.abs(shipPos.y) > exitY) {

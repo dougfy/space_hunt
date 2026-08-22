@@ -784,6 +784,8 @@ bots.post('/autobot/flyby', async (c) => {
     hDel: (key, fields) => redis.hDel(key, fields),
     get: (key) => redis.get(key),
     set: (key, value) => redis.set(key, value),
+    del: (key) => redis.del(key),
+    zRange: (key, min, max, options) => redis.zRange(key, min, max, options ? { by: 'score' } : undefined),
   };
 
   const state = await getAutoBotState();

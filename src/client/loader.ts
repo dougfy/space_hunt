@@ -16,6 +16,8 @@ if (location.hash === '#idle') {
   history.replaceState(null, '', location.pathname + location.search);
 }
 
+// ── Play Buttons ────────────────────────────────────────────────────────────
+
 const playHere = document.getElementById('play-here');
 const playFull = document.getElementById('play-full');
 let gameLoaded = false;
@@ -28,8 +30,11 @@ function loadGame(mode: 'inline' | 'full', event: Event) {
   // Save the original trusted event so game.ts can use it for requestExpandedMode
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (globalThis as any).__DEFERRED_EVENT__ = event;
-  if (playHere) playHere.textContent = '\u23F3 Loading...';
-  if (playFull) playFull.textContent = '\u23F3 Loading...';
+  // Hide buttons and show loading indicator
+  const btnRow = document.getElementById('btn-row');
+  const loadingIndicator = document.getElementById('loading-indicator');
+  if (btnRow) btnRow.style.display = 'none';
+  if (loadingIndicator) loadingIndicator.classList.add('visible');
   void import('./game');
 }
 

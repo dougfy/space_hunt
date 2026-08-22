@@ -39,12 +39,14 @@ export function setRemotePoses(state: GameState, items: RemotePoseItem[]): void 
       prev.targetAng = item.a;
       prev.name = item.name;
       prev.shape = shape;
+      prev.skinId = item.skinId;
       newGhosts.push(prev);
     } else {
       newGhosts.push({
         slot: item.slot,
         name: item.name,
         shape,
+        skinId: item.skinId,
         targetWorld: vec2(item.x, item.y),
         targetAng: item.a,
         curWorld: vec2(item.x, item.y),
@@ -63,4 +65,5 @@ export interface RemotePoseItem {
   x: number;
   y: number;
   a: number;
+  skinId?: string;
 }

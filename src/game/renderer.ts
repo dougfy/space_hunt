@@ -17,8 +17,10 @@ import { getAsteroidSurfaceInfo } from './asteroids';
 import type { StarVisualTone } from './ownership-contracts';
 import { playSound } from './audio';
 import { f } from './font';
+import { getFontScale } from './font';
+import { installTextAudit, setAuditRegion } from './text-audit';
 import { getJourneyPulseAlpha } from './journey';
-import { isCoachActive, getCoachStep, coachAdvance, dismissCoach, getCoachPulse, ackCoachStep, isCoachAcked } from './coach';
+import { isCoachActive, getCoachStep, coachAdvance, dismissCoach, completeCoach, getCoachPulse, ackCoachStep, isCoachAcked, isShipsTopicActive, getShipsTopicStep, shipsTopicNext, shipsTopicShipsOpened, shipsTopicProbeClicked, dismissShipsTopic, isComsTopicActive, getComsTopicIdx, getComsTopicPhase, comsTopicNext, comsTopicTabClicked, comsTopicBranchToAlliance, dismissComsTopic } from './coach';
 import { FLEET_COMMAND_SENDER } from '../shared/feature-flags';
 
 // ── View mode helper ────────────────────────────────────────────────────────
@@ -1066,6 +1068,9 @@ const G_BRIGHT = '#4fffb0';        // primary bright green
 const G_MED    = 'rgba(79, 255, 176, 0.6)';
 const G_DIM    = 'rgba(79, 255, 176, 0.25)';
 const G_FAINT  = 'rgba(79, 255, 176, 0.10)';
+// Resource costs are read at a glance, so they stay legible even when unaffordable.
+const G_COST     = 'rgba(79, 255, 176, 0.9)';
+const G_COST_OFF = 'rgba(79, 255, 176, 0.55)';
 const JUMP_LINK_MAX = 18; // max world-distance for jump link lines
 
 /** Draw a lens-flare starburst at screen coords */
@@ -1994,6 +1999,37 @@ function drawFeatureIcon(ctx: CanvasRenderingContext2D, x: number, y: number, ty
   getDrawFeatureIconForSkinId(skinId)(ctx, x, y, type, size, level);
 }
 
+// ── System view label placement ──────────────────────────────────────────────
+// Star and body names are drawn at fixed offsets, so they collide whenever two
+// bodies line up. Each label reserves a box and later ones step vertically until
+// they find clear space.
+let _sysLabelBoxes: Array<{ x: number; y: number; w: number; h: number }> = [];
+
+function resetSysLabels(): void {
+  _sysLabelBoxes = [];
+}
+
+/** Reserve space for a left-aligned, middle-baseline label. Returns the y to draw at. */
+function reserveSysLabel(ctx: CanvasRenderingContext2D, text: string, x: number, y: number): number {
+  const w = ctx.measureText(text).width;
+  const h = 11;
+  const step = 12;
+  for (let i = 0; i < 12; i++) {
+    // Alternate below/above the preferred position: 0, +12, -12, +24, ...
+    const dy = Math.ceil(i / 2) * step * (i % 2 === 0 ? -1 : 1);
+    const ty = y + dy;
+    const box = { x, y: ty - h / 2, w, h };
+    const clash = _sysLabelBoxes.some((b) =>
+      box.x < b.x + b.w && box.x + box.w > b.x && box.y < b.y + b.h && box.y + box.h > b.y);
+    if (!clash) {
+      _sysLabelBoxes.push(box);
+      return ty;
+    }
+  }
+  _sysLabelBoxes.push({ x, y: y - h / 2, w, h });
+  return y;
+}
+
 export function drawSystemView(
   r: Renderer,
   camera: Camera,
@@ -2012,6 +2048,8 @@ export function drawSystemView(
   const starCardinalBoost = star && star.index === galaxy.homeStarIndex ? 1.15 : 1;
 
   const starSc = worldToScreen({ x: center, y: center }, camera, screenW, screenH);
+
+  resetSysLabels();
 
   // ── 1. Orbital rings (faint ellipses for each body) ──
   ctx.save();
@@ -2049,7 +2087,7 @@ export function drawSystemView(
   } else {
     ctx.fillStyle = G_BRIGHT;
   }
-  ctx.fillText(starName, starSc.x + starRadPx * 4, starSc.y);
+  ctx.fillText(starName, starSc.x + starRadPx * 4, reserveSysLabel(ctx, starName, starSc.x + starRadPx * 4, starSc.y));
   ctx.restore();
 
   // ── 3. Bodies (planets & belts) ──
@@ -2086,7 +2124,7 @@ export function drawSystemView(
       // Place label at top of belt arc
       const labelX = starSc.x;
       const labelY = starSc.y - beltPx * 0.55 - 4;
-      ctx.fillText(body.name, labelX + 4, labelY);
+      ctx.fillText(body.name, labelX + 4, reserveSysLabel(ctx, body.name, labelX + 4, labelY));
       ctx.restore();
     } else {
       // Planet — raster sprite if scanned, wireframe otherwise
@@ -2155,7 +2193,8 @@ export function drawSystemView(
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = G_BRIGHT;
-      ctx.fillText(body.name, sc.x + radPx + 5, sc.y);
+      const nameX = sc.x + radPx + 5;
+      ctx.fillText(body.name, nameX, reserveSysLabel(ctx, body.name, nameX, sc.y));
       ctx.restore();
 
       // Station icons orbiting this planet (small markers in system view)
@@ -2886,11 +2925,19 @@ function buildMockPlanetStatusRows(
 let _openPanel = -1;
 
 // Layout constants
-const TAB_W = 28;      // width of the vertical tab strip
-const TAB_H = 48;      // height of each tab (smaller to fit 5)
+// TAB_W/TAB_H scale with the font so labels keep their room. At scale 1.0 these are
+// exactly 28/48, so 'small' stays pixel-identical. Call syncTabMetrics() before use.
+let TAB_W = 28;        // width of the vertical tab strip
+let TAB_H = 48;        // height of each tab
 const TAB_GAP = 3;
 const ROW_H = 14;
 const PANEL_PAD = 10;
+
+function syncTabMetrics(): void {
+  const s = getFontScale();
+  TAB_W = Math.round(28 * s);
+  TAB_H = Math.round(48 * s);
+}
 
 // Per-tab panel widths
 const PANEL_WIDTHS: number[] = [180, 280, 260, 220, 220, 200]; // STATUS, BUILD, SHIPS, FLEET, COMS, TRADE
@@ -2906,9 +2953,16 @@ export function togglePlanetPanel(index: number): 'fleet-opened' | 'fleet-closed
   const wasOpen = _openPanel === index;
   _openPanel = wasOpen ? -1 : index;
   if (index === 1 && !wasOpen) coachAdvance('upgrade_station');
+  if (index === 2 && !wasOpen) shipsTopicShipsOpened();
   if (wasOpen && index === 3) queueFleetRevert();
   if (index === 3) return wasOpen ? 'fleet-closed' : 'fleet-opened';
   return null;
+}
+
+/** Force the COMS panel open on the PUBLIC tab — used when starting the Comms guide. */
+export function openComsPanelForTutorial(): void {
+  _openPanel = 4;
+  _comsTab = 'public';
 }
 
 /**
@@ -2949,6 +3003,7 @@ export function isAnyPanelOpen(): boolean {
 
 /** Get the tab rects for hit testing */
 function getPanelTabRects(screenH: number) {
+  syncTabMetrics();
   const panelCount = PANEL_TABS.length;
   const totalH = panelCount * TAB_H + (panelCount - 1) * TAB_GAP;
   const startY = (screenH - totalH) / 2;
@@ -2969,9 +3024,6 @@ export function hitTestPlanetPanels(
 ): number {
   const tabRects = getPanelTabRects(screenH);
   const tabX = screenW - TAB_W;
-
-  // Coach "GOT IT" button sits above everything else
-  if (hitTestCoach(sx, sy)) return -2;
 
   // Check if click is on a tab
   for (let i = 0; i < tabRects.length; i++) {
@@ -3410,6 +3462,7 @@ function hitTestBuildPanel(sx: number, sy: number): void {
 function hitTestShipsPanel(sx: number, sy: number): void {
   for (const btn of _lastShipButtons) {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      if (btn.shipTypeId === 11) shipsTopicProbeClicked(); // Ships guide only cares that the tap landed
       if (btn.enabled) {
         if (btn.isUpgrade && btn.upgradeFromTypeId != null) {
           _pendingUpgradeShipRequest = { fromTypeId: btn.upgradeFromTypeId, ...(btn.useBlueprint ? { useBlueprint: true } : {}) };
@@ -3487,6 +3540,7 @@ export function drawPlanetPanels(
   const tabRects = getPanelTabRects(screenH);
   const tabX = screenW - TAB_W;
   _coachBuildTabRect = null;
+  _coachShipsTabRect = null;
 
   ctx.save();
 
@@ -3508,6 +3562,7 @@ export function drawPlanetPanels(
     if (isHidden) continue; // skip rendering this tab entirely
 
     if (i === 1 && !isDisabled) _coachBuildTabRect = { x: tabX - 4, y: ty, w: TAB_W + 4, h: TAB_H };
+    if (i === 2 && !isDisabled) _coachShipsTabRect = { x: tabX - 4, y: ty, w: TAB_W + 4, h: TAB_H };
 
     // Journey pulse: brighten non-disabled tabs
     const pulseAlpha = getJourneyPulseAlpha();
@@ -3524,17 +3579,27 @@ export function drawPlanetPanels(
     ctx.stroke();
 
     // Icon at top of tab
+    const tabScale = getFontScale();
+    const iconPx = Math.round(12 * tabScale);
+    const iconY = ty + Math.round(16 * tabScale);
     ctx.font = f(12);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : hasPulse ? `rgba(79, 255, 176, ${0.5 + pulseAlpha * 0.5})` : G_BRIGHT;
-    ctx.fillText(tab.icon, tabX + TAB_W / 2, ty + 16);
+    ctx.fillText(tab.icon, tabX + TAB_W / 2, iconY);
 
-    // Vertical title text
+    // Vertical title text — kept clear of the icon, clamped inside the tab
     ctx.save();
-    ctx.translate(tabX + TAB_W / 2, ty + TAB_H / 2 + 6);
-    ctx.rotate(-Math.PI / 2);
     ctx.font = f(7, 'bold');
+    let titleY = ty + TAB_H / 2 + Math.round(6 * tabScale);
+    if (tabScale !== 1) {
+      const half = ctx.measureText(tab.title).width / 2;
+      const minY = iconY + iconPx * 0.5 + 3 + half;
+      const maxY = ty + TAB_H - 2 - half;
+      titleY = Math.min(Math.max(titleY, minY), maxY);
+    }
+    ctx.translate(tabX + TAB_W / 2, titleY);
+    ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = isDisabled ? G_FAINT : isOpen ? G_BRIGHT : G_MED;
@@ -3630,6 +3695,8 @@ export function drawPlanetPanels(
 
 /** BUILD tab rect captured during the last panel draw (null when unavailable). */
 let _coachBuildTabRect: { x: number; y: number; w: number; h: number } | null = null;
+/** SHIPS tab rect, captured the same way, used by the post-onboarding Ships topic guide. */
+let _coachShipsTabRect: { x: number; y: number; w: number; h: number } | null = null;
 /** Rect of the primary (GOT IT) button drawn by the last coach overlay. */
 let _coachGotItButton: { x: number; y: number; w: number; h: number } | null = null;
 /** Rect of the SKIP button shown once a step has been acknowledged. */
@@ -3646,7 +3713,7 @@ const COACH_COPY: Record<string, { step: string; title: string[]; lines: string[
 };
 
 /** Buttons on the final congratulations card. */
-let _coachCongratsButtons: Array<{ x: number; y: number; w: number; h: number; id: 'finish' | 'controls' }> = [];
+let _coachCongratsButtons: Array<{ x: number; y: number; w: number; h: number; id: 'play' | 'more' }> = [];
 
 /** Screen rect of an HTML overlay button — the icon bar sits on top of the canvas. */
 function domButtonRect(id: string): { x: number; y: number; w: number; h: number } | null {
@@ -3662,20 +3729,45 @@ function domButtonRect(id: string): { x: number; y: number; w: number; h: number
 /** Planet orbit ring projected to screen space, captured during the planet-tier draw. */
 let _coachPlanetRing: { x: number; y: number; r: number } | null = null;
 
+/** NEXT / SKIP / branch buttons shared by the post-onboarding Ships and Comms topic guides. */
+let _topicPrimaryButton: { x: number; y: number; w: number; h: number } | null = null;
+let _topicSkipButton: { x: number; y: number; w: number; h: number } | null = null;
+let _topicSecondaryButton: { x: number; y: number; w: number; h: number } | null = null;
+
+/** Per-tab copy for the Comms topic guide, in on-screen left-to-right order. */
+const COMS_TOPIC_TABS: Array<{ tab: ComsTab; label: string; title: string; lines: string[] }> = [
+  { tab: 'public', label: 'PUBLIC', title: 'PUBLIC', lines: ['Posts here go to the Reddit', 'thread everyone can see.'] },
+  { tab: 'private', label: 'DM', title: 'PRIVATE (DM)', lines: ['Direct messages from other', 'commanders arrive here.'] },
+  { tab: 'alliance', label: 'ALLY', title: 'ALLIANCE', lines: ['Alliances are teams of players', 'who cooperate — sharing intel,', 'defending stars, and chatting', 'in a private channel.'] },
+  { tab: 'board', label: 'BOARD', title: 'LEADERBOARD', lines: ['Every commander ranked', 'by power.'] },
+];
+
 function drawCoachOverlay(ctx: CanvasRenderingContext2D, screenW: number, screenH: number): void {
   _coachGotItButton = null;
   _coachSkipButton = null;
-  _coachCongratsButtons = [];
+  _topicPrimaryButton = null;
+  _topicSkipButton = null;
+  _topicSecondaryButton = null;
+
+  // Help owns the screen while it is open; resume any handoff when it closes.
+  if ((globalThis as typeof globalThis & { __helpPanelOpen?: boolean }).__helpPanelOpen) return;
+
+  if (isShipsTopicActive()) {
+    drawShipsTopicOverlay(ctx, screenW, screenH);
+    return;
+  }
+  if (isComsTopicActive()) {
+    drawComsTopicOverlay(ctx, screenW, screenH);
+    return;
+  }
+
   if (!isCoachActive()) {
     drawHelpReminder(ctx);
     return;
   }
 
   const step = getCoachStep();
-  if (step === 'congrats') {
-    drawCoachCongrats(ctx, screenW, screenH);
-    return;
-  }
+  if (step === 'congrats') return; // drawn top-level by drawCoachCongratsTop
   if (step === 'navigate_dock') {
     const ring = _coachPlanetRing;
     if (!ring || _panelsDocked) return;
@@ -3694,7 +3786,236 @@ function drawCoachOverlay(ctx: CanvasRenderingContext2D, screenW: number, screen
     target = domButtonRect('help-btn');
   }
   if (!target) return;
-  drawCoachCallout(ctx, screenW, screenH, step, target, 'left');
+  drawCoachCallout(ctx, screenW, screenH, step, target, step === 'help' ? 'below' : 'left');
+}
+
+/** Small opaque card used by topic guides for steps with no on-screen target (e.g. "you need a Dock").
+ * `secondaryLabel`, when given, adds a full-width branch button above the NEXT/SKIP row. */
+function drawTopicInfoCard(
+  ctx: CanvasRenderingContext2D,
+  screenW: number, screenH: number,
+  title: string,
+  lines: string[],
+  primaryLabel: string,
+  secondaryLabel?: string,
+): void {
+  const AMBER = '#ffb84d';
+  const boxW = Math.min(220, screenW - 24);
+  const lineH = 11;
+
+  // Vertical extents, computed independently of boxY so boxH can be centred afterward.
+  const topPad = 10;
+  const titleH = 16;
+  const bodyH = lines.length * lineH;
+  const contentBottom = topPad + titleH + bodyH; // offset from boxY
+  const secondaryH = secondaryLabel ? 24 : 0; // 16px button + 8px gap
+  const buttonRowY = contentBottom + (secondaryLabel ? secondaryH : 10);
+  const buttonRowH = 16;
+  const bottomPad = 10;
+  const boxH = buttonRowY + buttonRowH + bottomPad;
+
+  const boxX = (screenW - boxW) / 2;
+  const boxY = Math.max(8, Math.min((screenH - boxH) / 2, screenH - boxH - 8));
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+  ctx.fillRect(0, 0, screenW, screenH);
+
+  ctx.fillStyle = '#0a0600';
+  roundedRect(ctx, boxX, boxY, boxW, boxH, 6);
+  ctx.fill();
+  ctx.strokeStyle = AMBER;
+  ctx.lineWidth = 2;
+  roundedRect(ctx, boxX, boxY, boxW, boxH, 6);
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = f(9, 'bold');
+  ctx.fillStyle = AMBER;
+  ctx.fillText(title, boxX + 12, boxY + topPad);
+
+  ctx.font = f(7);
+  ctx.fillStyle = G_BRIGHT;
+  for (const [i, line] of lines.entries()) {
+    ctx.fillText(line, boxX + 12, boxY + topPad + titleH + i * lineH);
+  }
+
+  if (secondaryLabel) {
+    const bx = boxX + 10;
+    const by = boxY + contentBottom + 8;
+    const bw = boxW - 20;
+    const bh = 16;
+    _topicSecondaryButton = { x: bx, y: by, w: bw, h: bh };
+    roundedRect(ctx, bx, by, bw, bh, 3);
+    ctx.fillStyle = 'rgba(80, 45, 0, 0.6)';
+    ctx.fill();
+    roundedRect(ctx, bx, by, bw, bh, 3);
+    ctx.strokeStyle = AMBER;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.font = f(8, 'bold');
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = AMBER;
+    ctx.fillText(secondaryLabel, bx + 8, by + bh / 2);
+  }
+
+  const pw = 76;
+  const ph = buttonRowH;
+  const px = boxX + boxW - pw - 10;
+  const py = boxY + buttonRowY;
+  _topicPrimaryButton = { x: px, y: py, w: pw, h: ph };
+  roundedRect(ctx, px, py, pw, ph, 3);
+  ctx.fillStyle = 'rgba(80, 45, 0, 0.75)';
+  ctx.fill();
+  roundedRect(ctx, px, py, pw, ph, 3);
+  ctx.strokeStyle = AMBER;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.font = f(8, 'bold');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = AMBER;
+  ctx.fillText(primaryLabel, px + pw / 2, py + ph / 2);
+
+  const sw = 40;
+  const sh = buttonRowH;
+  const sx = boxX + 10;
+  const sy = boxY + buttonRowY;
+  _topicSkipButton = { x: sx, y: sy, w: sw, h: sh };
+  roundedRect(ctx, sx, sy, sw, sh, 3);
+  ctx.strokeStyle = 'rgba(255, 184, 77, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.font = f(7, 'bold');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(255, 184, 77, 0.7)';
+  ctx.fillText('SKIP', sx + sw / 2, sy + sh / 2);
+
+  ctx.restore();
+}
+
+/** Ring + callout pointing at a real UI target for the topic guides, with a SKIP escape hatch. */
+function drawTopicPointer(
+  ctx: CanvasRenderingContext2D,
+  screenW: number, screenH: number,
+  target: { x: number; y: number; w: number; h: number },
+  placement: 'left' | 'above',
+  title: string,
+  lines: string[],
+): void {
+  const AMBER = '#ffb84d';
+  const pulse = getCoachPulse();
+
+  ctx.save();
+  ctx.strokeStyle = `rgba(255, 184, 77, ${0.55 + pulse * 0.45})`;
+  ctx.lineWidth = 2;
+  roundedRect(ctx, target.x - 3, target.y - 3, target.w + 6, target.h + 6, 5);
+  ctx.stroke();
+
+  const boxW = Math.min(170, screenW - 16);
+  const lineH = 11;
+  const boxH = 24 + lines.length * lineH + 16;
+  let boxX: number;
+  let boxY: number;
+  if (placement === 'above') {
+    boxX = target.x + target.w / 2 - boxW / 2;
+    boxY = target.y - 10 - boxH;
+  } else {
+    boxX = target.x - 12 - boxW;
+    boxY = target.y + target.h / 2 - boxH / 2;
+    if (boxX < 6) boxX = Math.min(target.x, screenW - boxW - 6);
+  }
+  boxX = Math.max(6, Math.min(boxX, screenW - boxW - 6));
+  boxY = Math.max(6, Math.min(boxY, screenH - boxH - 6));
+
+  ctx.fillStyle = 'rgba(10, 6, 0, 0.94)';
+  roundedRect(ctx, boxX, boxY, boxW, boxH, 5);
+  ctx.fill();
+  ctx.strokeStyle = AMBER;
+  ctx.lineWidth = 1.5;
+  roundedRect(ctx, boxX, boxY, boxW, boxH, 5);
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = f(8, 'bold');
+  ctx.fillStyle = AMBER;
+  ctx.fillText(title, boxX + 10, boxY + 8);
+  ctx.font = f(7);
+  ctx.fillStyle = G_BRIGHT;
+  for (const [i, line] of lines.entries()) {
+    ctx.fillText(line, boxX + 10, boxY + 22 + i * lineH);
+  }
+
+  const sw = 30;
+  const sh = 12;
+  const sx = boxX + boxW - sw - 8;
+  const sy = boxY + boxH - sh - 6;
+  _topicSkipButton = { x: sx, y: sy, w: sw, h: sh };
+  roundedRect(ctx, sx, sy, sw, sh, 3);
+  ctx.strokeStyle = 'rgba(255, 184, 77, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.font = f(7, 'bold');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(255, 184, 77, 0.7)';
+  ctx.fillText('SKIP', sx + sw / 2, sy + sh / 2);
+
+  ctx.restore();
+}
+
+function drawShipsTopicOverlay(ctx: CanvasRenderingContext2D, screenW: number, screenH: number): void {
+  const step = getShipsTopicStep();
+  if (step === 'info') {
+    drawTopicInfoCard(ctx, screenW, screenH, 'BUILDING SHIPS', [
+      'Ships are built at your Space Dock.',
+      'Dock at your station and build a',
+      'Dock before any ship can be queued.',
+    ], 'NEXT');
+    return;
+  }
+  if (step === 'open_ships') {
+    const target = _coachShipsTabRect;
+    if (!target) return; // SHIPS tab is disabled until docked at an owned, developed station
+    drawTopicPointer(ctx, screenW, screenH, target, 'left', 'OPEN SHIPS', [
+      'Tap the SHIPS tab to see', 'what you can build.',
+    ]);
+    return;
+  }
+  if (step === 'pick_probe' && _openPanel === 2) {
+    const btn = _lastShipButtons.find((b) => b.shipTypeId === 11);
+    if (!btn) return;
+    drawTopicPointer(ctx, screenW, screenH, { x: btn.x, y: btn.y, w: btn.w, h: btn.h }, 'above', 'BUILD A PROBE', [
+      'Tap BUILD on the Basic Probe.',
+      'Needs a Dock plus a little Ore,',
+      'Food and Energy.',
+    ]);
+  }
+}
+
+function drawComsTopicOverlay(ctx: CanvasRenderingContext2D, screenW: number, screenH: number): void {
+  if (_openPanel !== 4) return; // COMS panel must be open — forced on by openComsPanelForTutorial()
+  const idx = getComsTopicIdx();
+  const entry = COMS_TOPIC_TABS[idx];
+  if (!entry) return;
+  const phase = getComsTopicPhase();
+  if (phase === 'explain') {
+    // Alliance is the one tab with somewhere else to go: real alliance creation/management
+    // isn't part of this walkthrough yet, so offer a branch out to explore it directly.
+    const secondaryLabel = entry.tab === 'alliance' ? 'EXPLORE ALLIANCE \u2192' : undefined;
+    drawTopicInfoCard(ctx, screenW, screenH, entry.title, entry.lines, idx >= 3 ? 'DONE' : 'NEXT', secondaryLabel);
+    return;
+  }
+  // phase === 'point': ring the tab we want the player to actually tap
+  const btn = _comsTabButtons.find((b) => b.tab === entry.tab);
+  if (!btn) return;
+  drawTopicPointer(ctx, screenW, screenH, { x: btn.x, y: btn.y, w: btn.w, h: btn.h }, 'above', `OPEN ${entry.label}`, [
+    `Tap ${entry.label} to see what's there.`,
+  ]);
 }
 
 /** Ring the ? icon while the idle hint pulses — reminds stalled players the tutorial exists. */
@@ -3712,6 +4033,13 @@ function drawHelpReminder(ctx: CanvasRenderingContext2D): void {
 }
 
 /** Final card: congratulate, then offer to finish or continue to another tutorial. */
+export function drawCoachCongratsTop(r: Renderer): void {
+  _coachCongratsButtons = [];
+  if (!isCoachActive() || getCoachStep() !== 'congrats') return;
+  const dpr = window.devicePixelRatio || 1;
+  drawCoachCongrats(r.ctx, r.width / dpr, r.height / dpr);
+}
+
 function drawCoachCongrats(ctx: CanvasRenderingContext2D, screenW: number, screenH: number): void {
   const AMBER = '#ffb84d';
   const boxW = Math.min(250, screenW - 24);
@@ -3720,10 +4048,10 @@ function drawCoachCongrats(ctx: CanvasRenderingContext2D, screenW: number, scree
   const boxY = Math.max(8, (screenH - boxH) / 2);
 
   ctx.save();
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
   ctx.fillRect(0, 0, screenW, screenH);
 
-  ctx.fillStyle = 'rgba(10, 6, 0, 0.96)';
+  ctx.fillStyle = '#0a0600';
   roundedRect(ctx, boxX, boxY, boxW, boxH, 6);
   ctx.fill();
   ctx.strokeStyle = AMBER;
@@ -3748,16 +4076,11 @@ function drawCoachCongrats(ctx: CanvasRenderingContext2D, screenW: number, scree
     ctx.fillText(line, boxX + boxW / 2, boxY + 32 + i * 11);
   }
 
-  ctx.font = f(7, 'bold');
-  ctx.fillStyle = 'rgba(255, 184, 77, 0.65)';
-  ctx.textAlign = 'left';
-  ctx.fillText('MORE TUTORIALS', boxX + 14, boxY + 72);
-
   const itemW = boxW - 28;
   const itemH = 20;
   const itemX = boxX + 14;
-  const itemY = boxY + 84;
-  _coachCongratsButtons.push({ x: itemX, y: itemY, w: itemW, h: itemH, id: 'controls' });
+  const itemY = boxY + 76;
+  _coachCongratsButtons.push({ x: itemX, y: itemY, w: itemW, h: itemH, id: 'more' });
   roundedRect(ctx, itemX, itemY, itemW, itemH, 3);
   ctx.fillStyle = 'rgba(80, 45, 0, 0.6)';
   ctx.fill();
@@ -3768,13 +4091,14 @@ function drawCoachCongrats(ctx: CanvasRenderingContext2D, screenW: number, scree
   ctx.font = f(8, 'bold');
   ctx.fillStyle = AMBER;
   ctx.textBaseline = 'middle';
-  ctx.fillText('1.  CONTROLS & STEERING', itemX + 8, itemY + itemH / 2);
+  ctx.textAlign = 'left';
+  ctx.fillText('MORE TUTORIALS', itemX + 8, itemY + itemH / 2);
 
   const fw = 92;
   const fh = 18;
   const fx = boxX + boxW / 2 - fw / 2;
   const fy = boxY + boxH - fh - 10;
-  _coachCongratsButtons.push({ x: fx, y: fy, w: fw, h: fh, id: 'finish' });
+  _coachCongratsButtons.push({ x: fx, y: fy, w: fw, h: fh, id: 'play' });
   roundedRect(ctx, fx, fy, fw, fh, 3);
   ctx.strokeStyle = 'rgba(255, 184, 77, 0.55)';
   ctx.lineWidth = 1;
@@ -3782,7 +4106,7 @@ function drawCoachCongrats(ctx: CanvasRenderingContext2D, screenW: number, scree
   ctx.font = f(8, 'bold');
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255, 184, 77, 0.8)';
-  ctx.fillText('END TUTORIAL', fx + fw / 2, fy + fh / 2);
+  ctx.fillText('GO PLAY', fx + fw / 2, fy + fh / 2);
 
   ctx.restore();
 }
@@ -3811,7 +4135,7 @@ function drawCoachCallout(
   screenW: number, screenH: number,
   step: string,
   target: { x: number; y: number; w: number; h: number },
-  placement: 'left' | 'above',
+  placement: 'left' | 'above' | 'below',
   circle = false,
 ): void {
   const copy = COACH_COPY[step];
@@ -3859,6 +4183,9 @@ function drawCoachCallout(
   if (placement === 'above') {
     boxX = target.x + target.w / 2 - boxW / 2;
     boxY = target.y - 10 - boxH;
+  } else if (placement === 'below') {
+    boxX = target.x + target.w / 2 - boxW / 2;
+    boxY = target.y + target.h + 12;
   } else {
     boxX = target.x - 12 - boxW;
     boxY = target.y + target.h / 2 - boxH / 2;
@@ -3883,6 +4210,15 @@ function drawCoachCallout(
     ctx.moveTo(ax - 6, boxY + boxH);
     ctx.lineTo(ax, boxY + boxH + 8);
     ctx.lineTo(ax + 6, boxY + boxH);
+    ctx.closePath();
+    ctx.fill();
+  } else if (placement === 'below' && boxY >= target.y + target.h) {
+    const ax = Math.max(boxX + 10, Math.min(target.x + target.w / 2, boxX + boxW - 10));
+    ctx.fillStyle = AMBER;
+    ctx.beginPath();
+    ctx.moveTo(ax - 6, boxY);
+    ctx.lineTo(ax, boxY - 8);
+    ctx.lineTo(ax + 6, boxY);
     ctx.closePath();
     ctx.fill();
   } else if (placement === 'left' && boxX + boxW <= target.x) {
@@ -3962,15 +4298,42 @@ function drawCoachCallout(
   ctx.restore();
 }
 
-/** Returns true when the click landed on a coach button. */
-function hitTestCoach(sx: number, sy: number): boolean {
+/** Returns true when the click landed on a coach button. Call before any other hit test. */
+export function hitTestCoachButtons(sx: number, sy: number): boolean {
+  if (isShipsTopicActive() || isComsTopicActive()) {
+    const skip = _topicSkipButton;
+    if (skip && sx >= skip.x && sx <= skip.x + skip.w && sy >= skip.y && sy <= skip.y + skip.h) {
+      dismissShipsTopic();
+      dismissComsTopic();
+      playSound('click');
+      return true;
+    }
+    const secondary = _topicSecondaryButton;
+    if (secondary && sx >= secondary.x && sx <= secondary.x + secondary.w && sy >= secondary.y && sy <= secondary.y + secondary.h) {
+      comsTopicBranchToAlliance();
+      playSound('click');
+      return true;
+    }
+    const primary = _topicPrimaryButton;
+    if (primary && sx >= primary.x && sx <= primary.x + primary.w && sy >= primary.y && sy <= primary.y + primary.h) {
+      if (isShipsTopicActive()) shipsTopicNext();
+      else comsTopicNext();
+      playSound('click');
+      return true;
+    }
+    // Pointer-only steps have no button here — let the tap fall through to the real
+    // UI element (SHIPS tab, Probe button, COMS tab) so the click actually registers.
+    return false;
+  }
+
   if (!isCoachActive()) return false;
   for (const b of _coachCongratsButtons) {
     if (sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
-      dismissCoach();
+      completeCoach();
       playSound('click');
-      // The controls guide lives in the HTML help panel
-      if (b.id === 'controls') document.getElementById('help-btn')?.click();
+      // More Tutorials deliberately reopens clean Help, after the player chose it.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (b.id === 'more') (globalThis as any).__openHelpTab?.('next');
       return true;
     }
   }
@@ -3995,6 +4358,8 @@ function drawPanelFrame(
   x: number, y: number, w: number, h: number,
   title: string, icon: string,
 ): void {
+  installTextAudit(ctx);
+  setAuditRegion(title, x, y, w);
   ctx.fillStyle = 'rgba(0, 10, 5, 0.88)';
   roundedRect(ctx, x, y, w, h, 4);
   ctx.fill();
@@ -4290,7 +4655,7 @@ function drawBuildPanelBody(
       ctx.fillStyle = G_BRIGHT;
       ctx.fillRect(barX, barY, fillW, 5);
     } else {
-      ctx.fillStyle = G_DIM;
+      ctx.fillStyle = canAfford ? G_COST : G_COST_OFF;
       ctx.fillText(`${effectiveCost.ore}/${effectiveCost.food}/${effectiveCost.energy}`, bx + extBtnW / 2, by + 18);
       const isBusy = activeBuildCount > 0 && !isActive;
       const isFlashing = isLocked && _lockFlash && _lockFlash.action === ext.action && _lockFlash.expireMs > Date.now();
@@ -4569,9 +4934,10 @@ function drawShipsPanelBody(
       if (dockLocked) {
         ctx.fillText(`DOCK LV${entry.dockLevel} REQ`, bx + 30, by + 14);
       } else {
+        ctx.fillStyle = G_COST;
         ctx.fillText(`${entry.cost.ore}/${entry.cost.food}/${entry.cost.energy}`, bx + 30, by + 14);
       }
-      ctx.fillStyle = G_DIM;
+      ctx.fillStyle = G_MED;
       ctx.fillText(`${entry.buildSeconds}s  SP:${entry.shipPoints}`, bx + 30, by + 24);
     }
   }
@@ -6336,6 +6702,8 @@ export function hitTestComsPanel(sx: number, sy: number): boolean {
   for (const tab of _comsTabButtons) {
     if (sx >= tab.x && sx <= tab.x + tab.w && sy >= tab.y && sy <= tab.y + tab.h) {
       _comsTab = tab.tab;
+      const topicIdx = COMS_TOPIC_TABS.findIndex((t) => t.tab === tab.tab);
+      if (topicIdx >= 0) comsTopicTabClicked(topicIdx);
       return true;
     }
   }
@@ -6991,8 +7359,6 @@ export function drawSkinPicker(r: Renderer): void {
 /** Hit test the skin picker overlay. Returns true if the picker consumed the tap. */
 export function hitTestSkinPicker(screenX: number, screenY: number): boolean {
   if (!_skinPickerVisible) return false;
-
-  if (hitTestCoach(screenX, screenY)) return true;
 
   // Check cancel button first
   if (_skinPickerCancelBtn) {
@@ -7712,7 +8078,6 @@ export function drawDockPanel(
 
 /** Hit-test dock panel buttons (orbit bar). Returns the action if clicked, null otherwise. */
 export function hitTestDockPanel(screenPos: Vec2): DockPanelAction | null {
-  if (hitTestCoach(screenPos.x, screenPos.y)) return null;
   // Check SHIELD TOGGLE button
   if (_shieldToggleButton) {
     const b = _shieldToggleButton;

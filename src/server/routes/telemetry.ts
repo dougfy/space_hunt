@@ -1,7 +1,12 @@
 import { Hono } from 'hono';
 import { telemetry } from '@devvit/analytics/server/reddit';
+import { reddit } from '@devvit/web/server';
 
 const api = new Hono();
+
+async function getUser(): Promise<string> {
+  try { return (await reddit.getCurrentUsername()) ?? '?'; } catch { return '?'; }
+}
 
 // ── Devvit Journeys telemetry routes ────────────────────────────────────────
 // These forward client-side journey events to the Devvit telemetry plugin.
@@ -9,8 +14,9 @@ const api = new Hono();
 
 api.post('/journey/start', async (c) => {
   try {
+    const user = await getUser();
     const response = await telemetry.startJourney();
-    console.log('[TELEMETRY] journey started:', response.journeyId, 'receipt:', (response as Record<string, unknown>).receipt ?? 'none');
+    console.log('[TELEMETRY]', user, 'journey_started', response.journeyId);
     return c.json(response);
   } catch (e) {
     console.error('[TELEMETRY] start error:', e);
@@ -24,13 +30,14 @@ api.post('/journey/progress', async (c) => {
     if (!body.journeyId || typeof body.progress !== 'number') {
       return c.json({ error: 'journeyId and progress required' }, 400);
     }
+    const user = await getUser();
     const response = await telemetry.journeyProgress({
       journeyId: body.journeyId,
       progress: body.progress,
       ...(body.action ? { action: body.action } : {}),
       ...(body.actionDetails ? { actionDetails: body.actionDetails } : {}),
     });
-    console.log('[TELEMETRY] progress:', body.progress, body.action ?? '', 'receipt:', (response as Record<string, unknown>).receipt ?? 'none');
+    console.log('[TELEMETRY]', user, 'progress', body.progress, body.action ?? '');
     return c.json(response);
   } catch (e) {
     console.error('[TELEMETRY] progress error:', e);
@@ -44,12 +51,13 @@ api.post('/journey/interaction', async (c) => {
     if (!body.action) {
       return c.json({ error: 'action required' }, 400);
     }
+    const user = await getUser();
     const response = await telemetry.journeyInteraction({
       journeyId: body.journeyId ?? '',
       action: body.action,
       actionDetails: body.actionDetails ?? '',
     });
-    console.log('[TELEMETRY] interaction:', body.action, 'receipt:', (response as Record<string, unknown>).receipt ?? 'none');
+    console.log('[TELEMETRY]', user, 'interaction', body.action);
     return c.json(response);
   } catch (e) {
     console.error('[TELEMETRY] interaction error:', e);
@@ -63,12 +71,13 @@ api.post('/journey/end', async (c) => {
     if (!body.journeyId) {
       return c.json({ error: 'journeyId required' }, 400);
     }
+    const user = await getUser();
     const response = await telemetry.endJourney({
       journeyId: body.journeyId,
       complete: body.complete ?? false,
       ...(body.game ? { game: { win: body.game.win ?? false, score: body.game.score ?? 0 } } : {}),
     });
-    console.log('[TELEMETRY] journey ended, complete:', body.complete, 'receipt:', (response as Record<string, unknown>).receipt ?? 'none');
+    console.log('[TELEMETRY]', user, 'journey_ended', body.complete ? 'complete' : 'incomplete');
     return c.json(response);
   } catch (e) {
     console.error('[TELEMETRY] end error:', e);
@@ -78,8 +87,9 @@ api.post('/journey/end', async (c) => {
 
 api.post('/journey/app-ready', async (c) => {
   try {
+    const user = await getUser();
     const response = await telemetry.appReady();
-    console.log('[TELEMETRY] app ready, receipt:', (response as Record<string, unknown>).receipt ?? 'none');
+    console.log('[TELEMETRY]', user, 'app_ready');
     return c.json(response);
   } catch (e) {
     console.error('[TELEMETRY] app-ready error:', e);

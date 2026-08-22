@@ -32,6 +32,10 @@ bridge.setShipShape('scout');
 bridge.setSharedWorldSeed(postId);
 bridge.beginSplash();
 
+// Hide loading screen
+const _ls = document.getElementById('loading-screen');
+if (_ls) _ls.style.display = 'none';
+
 // ── Button handlers ─────────────────────────────────────────────────────────
 playHereBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 playHereBtn.addEventListener('click', (e) => {

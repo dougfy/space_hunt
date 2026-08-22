@@ -5,11 +5,13 @@
 
 import type { FeatureType } from '../galaxy';
 import type { RenderSkin, DrawFeatureIconFn } from '../skin';
+import { getSkinVariants } from '../skin';
 import { proceduralSkin } from './procedural';
+import { preloadScifiSprites, getScifiStationSprite, getScifiSolarArraySprite, getScifiHabSprite, getScifiDockSprite, getScifiCannonSprite } from './scifi';
 
 // ── Sprite Loading ──────────────────────────────────────────────────────────
 
-const STARBASE_PATH = 'icons/bases2/';
+const STARBASE_PATH = 'icons/skins/cartoon/';
 const STARBASE_COUNT = 8;
 const PLANET_PATH = 'icons/planets/';
 const PLANET_IDS = [1, 2, 4, 5, 6, 7, 8]; // available planet sprites (03 missing)
@@ -18,7 +20,7 @@ const _sprites: Map<string, HTMLImageElement> = new Map();
 const _planetSprites: HTMLImageElement[] = [];
 let _spritesLoaded = false;
 
-/** Preload all station and planet sprites. Safe to call multiple times. */
+/** Preload all station, cannon, and planet sprites. Safe to call multiple times. */
 export function preloadRasterSprites(): void {
   if (_spritesLoaded) return;
   _spritesLoaded = true;
@@ -28,11 +30,26 @@ export function preloadRasterSprites(): void {
     img.src = `${STARBASE_PATH}starbase_lv${i}_256.png`;
     _sprites.set(key, img);
   }
+  // Cartoon cannon sprites (levels 1-8)
+  for (let i = 1; i <= 8; i++) {
+    const img = new Image();
+    img.src = `${STARBASE_PATH}cannon_lv${i}_256.png`;
+    _sprites.set(`cannon_lv${i}`, img);
+  }
+
   for (const id of PLANET_IDS) {
     const img = new Image();
     img.src = `${PLANET_PATH}planet_0${id}_256.png`;
     _planetSprites.push(img);
   }
+}
+
+/** Get a cartoon station sprite for the given level (1-8). */
+export function getCartoonStationSprite(level: number): HTMLImageElement | null {
+  const key = `starbase_lv${Math.min(Math.max(level, 1), 8)}`;
+  const img = _sprites.get(key);
+  if (img && img.complete && img.naturalWidth > 0) return img;
+  return null;
 }
 
 /** Get a planet sprite by seed (deterministic selection). */
@@ -69,8 +86,9 @@ function getSpriteKey(type: FeatureType, level: number): string | null {
       return 'starbase_lv7';
     case 'relay':
       return 'starbase_lv1';
-    case 'shield':
     case 'cannon':
+      return `cannon_lv${Math.min(Math.max(level, 1), 8)}`;
+    case 'shield':
       return null; // shield effect shown as ring around station, no separate icon
     default:
       return null;
@@ -87,7 +105,64 @@ const drawFeatureIconRaster: DrawFeatureIconFn = (
   size: number,
   level?: number,
 ) => {
+  preloadRasterSprites();
   const lv = level ?? 1;
+
+  // Station with sci-fi variant — use sci-fi sprites
+  if (type === 'station' && getSkinVariants().station === 'scifi') {
+    preloadScifiSprites();
+    const scifiImg = getScifiStationSprite(lv);
+    if (scifiImg) {
+      const drawSize = size * 4;
+      ctx.drawImage(scifiImg, x - drawSize / 2, y - drawSize / 2, drawSize, drawSize);
+      return;
+    }
+  }
+
+  // Solar array with sci-fi variant — use sci-fi sprites
+  if ((type === 'solar_array' || type === 'solar_array_l2') && getSkinVariants().solar_array === 'scifi') {
+    preloadScifiSprites();
+    const solarImg = getScifiSolarArraySprite(lv);
+    if (solarImg) {
+      const drawSize = size * 4;
+      ctx.drawImage(solarImg, x - drawSize / 2, y - drawSize / 2, drawSize, drawSize);
+      return;
+    }
+  }
+
+  // Hab (colony) with sci-fi variant — use sci-fi sprites
+  if (type === 'colony' && getSkinVariants().hab === 'scifi') {
+    preloadScifiSprites();
+    const habImg = getScifiHabSprite(lv);
+    if (habImg) {
+      const drawSize = size * 4;
+      ctx.drawImage(habImg, x - drawSize / 2, y - drawSize / 2, drawSize, drawSize);
+      return;
+    }
+  }
+
+  // Dock with sci-fi variant — use sci-fi sprites
+  if (type === 'dock' && getSkinVariants().dock === 'scifi') {
+    preloadScifiSprites();
+    const dockImg = getScifiDockSprite(lv);
+    if (dockImg) {
+      const drawSize = size * 4;
+      ctx.drawImage(dockImg, x - drawSize / 2, y - drawSize / 2, drawSize, drawSize);
+      return;
+    }
+  }
+
+  // Cannon with sci-fi variant — use sci-fi sprites
+  if (type === 'cannon' && getSkinVariants().cannon === 'scifi') {
+    preloadScifiSprites();
+    const cannonImg = getScifiCannonSprite(lv);
+    if (cannonImg) {
+      const drawSize = size * 4;
+      ctx.drawImage(cannonImg, x - drawSize / 2, y - drawSize / 2, drawSize, drawSize);
+      return;
+    }
+  }
+
   const key = getSpriteKey(type, lv);
 
   if (key) {
@@ -107,6 +182,6 @@ const drawFeatureIconRaster: DrawFeatureIconFn = (
 
 export const rasterSkin: RenderSkin = {
   id: 'raster',
-  label: 'Raster',
+  label: 'Standard',
   drawFeatureIcon: drawFeatureIconRaster,
 };

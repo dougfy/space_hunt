@@ -85,6 +85,16 @@ export function getShipShapePoints(shape: ShipShape): Vec2[] {
         vec2(-0.9, -0.6), vec2(-0.9, 0.1),
         vec2(-0.66, 0.2), vec2(-0.6, 0.5),
       ];
+    case 'colony':
+      // Large rounded hull — colony transport
+      return [
+        vec2(0, 1.0),
+        vec2(0.4, 0.7), vec2(0.5, 0.3),
+        vec2(0.5, -0.3), vec2(0.4, -0.7),
+        vec2(0, -1.0),
+        vec2(-0.4, -0.7), vec2(-0.5, -0.3),
+        vec2(-0.5, 0.3), vec2(-0.4, 0.7),
+      ];
   }
 }
 
@@ -140,6 +150,11 @@ export function getShipDetailElements(shape: ShipShape): ShipDetail[] {
         { type: 'line', from: vec2(-0.08, 1.0), to: vec2(-0.12, 1.15) }, // antenna L
         { type: 'line', from: vec2(0.08, 1.0), to: vec2(0.12, 1.15) },  // antenna R
       ];
+    case 'colony':
+      return [
+        { type: 'circle', center: vec2(0, 0.2), radius: 0.25 },
+        { type: 'circle', center: vec2(0, -0.3), radius: 0.15 },
+      ];
   }
 }
 
@@ -151,6 +166,7 @@ export function normalizeShipShape(shape: string): ShipShape {
     case 'battleship':
     case 'cruiser':
     case 'dreadnought':
+    case 'colony':
       return shape;
     default:
       return 'scout';

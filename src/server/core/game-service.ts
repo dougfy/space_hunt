@@ -452,6 +452,12 @@ export async function loadProfile(
   if (raw.coachStep) {
     result.coachStep = raw.coachStep;
   }
+  if (raw.coachSkipped === '1') {
+    result.coachSkipped = true;
+  }
+  if (raw.fontScale) {
+    result.fontScale = raw.fontScale;
+  }
   if (raw.wireframePref === '1') {
     result.wireframePref = true;
   }
@@ -730,6 +736,8 @@ export async function saveProfile(
   if (body.enhancedProbeStars !== undefined) fields.enhancedProbeStars = JSON.stringify(body.enhancedProbeStars);
   if (body.journeyDone !== undefined) fields.journeyDone = body.journeyDone ? '1' : '0';
   if (body.coachStep !== undefined) fields.coachStep = body.coachStep;
+  if (body.coachSkipped !== undefined) fields.coachSkipped = body.coachSkipped ? '1' : '0';
+  if (body.fontScale !== undefined) fields.fontScale = body.fontScale;
   if (body.wireframePref !== undefined) fields.wireframePref = body.wireframePref ? '1' : '0';
   if ((body as Record<string, unknown>).scannedBodies !== undefined) fields.scannedBodies = JSON.stringify((body as Record<string, unknown>).scannedBodies);
   if (Object.keys(fields).length > 0) {

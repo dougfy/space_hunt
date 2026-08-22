@@ -7,10 +7,12 @@ console.log(`[STARTUP] game.ts module executing, t=${(performance.now() - ((glob
 import { context, requestExpandedMode } from '@devvit/web/client';
 import { telemetry } from '@devvit/analytics/client/reddit';
 import versionJson from '../../version.json';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, startCoach, restoreCoach, getCoachStep, coachAdvance, isCoachActive, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingSeedBots, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getTestState, confirmSkinPicker, getSoundHistory, showBuildError, setBuildCooldown } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, startCoach, restoreCoach, isCoachSkipped, getCoachStep, coachAdvance, isCoachActive, startShipsTopic, startComsTopic, openComsPanelForTutorial, getFontScaleName, setFontScaleByName, setTextAuditEnabled, getOverflowReport, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingSeedBots, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getTestState, confirmSkinPicker, getSoundHistory, showBuildError, setBuildCooldown } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
+
+type CoachUiBridge = typeof globalThis & { __helpPanelOpen?: boolean };
 import { initSkins, getActiveSkinId, setActiveSkin, getWireframePref, setWireframePref } from '../game/skin';
 import { VIDEO_CATALOG, FLEET_COMMAND_SENDER } from '../shared/feature-flags';
 import { proceduralSkin } from '../game/skins/procedural';
@@ -107,6 +109,12 @@ window.addEventListener('resize', () => {
 };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).__confirmSkinPicker = () => confirmSkinPicker();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__textAudit = (on?: boolean) => {
+  if (on === undefined) return getOverflowReport();
+  setTextAuditEnabled(on);
+  return `text audit ${on ? 'ON' : 'OFF'} — open panels, then call __textAudit() for the report`;
+};
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).__getSoundHistory = () => getSoundHistory();
 
@@ -398,6 +406,11 @@ function loadPlayerProfile(): Promise<void> {
         setWireframePref(profile.wireframePref);
         console.log(`[PROFILE] wireframe pref: ${profile.wireframePref}`);
       }
+      if (profile.fontScale) {
+        setFontScaleByName(profile.fontScale as 'small' | 'medium' | 'large');
+        syncFontScaleButtons();
+        console.log(`[PROFILE] font scale: ${profile.fontScale}`);
+      }
       // New players get the coach marks; the legacy idle hints are for players who
       // have already seen the tutorial and have stalled without doing anything.
       if (profile.journeyDone || profile.lastPosition) {
@@ -412,7 +425,7 @@ function loadPlayerProfile(): Promise<void> {
       }
       // Resume an interrupted coach sequence regardless of returning-player status
       if (profile.coachStep && profile.coachStep !== 'done') {
-        restoreCoach(profile.coachStep);
+        restoreCoach(profile.coachStep, profile.coachSkipped === true);
       }
       // Show/hide debug UI based on server dev mode flag
       const debugDisplay = profile.devMode ? '' : 'none';
@@ -1570,6 +1583,7 @@ let _lastSavedDiscovered = '';
 let _lastSavedVisited = '';
 let _lastSavedJourneyDone = false;
 let _lastSavedCoachStep = '';
+let _lastSavedCoachSkipped = false;
 let _resetPerformed = false;
 function savePositionIfChanged() {
   if (_resetPerformed) return; // block saves after admin reset
@@ -1590,11 +1604,12 @@ function savePositionIfChanged() {
   const visitedKey = visited.join(',');
   const journeyDone = isJourneyDone();
   const coachStep = getCoachStep();
+  const coachSkipped = isCoachSkipped();
   const posChanged = pos !== _lastSavedPosition;
   const discoveredChanged = discoveredKey !== _lastSavedDiscovered;
   const visitedChanged = visitedKey !== _lastSavedVisited;
   const journeyChanged = journeyDone && !_lastSavedJourneyDone;
-  const coachChanged = coachStep !== _lastSavedCoachStep;
+  const coachChanged = coachStep !== _lastSavedCoachStep || coachSkipped !== _lastSavedCoachSkipped;
   if (!posChanged && !discoveredChanged && !visitedChanged && !journeyChanged && !coachChanged) return;
   // Track star discovery milestone
   if (discoveredChanged && discovered.length >= 2) {
@@ -1605,6 +1620,7 @@ function savePositionIfChanged() {
   _lastSavedDiscovered = discoveredKey;
   _lastSavedVisited = visitedKey;
   _lastSavedCoachStep = coachStep;
+  _lastSavedCoachSkipped = coachSkipped;
   if (journeyDone) _lastSavedJourneyDone = true;
   // Always send BOTH fields — Devvit hSet may replace the entire hash
   const payload: Record<string, unknown> = {
@@ -1614,6 +1630,7 @@ function savePositionIfChanged() {
     enhancedProbeStars: visited,
     journeyDone,
     coachStep,
+    coachSkipped,
     scannedBodies: Array.from(_scannedBodies),
     wireframePref: getWireframePref(),
   };
@@ -2023,25 +2040,17 @@ helpBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   settingsPanel.classList.remove('visible');
   feedbackPanel.classList.remove('visible');
-  helpPanel.classList.toggle('visible');
-  if (helpPanel.classList.contains('visible')) {
+  const opening = !helpPanel.classList.contains('visible');
+  helpPanel.classList.toggle('visible', opening);
+  (globalThis as CoachUiBridge).__helpPanelOpen = opening;
+  if (opening) {
     updateHelpNextTab();
+  } else if (getCoachStep() === 'help') {
     coachAdvance('congrats');
   }
 });
 helpPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
 helpPanel.addEventListener('click', (e) => e.stopPropagation());
-
-const replayTutorialBtn = document.getElementById('replay-tutorial-btn');
-replayTutorialBtn?.addEventListener('pointerdown', (e) => e.stopPropagation());
-replayTutorialBtn?.addEventListener('click', (e) => {
-  e.stopPropagation();
-  helpPanel.classList.remove('visible');
-  skipJourney(); // legacy idle hints must not compete with the coach
-  startCoach(true);
-  console.log('[COACH] replay requested from help panel');
-});
-
 // ── Help "Next" tab — dynamic suggestions based on player progress ──────────
 function updateHelpNextTab() {
   const el = document.getElementById('help-next-content');
@@ -2077,6 +2086,34 @@ document.querySelectorAll('.help-tab-btn').forEach(btn => {
     if (tab === 'next') updateHelpNextTab();
   });
 });
+
+/** Open the help panel on a specific tab — lets tutorial items deep-link to docs. */
+function openHelpTab(tab: string): void {
+  settingsPanel.classList.remove('visible');
+  feedbackPanel.classList.remove('visible');
+  helpPanel.classList.add('visible');
+  (globalThis as CoachUiBridge).__helpPanelOpen = true;
+  document.querySelector<HTMLElement>(`.help-tab-btn[data-help-tab="${tab}"]`)?.click();
+}
+
+for (const button of document.querySelectorAll<HTMLElement>('.tutorial-topic-btn')) {
+  button.addEventListener('pointerdown', (e) => e.stopPropagation());
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const topic = button.dataset.tutorialTopic;
+    if (!topic) return;
+    helpPanel.classList.remove('visible');
+    (globalThis as CoachUiBridge).__helpPanelOpen = false;
+    if (topic === 'ships') {
+      startShipsTopic();
+    } else if (topic === 'coms') {
+      openComsPanelForTutorial();
+      startComsTopic();
+    }
+  });
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__openHelpTab = openHelpTab;
 
 // ── Help panel: paginated Buildings & Ships ─────────────────────────────────
 {
@@ -2151,15 +2188,21 @@ const feedbackThanks = document.getElementById('feedback-thanks')!;
 let feedbackSubmitted = false;
 
 function showFeedbackPanel(): void {
-  if (!feedbackSubmitted) {
-    settingsPanel.classList.remove('visible');
-    helpPanel.classList.remove('visible');
-    feedbackPanel.classList.add('visible');
+  if (feedbackSubmitted) return;
+  // The tutorial can start after the timer does (replay button), so re-check on fire.
+  if (isCoachActive()) {
+    console.log('[FEEDBACK] deferred — tutorial in progress');
+    setTimeout(showFeedbackPanel, FEEDBACK_RETRY_MS);
+    return;
   }
+  settingsPanel.classList.remove('visible');
+  helpPanel.classList.remove('visible');
+  feedbackPanel.classList.add('visible');
 }
 
 // Auto-show the feedback dialog after 5 minutes of play
 const FEEDBACK_DELAY_MS = 5 * 60 * 1000;
+const FEEDBACK_RETRY_MS = 60 * 1000;
 let feedbackTimerStarted = false;
 function startFeedbackTimer(): void {
   if (feedbackTimerStarted) return;
@@ -2253,6 +2296,36 @@ function escapeHtml(s: string): string {
 settingsPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
 settingsPanel.addEventListener('click', (e) => e.stopPropagation());
 
+// ── Text size (S/M/L) ───────────────────────────────────────────────────────
+// 'small' is the historical layout. Medium/Large scale fonts only for now —
+// layout constants don't scale yet, so panels can overflow (attack plan #36).
+function syncFontScaleButtons(): void {
+  const active = getFontScaleName();
+  for (const el of document.querySelectorAll<HTMLElement>('.font-scale-btn')) {
+    const isActive = el.dataset.fontScale === active;
+    el.style.background = isActive ? 'rgba(79,255,176,0.25)' : 'rgba(10,40,25,0.8)';
+    el.style.color = isActive ? '#ffffff' : '#4fffb0';
+  }
+}
+
+for (const el of document.querySelectorAll<HTMLElement>('.font-scale-btn')) {
+  el.addEventListener('pointerdown', (e) => e.stopPropagation());
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const name = el.dataset.fontScale as 'small' | 'medium' | 'large' | undefined;
+    if (!name) return;
+    setFontScaleByName(name);
+    syncFontScaleButtons();
+    fetch('/api/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, fontScale: name } satisfies SaveProfileRequest),
+    }).catch(() => {});
+    console.log('[SETTINGS] font scale:', name);
+  });
+}
+syncFontScaleButtons();
+
 // ── Save profile (debounced) ────────────────────────────────────────────────
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 function saveProfile() {
@@ -2287,8 +2360,7 @@ if (adminBtn && adminPanel && ADMIN_USERS.some(u => u.toLowerCase() === username
 }
 
 // Wireframe preference toggle in settings panel
-const wireframePrefToggle = document.getElementById('wireframe-pref-toggle') as HTMLInputElement | null;
-if (wireframePrefToggle) {
+const wireframePrefToggle = document.getElementById('wireframe-pref-toggle') as HTMLInputElement | null;if (wireframePrefToggle) {
   wireframePrefToggle.checked = getWireframePref();
   wireframePrefToggle.addEventListener('pointerdown', (e) => e.stopPropagation());
   wireframePrefToggle.addEventListener('change', (e) => {

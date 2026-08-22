@@ -9,9 +9,13 @@ const STEP_ORDER: CoachStep[] = ['open_build', 'upgrade_station', 'pick_skin', '
 
 const COACH_DONE_KEY = 'spacehunt_coach_done';
 
+/** Steps shown to the player as "n/7"; congrats is the unnumbered finale. */
+const NUMBERED_STEPS = 7;
+
 let _step: CoachStep = 'done';
 let _active = false;
-let _acked = false; // GOT IT pressed on the current step — callout collapses to a nudge
+let _acked = false;   // GOT IT pressed on the current step — callout collapses to a nudge
+let _skipped = false; // dismissed before finishing — resumable, but won't auto-start
 
 /** Start the coach marks. `force` ignores the local "already seen" flag (admin review). */
 export function startCoach(force = false): void {
@@ -23,6 +27,7 @@ export function startCoach(force = false): void {
   _step = 'open_build';
   _active = true;
   _acked = false;
+  _skipped = false;
   console.log('[COACH] started', force ? '(forced)' : '');
 }
 
@@ -30,14 +35,44 @@ export function isCoachActive(): boolean {
   return _active && _step !== 'done';
 }
 
-/** Resume a partially-completed sequence from the server profile. */
-export function restoreCoach(step: string): void {
-  const idx = STEP_ORDER.indexOf(step as CoachStep);
-  if (idx < 0 || step === 'done') return;
-  _step = step as CoachStep;
+export function isCoachSkipped(): boolean {
+  return _skipped;
+}
+
+/** Whether there is a partially-completed run to pick up. */
+export function canResumeCoach(): boolean {
+  return _step !== 'done' && !_active;
+}
+
+/** Human-facing step counter, e.g. "4/7". Empty for the finale. */
+export function getCoachStepLabel(step: CoachStep = _step): string {
+  const idx = STEP_ORDER.indexOf(step);
+  if (idx < 0 || idx >= NUMBERED_STEPS) return '';
+  return `${idx + 1}/${NUMBERED_STEPS}`;
+}
+
+/** Pick up where the player left off, or restart if there is nothing to resume. */
+export function resumeCoach(): void {
+  if (_step === 'done') {
+    startCoach(true);
+    return;
+  }
   _active = true;
   _acked = false;
-  console.log('[COACH] restored at step', step);
+  _skipped = false;
+  console.log('[COACH] resumed at', _step);
+}
+
+/** Restore persisted progress. Only auto-activates a run that was never skipped. */
+export function restoreCoach(step: string, skipped = false): void {
+  if (STEP_ORDER.indexOf(step as CoachStep) < 0) return;
+  _step = step as CoachStep;
+  _skipped = skipped;
+  if (_step !== 'done' && !skipped) {
+    _active = true;
+    _acked = false;
+    console.log('[COACH] restored at step', step);
+  }
 }
 
 export function getCoachStep(): CoachStep {
@@ -51,7 +86,7 @@ export function coachAdvance(to: CoachStep): void {
   _step = to;
   _acked = false;
   console.log('[COACH] step →', to);
-  if (to === 'done') dismissCoach();
+  if (to === 'done') completeCoach();
 }
 
 /** GOT IT on the current step: keep guiding, but collapse to a compact nudge. */
@@ -63,15 +98,135 @@ export function isCoachAcked(): boolean {
   return _acked;
 }
 
-/** Dismiss the whole coach sequence (SKIP, or completion). */
+/** Dismissed early (SKIP). Keeps the step so the player can continue later. */
 export function dismissCoach(): void {
+  _active = false;
+  _acked = false;
+  _skipped = true;
+  console.log('[COACH] skipped at', _step);
+}
+
+/** Finished the whole sequence. */
+export function completeCoach(): void {
   _step = 'done';
   _active = false;
   _acked = false;
+  _skipped = false;
   try { localStorage.setItem(COACH_DONE_KEY, '1'); } catch { /* ignore */ }
+  console.log('[COACH] complete');
 }
 
 /** 0..1 pulse used for the highlight ring. */
 export function getCoachPulse(): number {
   return 0.5 + 0.5 * Math.sin(performance.now() / 350);
+}
+
+// ── Ships Topic (post-onboarding guide) ──────────────────────────────────────
+// Reached from Help → More Tutorials → BUILD A SHIP. Separate from the linear
+// onboarding sequence above so it can be launched any time onboarding is done.
+
+export type ShipsTopicStep = 'info' | 'open_ships' | 'pick_probe' | 'done';
+
+let _shipsTopicActive = false;
+let _shipsTopicStep: ShipsTopicStep = 'done';
+
+export function startShipsTopic(): void {
+  _shipsTopicActive = true;
+  _shipsTopicStep = 'info';
+  console.log('[SHIPS-TOPIC] started');
+}
+
+export function isShipsTopicActive(): boolean {
+  return _shipsTopicActive && _shipsTopicStep !== 'done';
+}
+
+export function getShipsTopicStep(): ShipsTopicStep {
+  return _shipsTopicStep;
+}
+
+/** NEXT on the info card that explains the Dock requirement. */
+export function shipsTopicNext(): void {
+  if (_shipsTopicActive && _shipsTopicStep === 'info') _shipsTopicStep = 'open_ships';
+}
+
+/** Player actually opened the SHIPS tab. */
+export function shipsTopicShipsOpened(): void {
+  if (_shipsTopicActive && _shipsTopicStep === 'open_ships') _shipsTopicStep = 'pick_probe';
+}
+
+/** Player actually clicked the Basic Probe build button (regardless of whether it fired). */
+export function shipsTopicProbeClicked(): void {
+  if (_shipsTopicActive && _shipsTopicStep === 'pick_probe') {
+    _shipsTopicStep = 'done';
+    _shipsTopicActive = false;
+    console.log('[SHIPS-TOPIC] complete');
+  }
+}
+
+export function dismissShipsTopic(): void {
+  _shipsTopicActive = false;
+  _shipsTopicStep = 'done';
+}
+
+// ── Comms Topic (post-onboarding guide) ──────────────────────────────────────
+// Reached from Help → More Tutorials → COMMS. Walks all four COMS tabs. PUBLIC
+// is explained immediately since it's the default open tab; the remaining
+// three require the player to actually tap the tab being pointed at.
+
+export type ComsTopicPhase = 'explain' | 'point' | 'done';
+
+let _comsTopicActive = false;
+let _comsTopicIdx = 0; // 0=public, 1=private, 2=alliance, 3=board
+let _comsTopicPhase: ComsTopicPhase = 'done';
+
+export function startComsTopic(): void {
+  _comsTopicActive = true;
+  _comsTopicIdx = 0;
+  _comsTopicPhase = 'explain';
+  console.log('[COMS-TOPIC] started');
+}
+
+export function isComsTopicActive(): boolean {
+  return _comsTopicActive && _comsTopicPhase !== 'done';
+}
+
+export function getComsTopicIdx(): number {
+  return _comsTopicIdx;
+}
+
+export function getComsTopicPhase(): ComsTopicPhase {
+  return _comsTopicPhase;
+}
+
+/** NEXT on the current tab's explanation card. */
+export function comsTopicNext(): void {
+  if (!_comsTopicActive || _comsTopicPhase !== 'explain') return;
+  if (_comsTopicIdx >= 3) {
+    _comsTopicPhase = 'done';
+    _comsTopicActive = false;
+    console.log('[COMS-TOPIC] complete');
+    return;
+  }
+  _comsTopicIdx += 1;
+  _comsTopicPhase = 'point';
+}
+
+/** Player actually tapped the tab index currently being pointed at. */
+export function comsTopicTabClicked(idx: number): void {
+  if (!_comsTopicActive || _comsTopicPhase !== 'point' || idx !== _comsTopicIdx) return;
+  _comsTopicPhase = 'explain';
+}
+
+/** EXPLORE ALLIANCE branch on the alliance explain card — ends the walkthrough so the
+ * player can interact with the alliance tab directly (create/join isn't scripted here). */
+export function comsTopicBranchToAlliance(): void {
+  if (!_comsTopicActive) return;
+  _comsTopicActive = false;
+  _comsTopicPhase = 'done';
+  console.log('[COMS-TOPIC] branched to alliance management');
+}
+
+export function dismissComsTopic(): void {
+  _comsTopicActive = false;
+  _comsTopicPhase = 'done';
 }

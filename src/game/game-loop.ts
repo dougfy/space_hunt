@@ -25,7 +25,7 @@ import {
   drawDebugBounds, drawDockPanel, drawShipPanel, hitTestDockPanel, triggerDockPanelAction,
   hitTestPlanetPanels, togglePlanetPanel, drawPlanetDebugBounds, closeAllPanels, isAnyPanelOpen,
   worldToScreen, isPointCoveredByOpenPlanetPanel, consumePendingExtensionAction,
-  setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert, showBuildError,
+  setPanelContext, drawPlanetPanels, consumePendingGalaxyJump, consumePendingTierRevert, showBuildError, hitTestCoachButtons, drawCoachCongratsTop,
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
   drawGalaxyZoomButtons, hitTestGalaxyZoomButtons, setHomeStarIndex,
 
@@ -549,6 +549,7 @@ export function startGame(
     update(dt);
     render();
     drawSkinPicker(renderer!);
+    drawCoachCongratsTop(renderer!);
     drawReportBadge(renderer!, gameState!.elapsedTime);
     drawReportPanel(renderer!);
 
@@ -606,6 +607,15 @@ function update(dt: number): void {
   }
   // Clear pendingTap now that it's been promoted (or if pointerDown was already true)
   inputState.pendingTap = null;
+
+  // Coach marks draw over everything, so they claim the tap first. Must run before the
+  // skin picker and dock panel, both of which can return "not handled" and let the tap
+  // fall through to ship movement.
+  if (inputState.pointerDown && inputState.pointerPos) {
+    if (hitTestCoachButtons(inputState.pointerPos.x, inputState.pointerPos.y)) {
+      inputState.pointerDown = false;
+    }
+  }
 
   // Skin picker overlay is modal — intercept all taps when visible
   if (inputState.pointerDown && inputState.pointerPos) {
@@ -956,12 +966,11 @@ function update(dt: number): void {
     }
   }
 
-  // Handle recenter — snap camera to ship, stop movement, toggle debug bounds
+  // Handle recenter — snap camera to ship and toggle boundary rings.
+  // Deliberately does NOT halt the ship: tapping this mid-flight used to cancel
+  // your destination and kill momentum, which was surprising.
   if (inputState.recenterRequested) {
     inputState.recenterRequested = false;
-    gameState.tgtActive = false;
-    gameState.ship.vel = { x: 0, y: 0 };
-    gameState.ship.thrust = false;
     gameState.camera.pos = { x: gameState.ship.pos.x, y: gameState.ship.pos.y };
     // Reset galaxy zoom and camera position to ship
     gameState.galaxyZoom = GALAXY_ORTHO_DEFAULT;

@@ -47,6 +47,7 @@ export const FUEL_CAPACITY_BY_SHAPE: Record<ShipShape, number> = {
   battleship: 250,
   cruiser: 350,
   dreadnought: 500,
+  colony: 300,
 };
 
 /** @deprecated Use FUEL_CAPACITY_BY_SHAPE[shipShape] instead. Kept for fallback. */

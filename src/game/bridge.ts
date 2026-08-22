@@ -92,6 +92,7 @@ export function createDevvitBridge(
         const savedBodyIndex = s.galaxy.currentBodyIndex;
         const savedDiscovered = getDiscoveredStars();
         const savedOwnership = getStarOwnership();
+        console.log(`[BRIDGE] savedOwnership (${savedOwnership.length} stars):`, savedOwnership.map(o => `star${o.starIndex}:${o.owner}:claimedBy=${o.claimedBy ?? 'NONE'}`).join(', '));
         // Transition from splash to real game — stop splash, start fresh
         stopGame();
         startGame(canvas, pendingSeed, pendingName, pendingShape, callbacks);
@@ -103,6 +104,7 @@ export function createDevvitBridge(
         // Re-apply star ownership (claims) from splash state
         if (savedOwnership.length > 0) {
           applyStarOwnership(savedOwnership);
+          console.log(`[BRIDGE] after applyStarOwnership: re-applied ${savedOwnership.length} claims`);
         }
         // Re-apply discovered stars from the splash state
         if (savedDiscovered.length > 0) {

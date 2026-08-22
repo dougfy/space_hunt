@@ -130,6 +130,7 @@ export function normalizeStarBuildings(
       completeAt: Number.isFinite(existing?.completeAt)
         ? Math.max(0, Math.floor(existing?.completeAt ?? 0))
         : null,
+      ...(existing?.skinId ? { skinId: existing.skinId } : {}),
     };
   }
 

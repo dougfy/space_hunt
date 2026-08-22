@@ -42,6 +42,12 @@ function createFakeStore(seed?: Record<string, Record<string, string>>): RedisGa
     async set(key, value) {
       kv[key] = value;
     },
+    async del(key) {
+      delete kv[key];
+    },
+    async zRange() {
+      return [];
+    },
   };
 }
 
