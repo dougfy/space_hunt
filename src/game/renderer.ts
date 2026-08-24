@@ -376,6 +376,7 @@ export function drawPlayerFleetAtStar(
   let subtractedActive = false;
 
   let slotIdx = 0;
+  let layoutCursor = 0;
   for (const entry of fleet.ships) {
     let count = entry.count;
     // Subtract player's active ship so it isn't drawn twice
@@ -387,23 +388,28 @@ export function drawPlayerFleetAtStar(
     const catalogEntry = SHIP_CATALOG[entry.typeId as keyof typeof SHIP_CATALOG];
     const countToDraw = Math.min(count, 3); // cap visual at 3 per type
     for (let i = 0; i < countToDraw; i++) {
+      const shape = TYPEID_TO_SHAPE[entry.typeId] ?? 'scout';
+      const isColony = shape === 'colony';
+      const visualSpan = isColony ? 2.4 : 1;
+      const visualSlot = layoutCursor + visualSpan / 2;
       // Offset ships upward (+Y world = up on screen) from station, spread out more
-      const offsetAngle = Math.PI * 0.5 + (slotIdx - 1) * 0.6;
-      const offsetDist = 0.45 + slotIdx * 0.12;
+      const offsetAngle = Math.PI * 0.5 + (visualSlot - 1.5) * 0.48;
+      const offsetDist = (isColony ? 1.05 : 0.5) + layoutCursor * 0.14;
       const pos = {
         x: stationWorldPos.x + Math.cos(offsetAngle) * offsetDist,
         y: stationWorldPos.y + Math.sin(offsetAngle) * offsetDist,
       };
 
       const sc = worldToScreen(pos, camera, screenW, screenH);
-      const icon = catalogEntry ? getShipIcon(catalogEntry.icon) : null;
-      if (icon) {
-        const isColony = entry.typeId === 8;
-        const iconSize = isColony ? 112 : 28;
+      const icon = !isColony && catalogEntry ? getShipIcon(catalogEntry.icon) : null;
+      if (isColony) {
+        const shipAngle = offsetAngle + Math.PI;
+        drawShip(r, camera, pos, shipAngle, shape, FLEET_COLOR, SHIP_SIZE * 4);
+      } else if (icon) {
+        const iconSize = 28;
         ctx.drawImage(icon, sc.x - iconSize / 2, sc.y - iconSize / 2, iconSize, iconSize);
       } else {
         // Fallback wireframe
-        const shape = TYPEID_TO_SHAPE[entry.typeId] ?? 'scout';
         const shipAngle = offsetAngle + Math.PI;
         drawShip(r, camera, pos, shipAngle, shape, FLEET_COLOR);
       }
@@ -417,11 +423,12 @@ export function drawPlayerFleetAtStar(
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
           ctx.fillStyle = FLEET_COLOR;
-          ctx.fillText(label, sc.x, sc.y - 20);
+          ctx.fillText(label, sc.x, sc.y - (isColony ? 48 : 20));
           ctx.restore();
         }
       }
       slotIdx++;
+      layoutCursor += visualSpan;
     }
   }
 }
@@ -3798,8 +3805,10 @@ function drawTopicInfoCard(
   lines: string[],
   primaryLabel: string,
   secondaryLabel?: string,
+  target?: { x: number; y: number; w: number; h: number },
 ): void {
   const AMBER = '#ffb84d';
+  const pulse = getCoachPulse();
   const boxW = Math.min(220, screenW - 24);
   const lineH = 11;
 
@@ -3814,12 +3823,30 @@ function drawTopicInfoCard(
   const bottomPad = 10;
   const boxH = buttonRowY + buttonRowH + bottomPad;
 
-  const boxX = (screenW - boxW) / 2;
-  const boxY = Math.max(8, Math.min((screenH - boxH) / 2, screenH - boxH - 8));
+  let boxX = (screenW - boxW) / 2;
+  let boxY = Math.max(8, Math.min((screenH - boxH) / 2, screenH - boxH - 8));
+  if (target) {
+    boxX = target.x - boxW - 12;
+    if (boxX < 8) boxX = target.x + target.w + 12;
+    boxY = target.y + target.h / 2 - boxH / 2;
+    boxX = Math.max(8, Math.min(boxX, screenW - boxW - 8));
+    boxY = Math.max(8, Math.min(boxY, screenH - boxH - 8));
+  }
 
   ctx.save();
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+  ctx.fillStyle = target ? 'rgba(0, 0, 0, 0.45)' : 'rgba(0, 0, 0, 0.85)';
   ctx.fillRect(0, 0, screenW, screenH);
+
+  if (target) {
+    ctx.strokeStyle = `rgba(255, 184, 77, ${0.65 + pulse * 0.35})`;
+    ctx.lineWidth = 2;
+    roundedRect(ctx, target.x - 3, target.y - 3, target.w + 6, target.h + 6, 5);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(255, 184, 77, ${0.18 + pulse * 0.22})`;
+    ctx.lineWidth = 6;
+    roundedRect(ctx, target.x - 5 - pulse * 2, target.y - 5 - pulse * 2, target.w + 10 + pulse * 4, target.h + 10 + pulse * 4, 7);
+    ctx.stroke();
+  }
 
   ctx.fillStyle = '#0a0600';
   roundedRect(ctx, boxX, boxY, boxW, boxH, 6);
@@ -3893,6 +3920,26 @@ function drawTopicInfoCard(
   ctx.textBaseline = 'middle';
   ctx.fillStyle = 'rgba(255, 184, 77, 0.7)';
   ctx.fillText('SKIP', sx + sw / 2, sy + sh / 2);
+
+  if (target && boxX + boxW <= target.x) {
+    const ay = Math.max(boxY + 12, Math.min(target.y + target.h / 2, boxY + boxH - 12));
+    ctx.fillStyle = AMBER;
+    ctx.beginPath();
+    ctx.moveTo(boxX + boxW, ay - 6);
+    ctx.lineTo(boxX + boxW + 8, ay);
+    ctx.lineTo(boxX + boxW, ay + 6);
+    ctx.closePath();
+    ctx.fill();
+  } else if (target && boxX >= target.x + target.w) {
+    const ay = Math.max(boxY + 12, Math.min(target.y + target.h / 2, boxY + boxH - 12));
+    ctx.fillStyle = AMBER;
+    ctx.beginPath();
+    ctx.moveTo(boxX, ay - 6);
+    ctx.lineTo(boxX - 8, ay);
+    ctx.lineTo(boxX, ay + 6);
+    ctx.closePath();
+    ctx.fill();
+  }
 
   ctx.restore();
 }
@@ -4007,7 +4054,8 @@ function drawComsTopicOverlay(ctx: CanvasRenderingContext2D, screenW: number, sc
     // Alliance is the one tab with somewhere else to go: real alliance creation/management
     // isn't part of this walkthrough yet, so offer a branch out to explore it directly.
     const secondaryLabel = entry.tab === 'alliance' ? 'EXPLORE ALLIANCE \u2192' : undefined;
-    drawTopicInfoCard(ctx, screenW, screenH, entry.title, entry.lines, idx >= 3 ? 'DONE' : 'NEXT', secondaryLabel);
+    const btn = _comsTabButtons.find((b) => b.tab === entry.tab);
+    drawTopicInfoCard(ctx, screenW, screenH, entry.title, entry.lines, idx >= 3 ? 'DONE' : 'NEXT', secondaryLabel, btn);
     return;
   }
   // phase === 'point': ring the tab we want the player to actually tap
@@ -5365,6 +5413,13 @@ let _comsTabButtons: { tab: ComsTab; x: number; y: number; w: number; h: number 
 let _publicReplyButtons: { comment: PublicComment; x: number; y: number; w: number; h: number }[] = [];
 let _publicPostButton: { x: number; y: number; w: number; h: number } | null = null;
 
+function getComsTabUnreadCount(tab: ComsTab): number {
+  if (tab === 'public') return _comsUnreadCount;
+  if (tab === 'private') return _dmUnreadFrom.length;
+  if (tab === 'alliance') return _allianceInvites.length;
+  return 0;
+}
+
 function drawComsPanelBody(
   ctx: CanvasRenderingContext2D,
   x: number, y: number, w: number,
@@ -5385,18 +5440,34 @@ function drawComsPanelBody(
   for (let i = 0; i < tabs.length; i++) {
     const tx = x + 4 + i * tabW;
     const ty = y;
-    const active = _comsTab === tabs[i]!.tab;
-    ctx.fillStyle = active ? 'rgba(0, 255, 128, 0.15)' : 'rgba(0, 0, 0, 0.3)';
+    const tab = tabs[i]!;
+    const active = _comsTab === tab.tab;
+    const unreadCount = getComsTabUnreadCount(tab.tab);
+    const hasUnread = unreadCount > 0 && !active;
+    ctx.fillStyle = active ? 'rgba(0, 255, 128, 0.15)' : hasUnread ? 'rgba(255, 184, 77, 0.18)' : 'rgba(0, 0, 0, 0.3)';
     ctx.fillRect(tx, ty, tabW, tabH);
-    ctx.strokeStyle = active ? G_BRIGHT : G_MED;
-    ctx.lineWidth = 0.5;
+    ctx.strokeStyle = active ? G_BRIGHT : hasUnread ? '#ffb84d' : G_MED;
+    ctx.lineWidth = hasUnread ? 1 : 0.5;
     ctx.strokeRect(tx, ty, tabW, tabH);
     ctx.font = f(7, 'bold');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = active ? G_BRIGHT : G_MED;
-    ctx.fillText(tabs[i]!.label, tx + tabW / 2, ty + tabH / 2);
-    _comsTabButtons.push({ tab: tabs[i]!.tab, x: tx, y: ty, w: tabW, h: tabH });
+    ctx.fillStyle = active ? G_BRIGHT : hasUnread ? '#ffb84d' : G_MED;
+    ctx.fillText(tab.label, tx + tabW / 2, ty + tabH / 2);
+    if (hasUnread) {
+      const badgeX = tx + tabW - 6;
+      const badgeY = ty + 4;
+      ctx.fillStyle = '#ff5a3d';
+      ctx.beginPath();
+      ctx.arc(badgeX, badgeY, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = f(5, 'bold');
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(unreadCount > 9 ? '9+' : String(unreadCount), badgeX, badgeY);
+    }
+    _comsTabButtons.push({ tab: tab.tab, x: tx, y: ty, w: tabW, h: tabH });
   }
 
   const contentY = y + tabH + 2;

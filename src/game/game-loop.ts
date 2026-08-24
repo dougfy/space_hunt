@@ -744,6 +744,23 @@ function update(dt: number): void {
     setGalaxyMode('fleet');
   }
 
+  // Handle transfer mode star selection before generic panel outside-click closing.
+  // Otherwise a valid star tap can close FLEET, queue a tier revert, and lose the send.
+  if (isInTransferMode() && gameState.galaxy.tier === NavigationTier.Galaxy && inputState.pointerDown && inputState.pointerPos) {
+    const px = inputState.pointerPos.x;
+    const py = inputState.pointerPos.y;
+    if (hitTestTransferCancel(px, py)) {
+      cancelTransferMode();
+      inputState.pointerDown = false;
+    } else {
+      const targetStar = hitTestGalaxyStar(px, py);
+      if (targetStar >= 0) {
+        completeTransferSelection(targetStar);
+        inputState.pointerDown = false;
+      }
+    }
+  }
+
   // Handle slide-out panel clicks (all tiers)
   if (inputState.pointerDown && inputState.pointerPos) {
     const panelIdx = hitTestPlanetPanels(screenW, screenH, inputState.pointerPos.x, inputState.pointerPos.y);
@@ -843,24 +860,6 @@ function update(dt: number): void {
     } else if (hitTestGalaxyModeBtn(inputState.pointerPos.x, inputState.pointerPos.y)) {
       toggleGalaxyMode();
       inputState.pointerDown = false;
-    }
-  }
-
-  // Handle transfer mode star selection (galaxy tier only)
-  if (isInTransferMode() && inputState.pointerDown && inputState.pointerPos) {
-    const px = inputState.pointerPos.x;
-    const py = inputState.pointerPos.y;
-    // Check cancel button first
-    if (hitTestTransferCancel(px, py)) {
-      cancelTransferMode();
-      inputState.pointerDown = false;
-    } else {
-      // Check if a star was tapped
-      const targetStar = hitTestGalaxyStar(px, py);
-      if (targetStar >= 0) {
-        completeTransferSelection(targetStar);
-        inputState.pointerDown = false;
-      }
     }
   }
 
