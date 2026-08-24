@@ -1303,22 +1303,30 @@ export function isInTransferMode(): boolean {
 }
 
 /** Hit-test galaxy stars for transfer target. Returns starIndex or -1. */
-export function hitTestGalaxyStar(sx: number, sy: number, radius = 18): number {
+export function hitTestGalaxyStar(sx: number, sy: number, radius = 28): number {
   for (const s of _lastScreenStars) {
     const dx = sx - s.sx;
     const dy = sy - s.sy;
     if (dx * dx + dy * dy < radius * radius) {
+      console.log('[GALAXY] star hit', { starIndex: s.starIndex, tap: { x: Math.round(sx), y: Math.round(sy) }, center: { x: Math.round(s.sx), y: Math.round(s.sy) }, radius });
       return s.starIndex;
     }
   }
+  console.log('[GALAXY] star miss', { tap: { x: Math.round(sx), y: Math.round(sy) }, renderedStars: _lastScreenStars.length, radius });
   return -1;
 }
 
 /** Complete a transfer selection — sets pending transfer and exits transfer mode. */
 export function completeTransferSelection(toStarIndex: number): void {
   if (!_transferMode) return;
-  if (toStarIndex === _transferMode.fromStarIndex) return; // can't send to same star
-  if (_validTransferTargets.size > 0 && !_validTransferTargets.has(toStarIndex)) return; // not a valid target
+  if (toStarIndex === _transferMode.fromStarIndex) {
+    console.log('[GALAXY] transfer target rejected: source star', toStarIndex);
+    return;
+  }
+  if (_validTransferTargets.size > 0 && !_validTransferTargets.has(toStarIndex)) {
+    console.log('[GALAXY] transfer target rejected: invalid target', { toStarIndex, validTargets: [..._validTransferTargets] });
+    return;
+  }
   _pendingTransfer = {
     fromStarIndex: _transferMode.fromStarIndex,
     toStarIndex,

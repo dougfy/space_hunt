@@ -751,6 +751,7 @@ function update(dt: number): void {
     } else {
       const targetStar = hitTestGalaxyStar(px, py);
       if (targetStar >= 0) {
+        console.log('[GALAXY] selecting transfer target', targetStar);
         completeTransferSelection(targetStar);
         inputState.pointerDown = false;
       }
@@ -883,6 +884,7 @@ function update(dt: number): void {
         deselectGalaxyStar();
         inputState.pointerDown = false;
       } else if (tappedStar >= 0) {
+        console.log('[GALAXY] selecting star', tappedStar, 'mode=', getGalaxyMode());
         selectGalaxyStar(tappedStar);
         // Center camera on the tapped star, keep current zoom level
         const star = gameState.galaxy.stars[tappedStar];
