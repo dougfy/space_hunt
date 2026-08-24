@@ -3579,12 +3579,11 @@ export function drawPlanetPanels(
     const isAtTradingStation = _postId && _panelsStarIndex != null && !_panelsOwned && isTradingStation(_postId, _panelsStarIndex);
     // TRADE tab (5): visible only at non-owned trading stations, requires dock
     // BUILD/SHIPS (1,2): require dock + owned star
-    // FLEET (3): disabled for scouts
+    // FLEET (3): available for managing ships stationed at known stars
     const isHidden = (i === 5 && !isAtTradingStation);
     const isDisabled = isHidden
       || (i === 5 && !_panelsDocked)
-      || (i !== 5 && tab.requiresDock && (!_panelsDocked || !_panelsOwned))
-      || (i === 3 && _panelsShipShape === 'scout');
+      || (i !== 5 && tab.requiresDock && (!_panelsDocked || !_panelsOwned));
     if (isHidden) continue; // skip rendering this tab entirely
 
     if (i === 1 && !isDisabled) _coachBuildTabRect = { x: tabX - 4, y: ty, w: TAB_W + 4, h: TAB_H };
@@ -3705,7 +3704,7 @@ export function drawPlanetPanels(
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = G_FAINT;
-      const msg = (i === 3 && _panelsShipShape === 'scout') ? 'UPGRADE SHIP TO ACCESS' : 'DOCK TO ACCESS';
+      const msg = 'DOCK TO ACCESS';
       ctx.fillText(msg, panelX + panelW / 2, panelY + bodyH / 2);
       _lastPanelBodyH = bodyH;
       _lastPanelBodyY = panelY;

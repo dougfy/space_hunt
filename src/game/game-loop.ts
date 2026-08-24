@@ -681,9 +681,13 @@ function update(dt: number): void {
   }
 
   // Per-frame: if fleet panel is open but we're not at galaxy tier, force jump
-  // Scouts cannot use fleet — close it if somehow open
-  if (isFleetPanelOpen() && gameState.shipShape === 'scout') {
-    closeFleetPanel();
+  if (isFleetPanelOpen() && gameState.galaxy.tier !== NavigationTier.Galaxy) {
+    setGalaxyJumpReturnTier(gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet');
+    _savedDock = gameState.dock;
+    gameState.galaxy.tier = NavigationTier.Galaxy;
+    gameState.ship.vel = { x: 0, y: 0 };
+    gameState.ship.thrust = false;
+    setGalaxyMode('fleet');
 
   // ── Keyboard action shortcuts (agent/power-user) ──────────────────────────
   } else if (inputState.actionKey) {
@@ -734,14 +738,6 @@ function update(dt: number): void {
       }
     }
 
-  } else if (isFleetPanelOpen() && gameState.galaxy.tier !== NavigationTier.Galaxy) {
-    const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet';
-    setGalaxyJumpReturnTier(returnTier);
-    _savedDock = gameState.dock; // preserve dock across temporary galaxy jump
-    gameState.galaxy.tier = NavigationTier.Galaxy;
-    gameState.ship.vel = { x: 0, y: 0 };
-    gameState.ship.thrust = false;
-    setGalaxyMode('fleet');
   }
 
   // Handle transfer mode star selection before generic panel outside-click closing.
@@ -768,10 +764,7 @@ function update(dt: number): void {
       journeyAction();
       const fleetAction = togglePlanetPanel(panelIdx);
       // Fleet tab opened from non-galaxy tier → jump to galaxy map (scouts cannot use fleet)
-      if (fleetAction === 'fleet-opened' && gameState.shipShape === 'scout') {
-        // Block — close it back immediately
-        togglePlanetPanel(3);
-      } else if (fleetAction === 'fleet-opened' && gameState.galaxy.tier !== NavigationTier.Galaxy) {
+      if (fleetAction === 'fleet-opened' && gameState.galaxy.tier !== NavigationTier.Galaxy) {
         _savedDock = gameState.dock; // preserve dock across temporary galaxy jump
         const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet';
         setGalaxyJumpReturnTier(returnTier);
