@@ -176,10 +176,12 @@ export type ColonizationTopicStep = 'info' | 'open_ships' | 'build_probe' | 'bui
 
 let _colonizationTopicActive = false;
 let _colonizationTopicStep: ColonizationTopicStep = 'done';
+let _colonizationTargetStar = -1;
 
 export function startColonizationTopic(): void {
   _colonizationTopicActive = true;
   _colonizationTopicStep = 'info';
+  _colonizationTargetStar = -1;
   console.log('[COLONIZATION-TOPIC] started');
 }
 
@@ -189,6 +191,10 @@ export function isColonizationTopicActive(): boolean {
 
 export function getColonizationTopicStep(): ColonizationTopicStep {
   return _colonizationTopicStep;
+}
+
+export function getColonizationTopicTarget(): number {
+  return _colonizationTargetStar;
 }
 
 export function colonizationTopicNext(): void {
@@ -205,7 +211,7 @@ export function colonizationTopicNext(): void {
 }
 
 /** Advance only when the player performs the requested action. */
-export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' | 'colony_built' | 'colony_sent' | 'arrived' | 'visited' | 'planet_found' | 'orbit_reached' | 'colonized'): void {
+export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' | 'colony_built' | 'colony_sent' | 'arrived' | 'visited' | 'planet_found' | 'orbit_reached' | 'colonized', targetStar = -1): void {
   if (!_colonizationTopicActive) return;
   const next: Partial<Record<ColonizationTopicStep, ColonizationTopicStep>> = {
     open_ships: 'build_probe',
@@ -215,14 +221,15 @@ export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' |
     arrival: 'visit',
     visit: 'locate_planet',
     locate_planet: 'orbit',
-    orbit: 'done',
+    orbit: 'orbit',
   };
   const expected: Record<ColonizationTopicStep, string> = {
     info: '', open_ships: 'ships_opened', build_probe: 'probe_built', build_colony: 'colony_built',
     send_colony: 'colony_sent', arrival: 'arrived', visit: 'visited', locate_planet: 'planet_found',
-    orbit: 'orbit_reached', done: 'colonized',
+    orbit: 'colonized', done: 'colonized',
   };
   if (expected[_colonizationTopicStep] !== action) return;
+  if (action === 'colony_sent' && targetStar >= 0) _colonizationTargetStar = targetStar;
   _colonizationTopicStep = next[_colonizationTopicStep] ?? 'done';
   if (_colonizationTopicStep === 'done') {
     _colonizationTopicActive = false;
@@ -233,6 +240,7 @@ export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' |
 export function dismissColonizationTopic(): void {
   _colonizationTopicActive = false;
   _colonizationTopicStep = 'done';
+  _colonizationTargetStar = -1;
 }
 
 // ── Comms Topic (post-onboarding guide) ──────────────────────────────────────

@@ -1325,7 +1325,7 @@ export function completeTransferSelection(toStarIndex: number): void {
     shipTypeId: _transferMode.shipTypeId,
     count: 1,
   };
-  if (_transferMode.shipTypeId === 8) colonizationTopicAction('colony_sent');
+  if (_transferMode.shipTypeId === 8) colonizationTopicAction('colony_sent', toStarIndex);
   _transferMode = null;
 }
 
@@ -4119,6 +4119,13 @@ function drawColonizationTopicOverlay(ctx: CanvasRenderingContext2D, screenW: nu
     return;
   }
   if (step === 'orbit') {
+    if (_panelsDocked && _colonizeButton) {
+      drawTopicPointer(ctx, screenW, screenH, _colonizeButton, 'above', 'CLAIM THIS STAR', [
+        'Press COLONIZE to consume the',
+        'Colony Ship and claim this star.',
+      ]);
+      return;
+    }
     const ring = _coachPlanetRing;
     if (!ring || _panelsDocked) return;
     drawCoachCallout(ctx, screenW, screenH, 'navigate_dock',
@@ -8256,6 +8263,7 @@ export function hitTestDockPanel(screenPos: Vec2): DockPanelAction | null {
         screenPos.y >= b.y && screenPos.y <= b.y + b.h) {
       if (_panelsStarIndex != null) {
         _pendingColonizeRequest = { starIndex: _panelsStarIndex, bodyIndex: _panelsBodyIndex };
+        colonizationTopicAction('colonized');
         playSound('click');
       }
       return null; // consumed internally
