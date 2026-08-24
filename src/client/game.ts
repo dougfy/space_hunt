@@ -2132,7 +2132,10 @@ for (const button of document.querySelectorAll<HTMLElement>('.tutorial-topic-btn
       openComsPanelForTutorial();
       startComsTopic();
     } else if (topic === 'colonize') {
-      startColonizationTopic();
+      const gs = getGameState();
+      const homeStar = gs?.galaxy.homeStarIndex ?? -1;
+      const hasVisitedStar = getVisitedStars().some((starIndex) => starIndex !== homeStar);
+      startColonizationTopic(hasVisitedStar);
     }
   });
 }

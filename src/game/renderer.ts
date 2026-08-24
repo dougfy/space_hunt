@@ -4056,9 +4056,9 @@ function drawColonizationTopicOverlay(ctx: CanvasRenderingContext2D, screenW: nu
   const step = getColonizationTopicStep();
   if (step === 'info') {
     drawTopicInfoCard(ctx, screenW, screenH, 'EXPAND YOUR EMPIRE', [
-      'Scout first, then build a Colony Ship.',
-      'You must personally visit the new star',
-      'before you can claim it.',
+      'Scout a star with a probe, or build',
+      'on your first visit beyond home.',
+      'Then travel there personally to claim it.',
     ], 'NEXT');
     return;
   }

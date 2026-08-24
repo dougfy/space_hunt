@@ -177,11 +177,13 @@ export type ColonizationTopicStep = 'info' | 'open_ships' | 'build_probe' | 'bui
 let _colonizationTopicActive = false;
 let _colonizationTopicStep: ColonizationTopicStep = 'done';
 let _colonizationTargetStar = -1;
+let _colonizationHasDirectPath = false;
 
-export function startColonizationTopic(): void {
+export function startColonizationTopic(hasDirectPath = false): void {
   _colonizationTopicActive = true;
   _colonizationTopicStep = 'info';
   _colonizationTargetStar = -1;
+  _colonizationHasDirectPath = hasDirectPath;
   console.log('[COLONIZATION-TOPIC] started');
 }
 
@@ -200,7 +202,7 @@ export function getColonizationTopicTarget(): number {
 export function colonizationTopicNext(): void {
   if (!_colonizationTopicActive) return;
   const next: Partial<Record<ColonizationTopicStep, ColonizationTopicStep>> = {
-    info: 'open_ships',
+    info: _colonizationHasDirectPath ? 'build_colony' : 'open_ships',
     send_colony: 'arrival',
     arrival: 'visit',
     visit: 'locate_planet',
