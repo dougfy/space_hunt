@@ -20,7 +20,7 @@ import { f } from './font';
 import { getFontScale } from './font';
 import { installTextAudit, setAuditRegion } from './text-audit';
 import { getJourneyPulseAlpha } from './journey';
-import { isCoachActive, getCoachStep, coachAdvance, dismissCoach, completeCoach, getCoachPulse, ackCoachStep, isCoachAcked, isShipsTopicActive, getShipsTopicStep, shipsTopicNext, shipsTopicShipsOpened, shipsTopicProbeClicked, dismissShipsTopic, isColonizationTopicActive, getColonizationTopicStep, colonizationTopicNext, colonizationTopicAction, dismissColonizationTopic, isComsTopicActive, getComsTopicIdx, getComsTopicPhase, comsTopicNext, comsTopicTabClicked, comsTopicBranchToAlliance, dismissComsTopic } from './coach';
+import { isCoachActive, getCoachStep, coachAdvance, dismissCoach, completeCoach, getCoachPulse, ackCoachStep, isCoachAcked, isShipsTopicActive, getShipsTopicStep, shipsTopicNext, shipsTopicShipsOpened, shipsTopicProbeClicked, dismissShipsTopic, isColonizationTopicActive, getColonizationTopicStep, getColonizationTopicTarget, colonizationTopicNext, colonizationTopicAction, dismissColonizationTopic, isComsTopicActive, getComsTopicIdx, getComsTopicPhase, comsTopicNext, comsTopicTabClicked, comsTopicBranchToAlliance, dismissComsTopic } from './coach';
 import { FLEET_COMMAND_SENDER } from '../shared/feature-flags';
 
 // ── View mode helper ────────────────────────────────────────────────────────
@@ -2204,6 +2204,20 @@ export function drawSystemView(
       const nameX = sc.x + radPx + 5;
       ctx.fillText(body.name, nameX, reserveSysLabel(ctx, body.name, nameX, sc.y));
       ctx.restore();
+
+      // The colonization API currently defaults to body 0.
+      const colonyTarget = getColonizationTopicTarget();
+      const colonyFleet = colonyTarget === galaxy.currentStarIndex ? _serverShipsByStarIndex.get(colonyTarget) : null;
+      const hasColonyShip = colonyFleet?.ships.some((ship) => ship.typeId === 8 && ship.count > 0) ?? false;
+      if (body.index === 0 && hasColonyShip && isColonizationTopicActive()) {
+        ctx.save();
+        ctx.font = f(8, 'bold');
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#ffb84d';
+        ctx.fillText('COLONY SHIP -> LAND HERE', nameX, sc.y + radPx + 14);
+        ctx.restore();
+      }
 
       // Station icons orbiting this planet (small markers in system view)
       const stationFeats = body.features.filter(f => f.type === 'station');
@@ -8263,7 +8277,6 @@ export function hitTestDockPanel(screenPos: Vec2): DockPanelAction | null {
         screenPos.y >= b.y && screenPos.y <= b.y + b.h) {
       if (_panelsStarIndex != null) {
         _pendingColonizeRequest = { starIndex: _panelsStarIndex, bodyIndex: _panelsBodyIndex };
-        colonizationTopicAction('colonized');
         playSound('click');
       }
       return null; // consumed internally

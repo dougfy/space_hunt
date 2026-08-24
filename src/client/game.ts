@@ -1058,7 +1058,7 @@ function advanceColonizationTopicFromState(fleetData?: FleetAllResponse): void {
   const gs = getGameState();
   if (!gs || gs.galaxy.currentStarIndex !== targetStar) return;
   if (step === 'visit' && gs.galaxy.tier >= 1) colonizationTopicAction('visited');
-  if (step === 'locate_planet' && gs.galaxy.tier === 3) colonizationTopicAction('planet_found');
+  if (step === 'locate_planet' && gs.galaxy.tier === 3 && gs.galaxy.currentBodyIndex === 0) colonizationTopicAction('planet_found');
 }
 
 async function pollEconomy() {
@@ -1322,6 +1322,7 @@ async function pollEconomy() {
             null,
           );
           playSound('colony_established');
+          colonizationTopicAction('colonized');
           console.log('[COLONIZE] Success! Star colonized:', pendingColonize.starIndex, 'body:', pendingColonize.bodyIndex);
           journeyAction('colonize');
           _claimedStarCount++;
