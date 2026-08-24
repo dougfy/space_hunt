@@ -20,7 +20,7 @@ import { f } from './font';
 import { getFontScale } from './font';
 import { installTextAudit, setAuditRegion } from './text-audit';
 import { getJourneyPulseAlpha } from './journey';
-import { isCoachActive, getCoachStep, coachAdvance, dismissCoach, completeCoach, getCoachPulse, ackCoachStep, isCoachAcked, isShipsTopicActive, getShipsTopicStep, shipsTopicNext, shipsTopicShipsOpened, shipsTopicProbeClicked, dismissShipsTopic, isComsTopicActive, getComsTopicIdx, getComsTopicPhase, comsTopicNext, comsTopicTabClicked, comsTopicBranchToAlliance, dismissComsTopic } from './coach';
+import { isCoachActive, getCoachStep, coachAdvance, dismissCoach, completeCoach, getCoachPulse, ackCoachStep, isCoachAcked, isShipsTopicActive, getShipsTopicStep, shipsTopicNext, shipsTopicShipsOpened, shipsTopicProbeClicked, dismissShipsTopic, isColonizationTopicActive, getColonizationTopicStep, colonizationTopicNext, colonizationTopicAction, dismissColonizationTopic, isComsTopicActive, getComsTopicIdx, getComsTopicPhase, comsTopicNext, comsTopicTabClicked, comsTopicBranchToAlliance, dismissComsTopic } from './coach';
 import { FLEET_COMMAND_SENDER } from '../shared/feature-flags';
 
 // ── View mode helper ────────────────────────────────────────────────────────
@@ -1325,6 +1325,7 @@ export function completeTransferSelection(toStarIndex: number): void {
     shipTypeId: _transferMode.shipTypeId,
     count: 1,
   };
+  if (_transferMode.shipTypeId === 8) colonizationTopicAction('colony_sent');
   _transferMode = null;
 }
 
@@ -2961,6 +2962,7 @@ export function togglePlanetPanel(index: number): 'fleet-opened' | 'fleet-closed
   _openPanel = wasOpen ? -1 : index;
   if (index === 1 && !wasOpen) coachAdvance('upgrade_station');
   if (index === 2 && !wasOpen) shipsTopicShipsOpened();
+  if (index === 2 && !wasOpen) colonizationTopicAction('ships_opened');
   if (wasOpen && index === 3) queueFleetRevert();
   if (index === 3) return wasOpen ? 'fleet-closed' : 'fleet-opened';
   return null;
@@ -3470,6 +3472,8 @@ function hitTestShipsPanel(sx: number, sy: number): void {
   for (const btn of _lastShipButtons) {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
       if (btn.shipTypeId === 11) shipsTopicProbeClicked(); // Ships guide only cares that the tap landed
+      if (btn.shipTypeId === 11 && btn.enabled) colonizationTopicAction('probe_built');
+      if (btn.shipTypeId === 8 && btn.enabled) colonizationTopicAction('colony_built');
       if (btn.enabled) {
         if (btn.isUpgrade && btn.upgradeFromTypeId != null) {
           _pendingUpgradeShipRequest = { fromTypeId: btn.upgradeFromTypeId, ...(btn.useBlueprint ? { useBlueprint: true } : {}) };
@@ -3763,6 +3767,10 @@ function drawCoachOverlay(ctx: CanvasRenderingContext2D, screenW: number, screen
     drawShipsTopicOverlay(ctx, screenW, screenH);
     return;
   }
+  if (isColonizationTopicActive()) {
+    drawColonizationTopicOverlay(ctx, screenW, screenH);
+    return;
+  }
   if (isComsTopicActive()) {
     drawComsTopicOverlay(ctx, screenW, screenH);
     return;
@@ -4041,6 +4049,80 @@ function drawShipsTopicOverlay(ctx: CanvasRenderingContext2D, screenW: number, s
       'Needs a Dock plus a little Ore,',
       'Food and Energy.',
     ]);
+  }
+}
+
+function drawColonizationTopicOverlay(ctx: CanvasRenderingContext2D, screenW: number, screenH: number): void {
+  const step = getColonizationTopicStep();
+  if (step === 'info') {
+    drawTopicInfoCard(ctx, screenW, screenH, 'EXPAND YOUR EMPIRE', [
+      'Scout first, then build a Colony Ship.',
+      'You must personally visit the new star',
+      'before you can claim it.',
+    ], 'NEXT');
+    return;
+  }
+  if (step === 'open_ships') {
+    const target = _coachShipsTabRect;
+    if (!target) return;
+    drawTopicPointer(ctx, screenW, screenH, target, 'left', 'OPEN SHIPS', [
+      'Open SHIPS to build your probe.',
+    ]);
+    return;
+  }
+  if (step === 'build_probe' && _openPanel === 2) {
+    const btn = _lastShipButtons.find((candidate) => candidate.shipTypeId === 11);
+    if (btn) drawTopicPointer(ctx, screenW, screenH, btn, 'above', 'BUILD A PROBE', [
+      'A probe reveals an unowned star',
+      'so your Colony Ship can target it.',
+    ]);
+    return;
+  }
+  if (step === 'build_colony' && _openPanel === 2) {
+    const btn = _lastShipButtons.find((candidate) => candidate.shipTypeId === 8);
+    if (btn) drawTopicPointer(ctx, screenW, screenH, btn, 'above', 'BUILD A COLONY SHIP', [
+      'This ship claims a discovered',
+      'unowned star when you arrive.',
+    ]);
+    return;
+  }
+  if (step === 'send_colony') {
+    drawTopicInfoCard(ctx, screenW, screenH, 'SEND THE COLONY SHIP', [
+      'Open FLEET, press SEND, and choose',
+      'a highlighted probed or visited star.',
+      'Unexplored stars are unavailable.',
+    ], 'NEXT');
+    return;
+  }
+  if (step === 'arrival') {
+    drawTopicInfoCard(ctx, screenW, screenH, 'WAIT FOR ARRIVAL', [
+      'The Colony Ship travels in real time.',
+      'When it arrives, visit that star',
+      'yourself to continue.',
+    ], 'NEXT');
+    return;
+  }
+  if (step === 'visit') {
+    drawTopicInfoCard(ctx, screenW, screenH, 'VISIT THE DESTINATION', [
+      'Enter the destination star system.',
+      'The Colony Ship marker will identify',
+      'the planet selected for colonization.',
+    ], 'NEXT');
+    return;
+  }
+  if (step === 'locate_planet') {
+    drawTopicInfoCard(ctx, screenW, screenH, 'LOCATE THE PLANET', [
+      'Find the planet with the Colony Ship',
+      'marker beside it. Scan planets if',
+      'you need help finding the marker.',
+    ], 'NEXT');
+    return;
+  }
+  if (step === 'orbit') {
+    const ring = _coachPlanetRing;
+    if (!ring || _panelsDocked) return;
+    drawCoachCallout(ctx, screenW, screenH, 'navigate_dock',
+      { x: ring.x - ring.r, y: ring.y - ring.r, w: ring.r * 2, h: ring.r * 2 }, 'above', true);
   }
 }
 
@@ -4348,10 +4430,11 @@ function drawCoachCallout(
 
 /** Returns true when the click landed on a coach button. Call before any other hit test. */
 export function hitTestCoachButtons(sx: number, sy: number): boolean {
-  if (isShipsTopicActive() || isComsTopicActive()) {
+  if (isShipsTopicActive() || isColonizationTopicActive() || isComsTopicActive()) {
     const skip = _topicSkipButton;
     if (skip && sx >= skip.x && sx <= skip.x + skip.w && sy >= skip.y && sy <= skip.y + skip.h) {
       dismissShipsTopic();
+      dismissColonizationTopic();
       dismissComsTopic();
       playSound('click');
       return true;
@@ -4365,6 +4448,7 @@ export function hitTestCoachButtons(sx: number, sy: number): boolean {
     const primary = _topicPrimaryButton;
     if (primary && sx >= primary.x && sx <= primary.x + primary.w && sy >= primary.y && sy <= primary.y + primary.h) {
       if (isShipsTopicActive()) shipsTopicNext();
+      else if (isColonizationTopicActive()) colonizationTopicNext();
       else comsTopicNext();
       playSound('click');
       return true;

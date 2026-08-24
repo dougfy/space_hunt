@@ -168,6 +168,73 @@ export function dismissShipsTopic(): void {
   _shipsTopicStep = 'done';
 }
 
+// ── Colonization Topic ──────────────────────────────────────────────────────
+// Separate from onboarding and the Ships topic so expansion can be resumed
+// across a long ship build/transit without changing the first-session flow.
+
+export type ColonizationTopicStep = 'info' | 'open_ships' | 'build_probe' | 'build_colony' | 'send_colony' | 'arrival' | 'visit' | 'locate_planet' | 'orbit' | 'done';
+
+let _colonizationTopicActive = false;
+let _colonizationTopicStep: ColonizationTopicStep = 'done';
+
+export function startColonizationTopic(): void {
+  _colonizationTopicActive = true;
+  _colonizationTopicStep = 'info';
+  console.log('[COLONIZATION-TOPIC] started');
+}
+
+export function isColonizationTopicActive(): boolean {
+  return _colonizationTopicActive && _colonizationTopicStep !== 'done';
+}
+
+export function getColonizationTopicStep(): ColonizationTopicStep {
+  return _colonizationTopicStep;
+}
+
+export function colonizationTopicNext(): void {
+  if (!_colonizationTopicActive) return;
+  const next: Partial<Record<ColonizationTopicStep, ColonizationTopicStep>> = {
+    info: 'open_ships',
+    send_colony: 'arrival',
+    arrival: 'visit',
+    visit: 'locate_planet',
+    locate_planet: 'orbit',
+  };
+  const following = next[_colonizationTopicStep];
+  if (following) _colonizationTopicStep = following;
+}
+
+/** Advance only when the player performs the requested action. */
+export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' | 'colony_built' | 'colony_sent' | 'arrived' | 'visited' | 'planet_found' | 'orbit_reached' | 'colonized'): void {
+  if (!_colonizationTopicActive) return;
+  const next: Partial<Record<ColonizationTopicStep, ColonizationTopicStep>> = {
+    open_ships: 'build_probe',
+    build_probe: 'build_colony',
+    build_colony: 'send_colony',
+    send_colony: 'arrival',
+    arrival: 'visit',
+    visit: 'locate_planet',
+    locate_planet: 'orbit',
+    orbit: 'done',
+  };
+  const expected: Record<ColonizationTopicStep, string> = {
+    info: '', open_ships: 'ships_opened', build_probe: 'probe_built', build_colony: 'colony_built',
+    send_colony: 'colony_sent', arrival: 'arrived', visit: 'visited', locate_planet: 'planet_found',
+    orbit: 'orbit_reached', done: 'colonized',
+  };
+  if (expected[_colonizationTopicStep] !== action) return;
+  _colonizationTopicStep = next[_colonizationTopicStep] ?? 'done';
+  if (_colonizationTopicStep === 'done') {
+    _colonizationTopicActive = false;
+    console.log('[COLONIZATION-TOPIC] complete');
+  }
+}
+
+export function dismissColonizationTopic(): void {
+  _colonizationTopicActive = false;
+  _colonizationTopicStep = 'done';
+}
+
 // ── Comms Topic (post-onboarding guide) ──────────────────────────────────────
 // Reached from Help → More Tutorials → COMMS. Walks all four COMS tabs. PUBLIC
 // is explained immediately since it's the default open tab; the remaining

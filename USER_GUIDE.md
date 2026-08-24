@@ -154,12 +154,33 @@ Send probes to plan your expansion path before committing a Colony Ship.
 
 ## Colonization — Expanding Your Empire
 
-To claim a new star:
+Expansion is a short journey with two valid scouting paths. You can send a probe first, or personally visit another star before committing a Colony Ship.
 
-1. **Build a Colony Ship** at your home star's dock
-2. **Transfer it** to the target unclaimed star (or fly there in Galaxy view)
-3. **Dock** at the target star's station
-4. Press **COLONIZE**
+### Before Building a Colony Ship
+
+You must have either:
+
+- A Basic Probe built and still in your fleet, ready to scout a target; or
+- At least one visited non-home star, proving that you have explored beyond your starting system.
+
+This keeps colonization understandable for new players without forcing every player to use the same route.
+
+### Step-by-Step Expansion
+
+1. **Build a Basic Probe** at your Space Dock, or visit another star directly.
+2. **Send the probe** from the Fleet panel to an unowned star, or complete the direct visit. A probe marks the star as **Probed**; a personal visit marks it **Visited**.
+3. **Build a Colony Ship** once one of those scouting requirements is satisfied.
+4. Open **Fleet → Send** and choose a highlighted unowned star that is **Probed** or **Visited**. Unexplored stars cannot receive a Colony Ship.
+5. Wait for the Colony Ship to arrive. The ship is not enough by itself: you must travel to the destination personally.
+6. Enter the destination star system and find the planet with the Colony Ship marker beside it. Scan the planets if the marker is not yet revealed.
+7. Enter that planet's local orbit and press **COLONIZE**.
+8. Confirm the claim. The Colony Ship is consumed and the new star becomes part of your empire.
+
+The guided tutorial should pause after each milestone: scout, discover, build, send, arrive, visit, locate/scan, orbit, and colonize. Each checkpoint should explain why the next action is unavailable, show the relevant Fleet or navigation control, and remain resumable if the player leaves the game.
+
+In short:
+
+**Scout or visit → build Colony Ship → send to a discovered unowned star → travel there → locate or scan its marked planet → orbit → COLONIZE.**
 
 The colony ship is consumed and the star becomes yours. You'll get a fresh set of buildings to develop. Each new star is an independent economy — build it up just like your home star.
 

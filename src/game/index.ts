@@ -7,7 +7,7 @@ export type { RemotePoseItem } from './ghosts';
 export type { GameState, ShipShape, Ghost } from './types';
 export { getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, onColonizeSuccess, consumePendingRefuel } from './game-loop';
 export { skipJourney, startJourney, isJourneyDone } from './journey';
-export { startCoach, restoreCoach, resumeCoach, isCoachActive, canResumeCoach, getCoachStep, getCoachStepLabel, isCoachSkipped, coachAdvance, dismissCoach, startShipsTopic, startComsTopic } from './coach';
+export { startCoach, restoreCoach, resumeCoach, isCoachActive, canResumeCoach, getCoachStep, getCoachStepLabel, isCoachSkipped, coachAdvance, dismissCoach, startShipsTopic, startComsTopic, startColonizationTopic, colonizationTopicAction } from './coach';
 export { getFontScaleName, setFontScaleByName } from './font';
 export type { FontScaleName } from './font';
 export { setTextAuditEnabled, getOverflowReport } from './text-audit';
