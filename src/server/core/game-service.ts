@@ -676,7 +676,7 @@ export async function startBuildingUpgrade(
     level: building.level,
     status: 'UPGRADING',
     completeAt: now + getBuildingDurationSeconds(body.buildType, targetLevel) * 1000 * buildMult,
-    skinId: body.skinId,
+    ...(body.skinId ? { skinId: body.skinId } : building.skinId ? { skinId: building.skinId } : {}),
   };
   const nextCap = computeResourceCapFromBuildings(nextBuildings);
   const nextState: StarEconomyState = {

@@ -2538,7 +2538,7 @@ function getEffectiveFeatures(body: SystemBody, starIndex: number, bodyIndex: nu
   const stationBuilding = serverEcon.buildings.station;
   const stationLevel = stationBuilding?.level ?? 1;
   const romanNumerals = ['I','II','III','IV','V','VI','VII','VIII'];
-  const effectiveSkinId = scanned ? stationBuilding?.skinId : 'procedural';
+  const effectiveSkinId = scanned ? (stationBuilding?.skinId ?? serverEcon.preferredSkinId) : 'procedural';
   const updatedStation: PlanetFeature = {
     ...stationFeature,
     name: `${body.name} ${romanNumerals[stationLevel - 1] ?? stationLevel} Station`,
@@ -2575,13 +2575,14 @@ function getEffectiveFeatures(body: SystemBody, starIndex: number, bodyIndex: nu
 
     const building = serverEcon.buildings[ext.key];
     if (building && building.level > 0 && (building.status === 'ACTIVE' || building.status === 'UPGRADING')) {
+      const featureSkinId = building.skinId ?? serverEcon.preferredSkinId ?? 'procedural';
       builtExtensions.push({
         name: `${body.name} ${ext.label} LV${building.level}`,
         type: ext.featureType,
         angle,
         dist,
         level: building.level,
-        ...(scanned && building.skinId ? { skinId: building.skinId } : { skinId: 'procedural' }),
+        skinId: scanned ? featureSkinId : 'procedural',
       });
     }
   }
@@ -7142,6 +7143,7 @@ type ServerEconomySnapshot = {
   };
   completeCharges?: number;
   richness?: { ore: number; food: number; energy: number; fuel: number };
+  preferredSkinId?: string;
 };
 
 const _serverEconomyByStarIndex = new Map<number, ServerEconomySnapshot>();
