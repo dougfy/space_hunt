@@ -172,16 +172,16 @@ export function dismissShipsTopic(): void {
 // Separate from onboarding and the Ships topic so expansion can be resumed
 // across a long ship build/transit without changing the first-session flow.
 
-export type ColonizationTopicStep = 'info' | 'open_ships' | 'build_probe' | 'build_colony' | 'send_colony' | 'arrival' | 'visit' | 'locate_planet' | 'orbit' | 'done';
+export type ColonizationTopicStep = 'info' | 'open_ships' | 'build_probe' | 'colony_building' | 'build_colony' | 'send_colony' | 'arrival' | 'visit' | 'locate_planet' | 'orbit' | 'done';
 
 let _colonizationTopicActive = false;
 let _colonizationTopicStep: ColonizationTopicStep = 'done';
 let _colonizationTargetStar = -1;
 let _colonizationHasDirectPath = false;
 
-export function startColonizationTopic(hasDirectPath = false): void {
+export function startColonizationTopic(hasDirectPath = false, initialStep: ColonizationTopicStep = 'info'): void {
   _colonizationTopicActive = true;
-  _colonizationTopicStep = 'info';
+  _colonizationTopicStep = initialStep;
   _colonizationTargetStar = -1;
   _colonizationHasDirectPath = hasDirectPath;
   console.log('[COLONIZATION-TOPIC] started');
@@ -218,6 +218,7 @@ export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' |
   const next: Partial<Record<ColonizationTopicStep, ColonizationTopicStep>> = {
     open_ships: 'build_probe',
     build_probe: 'build_colony',
+    colony_building: 'send_colony',
     build_colony: 'send_colony',
     send_colony: 'arrival',
     arrival: 'visit',
@@ -226,7 +227,7 @@ export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' |
     orbit: 'orbit',
   };
   const expected: Record<ColonizationTopicStep, string> = {
-    info: '', open_ships: 'ships_opened', build_probe: 'probe_built', build_colony: 'colony_built',
+    info: '', open_ships: 'ships_opened', build_probe: 'probe_built', colony_building: 'colony_built', build_colony: 'colony_built',
     send_colony: 'colony_sent', arrival: 'arrived', visit: 'visited', locate_planet: 'planet_found',
     orbit: 'colonized', done: 'colonized',
   };

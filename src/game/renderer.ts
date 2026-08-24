@@ -4093,6 +4093,14 @@ function drawColonizationTopicOverlay(ctx: CanvasRenderingContext2D, screenW: nu
     ]);
     return;
   }
+  if (step === 'colony_building') {
+    drawTopicInfoCard(ctx, screenW, screenH, 'COLONY SHIP BUILDING', [
+      'Your Colony Ship is being built.',
+      'When construction completes, open',
+      'FLEET to send it to a discovered star.',
+    ], 'OK');
+    return;
+  }
   if (step === 'build_colony' && _openPanel === 2) {
     const btn = _lastShipButtons.find((candidate) => candidate.shipTypeId === 8);
     if (btn) drawTopicPointer(ctx, screenW, screenH, btn, 'above', 'BUILD A COLONY SHIP', [

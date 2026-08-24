@@ -1061,6 +1061,27 @@ function advanceColonizationTopicFromState(fleetData?: FleetAllResponse): void {
   if (step === 'locate_planet' && gs.galaxy.tier === 3 && gs.galaxy.currentBodyIndex === 0) colonizationTopicAction('planet_found');
 }
 
+async function startColonizationTopicFromCurrentState(): Promise<void> {
+  const gs = getGameState();
+  const homeStar = gs?.galaxy.homeStarIndex ?? -1;
+  const hasVisitedStar = getVisitedStars().some((starIndex) => starIndex !== homeStar);
+  const starIndex = gs?.galaxy.currentStarIndex ?? playerHomeStarIndex ?? -1;
+  if (starIndex < 0) {
+    startColonizationTopic(hasVisitedStar);
+    return;
+  }
+  try {
+    const response = await fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${starIndex}`);
+    const fleet = response.ok ? await response.json() as { ships: Array<{ typeId: number; count: number }>; building: { typeId: number; completeAt: number } | null } : null;
+    const colonyReady = fleet?.ships.some((ship) => ship.typeId === 8 && ship.count > 0) ?? false;
+    const colonyBuilding = fleet?.building?.typeId === 8;
+    const initialStep = colonyReady ? 'send_colony' : colonyBuilding ? 'colony_building' : 'info';
+    startColonizationTopic(hasVisitedStar, initialStep);
+  } catch {
+    startColonizationTopic(hasVisitedStar);
+  }
+}
+
 async function pollEconomy() {
   if (_pollEconomyRunning || _resetPerformed) return; // prevent re-entrancy / overlapping polls
   _pollEconomyRunning = true;
@@ -1428,7 +1449,9 @@ async function pollEconomy() {
         if (shipRes.ok) {
           console.log('[SHIPS] buy success');
           if (pendingShip.shipTypeId === 11) colonizationTopicAction('probe_built');
-          if (pendingShip.shipTypeId === 8) colonizationTopicAction('colony_built');
+          if (pendingShip.shipTypeId === 8) {
+            startColonizationTopic(false, 'colony_building');
+          }
           playSound('begin_building_ship');
           journeyAction('buy_ship');
           journeyProgress(0.20, 'first_ship_built');
@@ -1535,6 +1558,10 @@ async function pollEconomy() {
     if (shipsRes.ok) {
       const shipsData = await shipsRes.json() as StarShipsResponse;
       setServerShipState(starIndex, shipsData.ships, shipsData.building, econUsername === username);
+      if (econUsername === username && getColonizationTopicStep() === 'colony_building') {
+        const colonyReady = shipsData.ships.some((ship) => ship.typeId === 8 && ship.count > 0);
+        if (colonyReady && !shipsData.building) colonizationTopicAction('colony_built');
+      }
       // Update ship shape based on HOME star fleet only
       if (starIndex === playerHomeStarIndex) {
         const fleetShape = getFleetShape(shipsData.ships);
@@ -2133,10 +2160,7 @@ for (const button of document.querySelectorAll<HTMLElement>('.tutorial-topic-btn
       openComsPanelForTutorial();
       startComsTopic();
     } else if (topic === 'colonize') {
-      const gs = getGameState();
-      const homeStar = gs?.galaxy.homeStarIndex ?? -1;
-      const hasVisitedStar = getVisitedStars().some((starIndex) => starIndex !== homeStar);
-      startColonizationTopic(hasVisitedStar);
+      void startColonizationTopicFromCurrentState();
     }
   });
 }
