@@ -864,8 +864,8 @@ function update(dt: number): void {
   }
 
   // Handle star info card selection (galaxy tier, not in transfer mode, not dragging)
-  if (!isInTransferMode() && gameState.galaxy.tier === NavigationTier.Galaxy
-      && inputState.pointerDown && inputState.pointerPos && !inputState.isDragging) {
+    if (!isInTransferMode() && gameState.galaxy.tier === NavigationTier.Galaxy
+      && inputState.pointerDown && inputState.pointerPos) {
     const px = inputState.pointerPos.x;
     const py = inputState.pointerPos.y;
 
