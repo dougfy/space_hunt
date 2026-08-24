@@ -4079,7 +4079,14 @@ function drawColonizationTopicOverlay(ctx: CanvasRenderingContext2D, screenW: nu
   }
   if (step === 'open_ships') {
     const target = _coachShipsTabRect;
-    if (!target) return;
+    if (!target) {
+      drawTopicInfoCard(ctx, screenW, screenH, 'DOCK TO BUILD', [
+        'Dock at your own station first.',
+        'The SHIPS tab appears when you',
+        'are in orbit at your home star.',
+      ], 'OK');
+      return;
+    }
     drawTopicPointer(ctx, screenW, screenH, target, 'left', 'OPEN SHIPS', [
       'Open SHIPS to build your probe.',
     ]);
