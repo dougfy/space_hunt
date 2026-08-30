@@ -8,6 +8,9 @@
 
 // Start the lightweight splash animation immediately (bundled into this chunk)
 import './splash';
+import { initSplashLeaderboard } from './splash-leaderboard';
+
+initSplashLeaderboard();
 
 // Show idle timeout message if returning from idle
 if (location.hash === '#idle') {

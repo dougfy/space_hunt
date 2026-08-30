@@ -4,7 +4,7 @@
 
 import versionJson from '../../version.json';
 
-type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'ship_is_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'undocking_alt' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded' | 'freighter_arrived' | 'freighter_unloading' | 'shields_activated' | 'shields_up' | 'shields_deactivated' | 'shields_down' | 'hostile_raider' | 'unidentified_ship' | 'new_comm' | 'fleet_command' | 'scan_nothing_planet' | 'scan_nothing_station' | 'scan_ore' | 'scan_food' | 'scan_energy' | 'scan_fuel' | 'scan_artifact' | 'scan_anomaly' | 'scan_blueprint' | 'begin_scan' | 'buff_hyperdrive' | 'buff_resonance' | 'buff_chrono' | 'buff_void_shield' | 'buff_scanner_amp' | 'raid_launched' | 'raid_incoming' | 'alliance_formed' | 'alliance_broken' | 'luminari_gate' | 'colony_established' | 'reverse_engineered' | 'max_level_reached' | 'upgrade_failed' | 'upgrade_in_progress';
+type SoundId = 'docked' | 'low_fuel' | 'fuel_critical' | 'colonize' | 'click' | 'send' | 'arrive' | 'status_docked' | 'ship_is_docked' | 'begin_building' | 'begin_building_facility' | 'begin_building_ship' | 'undocking' | 'undocking_alt' | 'insufficient_resources' | 'dock_low' | 'hey_there' | 'ship_entered' | 'leaving_orbit' | 'construction_complete' | 'construction_complete_building' | 'begin_ship_upgrade' | 'scout_range_exceeded' | 'freighter_arrived' | 'freighter_unloading' | 'shields_activated' | 'shields_up' | 'shields_deactivated' | 'shields_down' | 'hostile_raider' | 'unidentified_ship' | 'new_comm' | 'fleet_command' | 'scan_nothing_planet' | 'scan_nothing_station' | 'scan_ore' | 'scan_food' | 'scan_energy' | 'scan_fuel' | 'scan_artifact' | 'scan_anomaly' | 'scan_blueprint' | 'begin_scan' | 'buff_hyperdrive' | 'buff_resonance' | 'buff_chrono' | 'buff_void_shield' | 'buff_scanner_amp' | 'raid_launched' | 'raid_incoming' | 'alliance_formed' | 'alliance_broken' | 'luminari_gate' | 'colony_established' | 'reverse_engineered' | 'max_level_reached' | 'upgrade_failed' | 'upgrade_in_progress' | 'purifier_warning' | 'purifier_capacity_reduced' | 'purifier_critical' | 'purifier_unit_recovered' | 'purifier_restored' | 'purifier_order_opened' | 'purifier_order_funded' | 'purifier_payment_accepted' | 'purifier_order_failed' | 'purifier_unit_received' | 'purifier_repair_unavailable' | 'purifier_no_incident';
 
 // Cache-bust sound URLs with version so updated wavs are fetched fresh
 const V = versionJson.version;
@@ -65,6 +65,18 @@ const SOUND_FILES: Partial<Record<SoundId, string>> = {
   max_level_reached: `/sounds/Maximum%20level%20reached.wav?v=${V}`,
   upgrade_failed: `/sounds/Upgrade%20Failed.wav?v=${V}`,
   upgrade_in_progress: `/sounds/Upgrade%20in%20progress.wav?v=${V}`,
+  purifier_warning: `/sounds/Warning%20Air%20purification.wav?v=${V}`,
+  purifier_capacity_reduced: `/sounds/Starbase%20capacity%20reduced.wav?v=${V}`,
+  purifier_critical: `/sounds/Critical%20failure%20Starbase.wav?v=${V}`,
+  purifier_unit_recovered: `/sounds/Replacement%20unit%20recovered.wav?v=${V}`,
+  purifier_restored: `/sounds/Air%20purification%20restored.wav?v=${V}`,
+  purifier_order_opened: `/sounds/Purifier%20replacement%20order.wav?v=${V}`,
+  purifier_order_funded: `/sounds/Purifier%20order%20funded.wav?v=${V}`,
+  purifier_payment_accepted: `/sounds/Purifier%20payment%20accepted.wav?v=${V}`,
+  purifier_order_failed: `/sounds/Purifier%20order%20cannot.wav?v=${V}`,
+  purifier_unit_received: `/sounds/Purifier%20replacement%20unit.wav?v=${V}`,
+  purifier_repair_unavailable: `/sounds/Purifier%20repair%20unavailable.wav?v=${V}`,
+  purifier_no_incident: `/sounds/No%20active%20purifier.wav?v=${V}`,
 };
 
 let _audioCtx: AudioContext | null = null;

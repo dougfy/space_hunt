@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   claimPod,
+  consumeItem,
+  ensureAirPurifierQuest,
   getClaimedPods,
+  getInventory,
+  grantItem,
+  repairAirPurifierQuest,
+  assignFreighterRoute,
+  cancelFreighterRoute,
+  loadAllFleet,
+  createAirPurifierOrder,
+  getAirPurifierOrder,
+  payAirPurifierOrder,
   listActiveShots,
   listRoomPoses,
   loadStarEconomy,
@@ -12,6 +23,7 @@ import {
   storeShots,
 } from '../core/game-service';
 import type { RedisGameStore } from '../core/game-service';
+import { isTradingStation } from '../../shared/trading';
 
 function createFakeStore(seed?: Record<string, Record<string, string>>): RedisGameStore & { data: Record<string, Record<string, string>>; kv: Record<string, string> } {
   const data: Record<string, Record<string, string>> = seed ? structuredClone(seed) : {};
@@ -52,6 +64,110 @@ function createFakeStore(seed?: Record<string, Record<string, string>>): RedisGa
 }
 
 describe('game service backend routines', () => {
+  it('creates one air-purifier event for a player with two owned stars', async () => {
+    const store = createFakeStore({ 'stars:post-1': { 's:4': 'pilot', 's:9': 'pilot' } });
+    const startedAt = Date.UTC(2026, 7, 26, 8);
+    const first = await ensureAirPurifierQuest(store, 'post-1', 'pilot', startedAt);
+    const second = await ensureAirPurifierQuest(store, 'post-1', 'pilot', startedAt + 60_000);
+
+    expect(first?.state).toBe('active');
+    expect(first?.starIndex).toBe(9);
+    expect(second?.eventId).toBe(first?.eventId);
+    expect(second?.capacityPercent).toBe(75);
+  });
+
+  it('does not create an air-purifier event before the second owned star', async () => {
+    const store = createFakeStore({ 'stars:post-1': { 's:4': 'pilot' } });
+    expect(await ensureAirPurifierQuest(store, 'post-1', 'pilot', Date.now())).toBeNull();
+  });
+
+  it('repairs the affected starbase with one replacement unit', async () => {
+    const store = createFakeStore({ 'stars:post-1': { 's:4': 'pilot', 's:9': 'pilot' } });
+    const startedAt = Date.UTC(2026, 7, 26, 8);
+    const incident = await ensureAirPurifierQuest(store, 'post-1', 'pilot', startedAt);
+    if (!incident) throw new Error('Expected incident');
+
+    await grantItem(store, 'pilot', 'air_purifier_unit');
+    const repaired = await repairAirPurifierQuest(store, 'post-1', 'pilot', incident.starIndex, startedAt + 1_000);
+
+    expect(repaired.state).toBe('resolved');
+    expect(repaired.repairMethod).toBe('found_unit');
+    expect(await getInventory(store, 'pilot')).toEqual({});
+    await expect(repairAirPurifierQuest(store, 'post-1', 'pilot', incident.starIndex, startedAt + 2_000)).rejects.toThrow('No active');
+  });
+
+  it('carries item cargo through a freighter route and returns it on arrival', async () => {
+    const now = 2_000_000;
+    const store = createFakeStore({
+      'profile:pilot': {
+        ships: JSON.stringify({ stars: { 's:1': { ships: [{ typeId: 2, count: 1 }], building: null }, 's:2': { ships: [], building: null } } }),
+        inventory: JSON.stringify({ air_purifier_unit: 1 }),
+      },
+    });
+
+    const assigned = await assignFreighterRoute(store, 'pilot', 1, 2, [{ itemId: 'air_purifier_unit', count: 1 }], now);
+    expect(await getInventory(store, 'pilot')).toEqual({});
+    expect(assigned.route.items).toEqual([{ itemId: 'air_purifier_unit', count: 1 }]);
+
+    const outboundDone = await loadAllFleet(store, 'pilot', assigned.route.arrivalAt);
+    const returnRoute = outboundDone.freighterRoutes[0];
+    if (!returnRoute) throw new Error('Expected return route');
+    expect(returnRoute.leg).toBe('return');
+    expect(returnRoute.items).toEqual([{ itemId: 'air_purifier_unit', count: 1 }]);
+
+    await loadAllFleet(store, 'pilot', returnRoute.arrivalAt);
+    expect(await getInventory(store, 'pilot')).toEqual({ air_purifier_unit: 1 });
+  });
+
+  it('refunds reserved item cargo when a freighter route is cancelled', async () => {
+    const store = createFakeStore({
+      'profile:pilot': {
+        ships: JSON.stringify({ stars: { 's:1': { ships: [{ typeId: 2, count: 1 }], building: null } } }),
+        inventory: JSON.stringify({ air_purifier_unit: 1 }),
+      },
+    });
+    const assigned = await assignFreighterRoute(store, 'pilot', 1, 2, [{ itemId: 'air_purifier_unit', count: 1 }], 3_000_000);
+    await cancelFreighterRoute(store, 'pilot', assigned.route.id, 3_000_001);
+    expect(await getInventory(store, 'pilot')).toEqual({ air_purifier_unit: 1 });
+  });
+
+  it('funds the purifier trade order in stages and grants the replacement unit', async () => {
+    const now = 4_000_000;
+    const store = createFakeStore({
+      'stars:post-1': { 's:1': 'pilot', 's:2': 'pilot' },
+      'profile:pilot': {
+        economy: JSON.stringify({ homeStar: 1, stars: { 's:1': { store: { ore: 2400, food: 1800, energy: 2200, fuel: 600 }, buildings: { warehouse: { level: 2, status: 'ACTIVE', completeAt: null } } } } }),
+      },
+    });
+    let stationStarIndex = 0;
+    while (stationStarIndex < 100 && (stationStarIndex === 1 || stationStarIndex === 2 || !isTradingStation('post-1', stationStarIndex))) stationStarIndex++;
+    const order = await createAirPurifierOrder(store, 'post-1', 'pilot', stationStarIndex, now);
+    expect(order.status).toBe('open');
+    const partial = await payAirPurifierOrder(store, 'post-1', 'pilot', 1, { ore: 1200, food: 900, energy: 1100, fuel: 300 }, now + 1);
+    expect(partial.status).toBe('open');
+    const complete = await payAirPurifierOrder(store, 'post-1', 'pilot', 1, { ore: 1200, food: 900, energy: 1100, fuel: 300 }, now + 2);
+    expect(complete.status).toBe('complete');
+    expect(await getInventory(store, 'pilot')).toEqual({ air_purifier_unit: 1 });
+    expect((await getAirPurifierOrder(store, 'pilot'))?.status).toBe('complete');
+  });
+
+  it('persists and consumes quest items without allowing negative inventory', async () => {
+    const store = createFakeStore();
+
+    await grantItem(store, 'pilot', 'luminari_artifact', 2);
+    expect(await getInventory(store, 'pilot')).toEqual({ luminari_artifact: 2 });
+
+    await consumeItem(store, 'pilot', 'luminari_artifact');
+    expect(await getInventory(store, 'pilot')).toEqual({ luminari_artifact: 1 });
+    await expect(consumeItem(store, 'pilot', 'air_purifier_unit')).rejects.toThrow('Not enough air_purifier_unit');
+  });
+
+  it('rejects invalid inventory quantities', async () => {
+    const store = createFakeStore();
+    await expect(grantItem(store, 'pilot', 'luminari_artifact', 0)).rejects.toThrow('positive integer');
+    await expect(consumeItem(store, 'pilot', 'luminari_artifact', -1)).rejects.toThrow('positive integer');
+  });
+
   it('stores and filters room poses by location while removing stale entries', async () => {
     const store = createFakeStore();
     const now = 1_000_000;

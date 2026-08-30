@@ -1,4 +1,7 @@
 import type { ActiveBuff } from './buffs';
+import type { PlayerInventory } from './items';
+import type { ItemId } from './items';
+import type { AirPurifierQuest, AirPurifierTradeOrder, StarCondition } from './quests';
 
 export type InitResponse = {
   type: 'init';
@@ -183,6 +186,8 @@ export type StarEconomyResponse = {
   richness?: ResourceStore;
   buffs?: ActiveBuff[];
   preferredSkinId?: string;
+  starCondition?: StarCondition;
+  capacityPercent?: number;
 };
 
 export type ToggleShieldRequest = {
@@ -304,12 +309,15 @@ export type FreighterRoute = {
   departedAt: number;               // epoch ms when current leg started
   arrivalAt: number;                // epoch ms when current leg completes
   leg: 'outbound' | 'return';      // outbound = going to pickup, return = coming home loaded
+  items?: Array<{ itemId: ItemId; count: number }>;
+  itemsDelivered?: boolean;
 };
 
 export type FreighterRouteRequest = {
   username: string;
   homeStarIndex: number;
   targetStarIndex: number;
+  items?: Array<{ itemId: ItemId; count: number }>;
 };
 
 export type FreighterRouteResponse = {
@@ -354,6 +362,49 @@ export type FleetAllResponse = {
   raidRoutes: RaidRoute[];
   discoveredStars: number[];
   enhancedProbeStars: number[];  // stars discovered by enhanced probe (reveals owner)
+};
+
+export type GlobalStatusResponse = {
+  generatedAt: number;
+  inventory: PlayerInventory;
+  airPurifierQuest?: AirPurifierQuest | null;
+  airPurifierOrder?: AirPurifierTradeOrder | null;
+  stars: Array<{
+    starIndex: number;
+    ships: StarShipsState;
+    activeBuilds: Array<{ type: 'building' | 'ship'; buildType?: BuildType; shipTypeId?: ShipTypeId; completeAt: number }>;
+  }>;
+  transits: ShipTransit[];
+  freighterRoutes: FreighterRoute[];
+  raidRoutes: RaidRoute[];
+};
+
+export type AdminInventoryInspectionResponse = {
+  players: Array<{
+    username: string;
+    displayName: string;
+    inventory: PlayerInventory;
+  }>;
+  itemLocations: Array<{
+    owner: string;
+    itemId: ItemId;
+    itemName: string;
+    starIndex: number;
+    starName: string;
+    bodyIndex: number;
+    bodyName: string;
+    explored: boolean;
+    status: 'available' | 'searched' | 'held';
+  }>;
+  planets: Array<{
+    owner: string;
+    starIndex: number;
+    starName: string;
+    bodyIndex: number;
+    bodyName: string;
+    artifactCandidate: boolean;
+    explored: boolean;
+  }>;
 };
 
 export type FleetTransferRequest = {
@@ -408,8 +459,9 @@ export type AdminPlayerSummary = {
   interactions: number;
   lastSeen: number;
   totalBuildingLevels: number;
+  exploredPlanets: number;
   totalShips: number;
-  shipBreakdown: Array<{ name: string; count: number }>;
+  shipBreakdown: Array<{ typeId: ShipTypeId; name: string; count: number }>;
 };
 
 export type AdminPlayerStatsResponse = {
@@ -602,6 +654,28 @@ export type AllianceChatSendRequest = {
   text: string;
 };
 
+export type AllianceItemOffer = {
+  offerId: string;
+  fromUser: string;
+  toUser: string;
+  itemId: ItemId;
+  count: number;
+  createdAt: number;
+  expiresAt: number;
+  status: 'offered' | 'accepted' | 'declined' | 'expired';
+};
+
+export type AllianceItemOfferCreateRequest = {
+  username: string;
+  target: string;
+  itemId: ItemId;
+  count: number;
+};
+
+export type AllianceItemOfferResponse = {
+  offers: AllianceItemOffer[];
+};
+
 // ── Leaderboard ─────────────────────────────────────────────────────────────
 
 export type LeaderboardEntry = {
@@ -609,7 +683,9 @@ export type LeaderboardEntry = {
   username: string;
   starCount: number;
   totalShips: number;
+  weightedShipValue: number;
   totalBuildingLevels: number;
+  exploredPlanets: number;
   playtimeSeconds: number;
   power: number; // composite score
 };

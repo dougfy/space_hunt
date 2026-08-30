@@ -63,6 +63,21 @@ let animFrame: number | null = null;
 let lastTime = 0;
 let poseTimer = 0;
 let _savedDock: GameState['dock'] = null; // preserved across temporary galaxy jumps
+let _savedTierPos: GameState['ship']['pos'] | null = null; // ship pos before a temporary galaxy jump
+
+/** Star closest to a galaxy-tier position, or -1 when no stars exist. */
+function findNearestStarIndex(pos: GameState['ship']['pos']): number {
+  if (!gameState) return -1;
+  let bestIdx = -1;
+  let bestDist = Infinity;
+  for (const star of gameState.galaxy.stars) {
+    const dx = star.pos.x - pos.x;
+    const dy = star.pos.y - pos.y;
+    const d = dx * dx + dy * dy;
+    if (d < bestDist) { bestDist = d; bestIdx = star.index; }
+  }
+  return bestIdx;
+}
 let devvitCb: DevvitCallbacks | null = null;
 
 const POSE_INTERVAL = 1; // 1Hz pose reporting (1 request/sec)
@@ -647,7 +662,9 @@ function update(dt: number): void {
     if (dockAction) {
       console.log('[TAP] dock action:', dockAction, 'pos:', inputState.pointerPos);
       inputState.pointerDown = false;
-      if (dockAction === 'leave') {
+      if (dockAction === 'repair_air') {
+        console.log('[DOCK] Air purifier repair requested');
+      } else if (dockAction === 'leave') {
         console.log('[DOCK] Undocking from', gameState.dock.targetName);
         if (gameState.dock.targetType === 'planet') {
           playSound('leaving_orbit');
@@ -684,6 +701,7 @@ function update(dt: number): void {
   if (isFleetPanelOpen() && gameState.galaxy.tier !== NavigationTier.Galaxy) {
     setGalaxyJumpReturnTier(gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet');
     _savedDock = gameState.dock;
+    _savedTierPos = { ...gameState.ship.pos };
     gameState.galaxy.tier = NavigationTier.Galaxy;
     gameState.ship.vel = { x: 0, y: 0 };
     gameState.ship.thrust = false;
@@ -699,6 +717,7 @@ function update(dt: number): void {
       const fleetAction = togglePlanetPanel(idx);
       if (fleetAction === 'fleet-opened' && gameState.galaxy.tier !== NavigationTier.Galaxy) {
         _savedDock = gameState.dock;
+        _savedTierPos = { ...gameState.ship.pos };
         const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet';
         setGalaxyJumpReturnTier(returnTier);
         gameState.galaxy.tier = NavigationTier.Galaxy;
@@ -745,6 +764,7 @@ function update(dt: number): void {
   if (isInTransferMode() && gameState.galaxy.tier === NavigationTier.Galaxy && inputState.pointerDown && inputState.pointerPos) {
     const px = inputState.pointerPos.x;
     const py = inputState.pointerPos.y;
+    console.log('[GALAXY] transfer pointer', { x: Math.round(px), y: Math.round(py), dragging: inputState.isDragging });
     if (hitTestTransferCancel(px, py)) {
       cancelTransferMode();
       inputState.pointerDown = false;
@@ -753,8 +773,8 @@ function update(dt: number): void {
       if (targetStar >= 0) {
         console.log('[GALAXY] selecting transfer target', targetStar);
         completeTransferSelection(targetStar);
-        inputState.pointerDown = false;
       }
+      inputState.pointerDown = false;
     }
   }
 
@@ -767,6 +787,7 @@ function update(dt: number): void {
       // Fleet tab opened from non-galaxy tier → jump to galaxy map (scouts cannot use fleet)
       if (fleetAction === 'fleet-opened' && gameState.galaxy.tier !== NavigationTier.Galaxy) {
         _savedDock = gameState.dock; // preserve dock across temporary galaxy jump
+        _savedTierPos = { ...gameState.ship.pos };
         const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet';
         setGalaxyJumpReturnTier(returnTier);
         gameState.galaxy.tier = NavigationTier.Galaxy;
@@ -806,6 +827,13 @@ function update(dt: number): void {
     gameState.galaxy.tier = revertTier === 'system' ? NavigationTier.System : revertTier === 'local' ? NavigationTier.Local : NavigationTier.Planet;
     gameState.ship.vel = { x: 0, y: 0 };
     gameState.ship.thrust = false;
+    gameState.tgtActive = false; // a target picked on the galaxy map is meaningless in local coords
+    // Restore the pre-jump position: galaxy-tier movement leaves the ship in
+    // coordinates that make no sense once we drop back to the local tier.
+    if (_savedTierPos) {
+      gameState.ship.pos = _savedTierPos;
+      _savedTierPos = null;
+    }
     // Restore dock state saved before temporary galaxy jump
     if (_savedDock) {
       gameState.dock = _savedDock;
@@ -833,9 +861,11 @@ function update(dt: number): void {
   if (gameState.galaxy.tier === NavigationTier.Galaxy && inputState.pointerDown && inputState.pointerPos) {
     if (hitTestGalaxyExitBtn(inputState.pointerPos.x, inputState.pointerPos.y)) {
       // Unconditional exit — works even when no return-tier breadcrumb survives
+      // Leaving a system clears currentStarIndex, so falling back to the home
+      // star would teleport a ship that is mid-flight elsewhere in the galaxy.
       const starIdx = gameState.galaxy.currentStarIndex >= 0
         ? gameState.galaxy.currentStarIndex
-        : gameState.galaxy.homeStarIndex;
+        : findNearestStarIndex(gameState.ship.pos);
       const star = gameState.galaxy.stars[starIdx];
       if (star) {
         gameState.galaxy.currentStarIndex = starIdx;
@@ -847,6 +877,7 @@ function update(dt: number): void {
         gameState.ship.thrust = false;
         gameState.dock = null;
         _savedDock = null;
+        _savedTierPos = null;
         setGalaxyMode('nav');
         cancelTransferMode();
       }
@@ -862,6 +893,7 @@ function update(dt: number): void {
       && inputState.pointerDown && inputState.pointerPos) {
     const px = inputState.pointerPos.x;
     const py = inputState.pointerPos.y;
+    console.log('[GALAXY] navigation pointer', { x: Math.round(px), y: Math.round(py), dragging: inputState.isDragging, selected: getSelectedStarIndex() });
 
     // Check dismiss button first
     if (getSelectedStarIndex() >= 0 && hitTestStarInfoDismiss(px, py)) {
@@ -896,10 +928,15 @@ function update(dt: number): void {
       } else if (getSelectedStarIndex() >= 0) {
         // Tapped empty space — deselect
         deselectGalaxyStar();
-        // In fleet mode consume click; in nav mode let processInput handle ship movement
-        if (getGalaxyMode() === 'fleet') inputState.pointerDown = false;
+        // Galaxy map taps are UI interactions. Never let a missed star hit fall
+        // through to ship movement and unexpectedly enter Solar/System view.
+        inputState.pointerDown = false;
       } else if (getGalaxyMode() === 'fleet') {
         // Fleet mode: consume all taps (no ship movement)
+        inputState.pointerDown = false;
+      }
+      if (getGalaxyMode() === 'nav' && inputState.pointerDown) {
+        console.log('[GALAXY] navigation tap consumed without star selection');
         inputState.pointerDown = false;
       }
     }
@@ -1414,8 +1451,6 @@ function render(): void {
       shipRenderSize,
     );
     drawPlayerLabel(renderer, camera, gameState.ship.pos, gameState.playerName);
-
-    drawTierHUD(renderer, 'SYSTEM', '');
 
     drawControlButtons(renderer, false, false, _debugBounds);
 

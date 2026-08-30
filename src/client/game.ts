@@ -7,10 +7,11 @@ console.log(`[STARTUP] game.ts module executing, t=${(performance.now() - ((glob
 import { context, requestExpandedMode } from '@devvit/web/client';
 import { telemetry } from '@devvit/analytics/client/reddit';
 import versionJson from '../../version.json';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, startJourney, isJourneyDone, startCoach, restoreCoach, isCoachSkipped, getCoachStep, coachAdvance, isCoachActive, startShipsTopic, startComsTopic, startColonizationTopic, colonizationTopicAction, getColonizationTopicStep, getColonizationTopicTarget, openComsPanelForTutorial, getFontScaleName, setFontScaleByName, setTextAuditEnabled, getOverflowReport, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingSeedBots, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getTestState, confirmSkinPicker, getSoundHistory, showBuildError, setBuildCooldown } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, isJourneyDone, startCoach, restoreCoach, isCoachSkipped, getCoachStep, coachAdvance, isCoachActive, startShipsTopic, startComsTopic, startColonizationTopic, colonizationTopicAction, getColonizationTopicStep, getColonizationTopicTarget, openComsPanelForTutorial, getFontScaleName, setFontScaleByName, setTextAuditEnabled, getOverflowReport, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, setAllianceItemOffers, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, consumePendingAirPurifierRepair, setSpecialInventory, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getReturningReportItems, getTestState, confirmSkinPicker, getSoundHistory, showBuildError, setBuildCooldown } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
+import { generateSystem } from '../game/galaxy';
 
 type CoachUiBridge = typeof globalThis & { __helpPanelOpen?: boolean };
 import { initSkins, getActiveSkinId, setActiveSkin, getWireframePref, setWireframePref } from '../game/skin';
@@ -28,6 +29,7 @@ import type {
   DMListResponse,
   DMUnreadResponse,
   FleetAllResponse,
+  GlobalStatusResponse,
   PlayerProfileResponse,
   PoseUpdateRequest,
   PostShotsRequest,
@@ -41,8 +43,11 @@ import type {
   AllianceInfoResponse,
   AllianceInvitesResponse,
   AllianceChatResponse,
+  AllianceItemOfferResponse,
 } from '../shared/api';
 import { isTradingStation } from '../shared/trading';
+import { initSplashLeaderboard } from './splash-leaderboard';
+import { consumePendingPurifierAction, setPurifierOrder } from '../game/renderer';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) throw new Error('Canvas #game-canvas not found');
@@ -74,6 +79,7 @@ void loadRealStarNames();
 const overlay = document.getElementById('overlay') ?? document.createElement('div');
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const isInline = !!(globalThis as any).__INLINE_MODE__ || overlay.classList.contains('visible');
+const _returningFromIdle = location.hash === '#idle';
 
 // View mode: detect mobile/portrait vs desktop
 function detectViewMode(): { isMobile: boolean; isPortrait: boolean; screenW: number; screenH: number } {
@@ -126,10 +132,14 @@ const _t0 = performance.now();
 const username = context.username ?? 'pilot';
 const postId = context.postId ?? 'standalone:dev';
 let hasTraded = false;
+let _lastPurifierCondition: string | null = null;
 // Expose Reddit username for test automation (display name may differ)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).__REDDIT_USERNAME__ = username;
 console.log(`[PERF] context resolved in ${(performance.now() - _t0).toFixed(0)}ms`);
+
+// Direct entry (play.html) reaches game.ts before a deferred loader.
+initSplashLeaderboard();
 
 // Set version in settings panel (Vite replaces __APP_VERSION__ in JS modules)
 declare const __APP_VERSION__: string;
@@ -413,8 +423,10 @@ function loadPlayerProfile(): Promise<void> {
       }
       // New players get the coach marks; the legacy idle hints are for players who
       // have already seen the tutorial and have stalled without doing anything.
-      if (profile.journeyDone || profile.lastPosition) {
-        startJourney();
+      const hasCompletedTutorial = profile.journeyDone || profile.lastPosition
+        || profile.coachStep === 'done';
+      if (hasCompletedTutorial) {
+        skipJourney();
         journeyStart(); // always start a telemetry journey so progress events have a journeyId
         journeyProgress(0.01, 'returned_player');
       } else {
@@ -601,6 +613,10 @@ function pollComsLoop() {
         void pollAllianceInvites();
         _lastAllianceInviteFetchMs = now;
       }
+      if (now - _lastAllianceOfferFetchMs > ALLIANCE_OFFER_INTERVAL) {
+        void pollAllianceItemOffers();
+        _lastAllianceOfferFetchMs = now;
+      }
       const view = getAllianceView();
       if (view === 'chat' && now - _lastAllianceChatFetchMs > ALLIANCE_CHAT_INTERVAL) {
         void pollAllianceChat();
@@ -608,9 +624,6 @@ function pollComsLoop() {
       }
     } else if (tab === 'board') {
       // BOARD tab — rate-limited leaderboard fetch
-      if (consumePendingSeedBots()) {
-        void seedBots();
-      }
       if (now - _lastLeaderboardFetchMs > LEADERBOARD_POLL_INTERVAL) {
         void pollLeaderboard();
         _lastLeaderboardFetchMs = now;
@@ -752,7 +765,8 @@ async function explorePlanet(starIndex: number, bodyIndex: number, isStation: bo
       } else if (kind === 'blueprint') {
         playSound('scan_blueprint');
       } else if (kind === 'artifact') {
-        playSound('scan_artifact');
+        const exploreItem = (data.result as { itemId?: string }).itemId;
+        if (exploreItem === 'air_purifier_unit') { playSound('purifier_unit_recovered'); } else { playSound('scan_artifact'); }
       } else if (kind === 'anomaly') {
         playSound('scan_anomaly');
         // Play buff activation sound after anomaly sound
@@ -786,29 +800,26 @@ async function explorePlanet(starIndex: number, bodyIndex: number, isStation: bo
 let _lastAllianceFetchMs = 0;
 let _lastAllianceChatFetchMs = 0;
 let _lastAllianceInviteFetchMs = 0;
+let _lastAllianceOfferFetchMs = 0;
 const ALLIANCE_INFO_INTERVAL = 15_000;   // 15s
 const ALLIANCE_CHAT_INTERVAL = 5_000;    // 5s
 const ALLIANCE_INVITE_INTERVAL = 30_000; // 30s
+const ALLIANCE_OFFER_INTERVAL = 10_000; // 10s
 
 let _lastLeaderboardFetchMs = 0;
 const LEADERBOARD_POLL_INTERVAL = 30_000; // 30s
 
 async function pollLeaderboard() {
   try {
-    const res = await fetch('/api/leaderboard');
+    const res = await fetch(`/api/leaderboard?postId=${encodeURIComponent(postId)}`);
     if (res.ok) {
       const data = await res.json() as import('../shared/api').LeaderboardResponse;
+      console.log(`[LEADERBOARD] received ${data.players.length} players`);
       setLeaderboardData(data.players);
+    } else {
+      console.warn('[LEADERBOARD] fetch failed:', res.status);
     }
-  } catch (_e) { /* ignore */ }
-}
-
-async function seedBots() {
-  try {
-    await fetch('/api/bots/seed-bots', { method: 'POST' });
-    // Re-poll leaderboard after seeding
-    await pollLeaderboard();
-  } catch (_e) { /* ignore */ }
+  } catch (e) { console.warn('[LEADERBOARD] fetch error:', e); }
 }
 
 async function pollAllianceInfo() {
@@ -904,6 +915,24 @@ async function pollAllianceInvites() {
   } catch (_e) { /* ignore */ }
 }
 
+async function pollAllianceItemOffers() {
+  try {
+    const res = await fetch(`/api/alliance/item-offers?username=${encodeURIComponent(username)}`);
+    if (res.ok) setAllianceItemOffers((await res.json() as AllianceItemOfferResponse).offers);
+  } catch (_e) { /* ignore */ }
+}
+
+async function respondToItemOffer(offerId: string, accept: boolean) {
+  try {
+    await fetch('/api/alliance/item-offers/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, offerId, accept }),
+    });
+    void pollAllianceItemOffers();
+  } catch (_e) { /* ignore */ }
+}
+
 async function createAlliance(name: string) {
   try {
     await fetch('/api/alliance/create', {
@@ -996,6 +1025,12 @@ function processAllianceActions() {
     case 'chat':
       if (action.text) void sendAllianceChat(action.text);
       break;
+    case 'accept_item':
+      if (action.offerId) void respondToItemOffer(action.offerId, true);
+      break;
+    case 'decline_item':
+      if (action.offerId) void respondToItemOffer(action.offerId, false);
+      break;
   }
 }
 
@@ -1042,6 +1077,27 @@ function processBotCopy() {
 }
 
 let _pollEconomyRunning = false;
+let _lastPolledStarIndex: number | null = null;
+
+/**
+ * Buildings/station only render once a server economy snapshot exists for the
+ * star. Waiting for the 5s poll leaves a freshly-visited system looking empty,
+ * so fire an immediate poll as soon as the current star changes.
+ */
+function checkStarChanged() {
+  const gs = getGameState();
+  if (!gs) return;
+  const starIndex = gs.galaxy.currentStarIndex;
+  if (starIndex === _lastPolledStarIndex) return;
+  // A poll is already in flight for the previous star — retry next tick rather
+  // than marking this star polled without actually fetching it.
+  if (_pollEconomyRunning) return;
+  _lastPolledStarIndex = starIndex;
+  if (starIndex >= 0) {
+    console.log(`[ECON] star changed -> ${starIndex}, forcing immediate economy poll`);
+    void pollEconomy();
+  }
+}
 
 function advanceColonizationTopicFromState(fleetData?: FleetAllResponse): void {
   const step = getColonizationTopicStep();
@@ -1320,6 +1376,50 @@ async function pollEconomy() {
       }
     }
 
+    const pendingPurifierAction = consumePendingPurifierAction();
+    if (pendingPurifierAction) {
+      try {
+        let response: Response;
+        if (pendingPurifierAction === 'start_purifier') {
+          response = await fetch('/api/quest/air-purifier/order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, postId, stationStarIndex: starIndex }),
+          });
+        } else {
+          const orderRes = await fetch(`/api/quest/air-purifier/order?username=${encodeURIComponent(username)}`);
+          const orderData = await orderRes.json() as { order?: { paid: Record<string, number>; required: Record<string, number> } };
+          const order = orderData.order;
+          if (!order) throw new Error('No open purifier order');
+          const payment = {
+            ore: (order.required.ore ?? 0) - (order.paid.ore ?? 0),
+            food: (order.required.food ?? 0) - (order.paid.food ?? 0),
+            energy: (order.required.energy ?? 0) - (order.paid.energy ?? 0),
+            fuel: (order.required.fuel ?? 0) - (order.paid.fuel ?? 0),
+          };
+          response = await fetch('/api/quest/air-purifier/order/pay', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, postId, paymentStarIndex: starIndex, payment }),
+          });
+        }
+        if (!response.ok) throw new Error('purifier order request failed');
+        const data = await response.json() as { order: Parameters<typeof setPurifierOrder>[0] };
+        setPurifierOrder(data.order);
+        if (data.order?.status === 'complete') {
+          playSound('purifier_order_funded');
+          setTimeout(() => playSound('purifier_unit_received'), 1500);
+        } else if (pendingPurifierAction === 'start_purifier') {
+          playSound('purifier_order_opened');
+        } else {
+          playSound('purifier_payment_accepted');
+        }
+      } catch (error) {
+        console.warn('[TRADE] purifier order failed:', error);
+        playSound('purifier_order_failed');
+      }
+    }
+
     // Process colonize request
     const pendingColonize = consumePendingColonizeRequest();
     if (pendingColonize) {
@@ -1401,6 +1501,24 @@ async function pollEconomy() {
         }
       } catch (_e) { /* ignore */ }
     }
+    const pendingRepair = consumePendingAirPurifierRepair();
+    if (pendingRepair) {
+      try {
+        const repairRes = await fetch('/api/quest/air-purifier/repair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, postId, starIndex: pendingRepair.starIndex }),
+        });
+        if (!repairRes.ok) throw new Error('repair failed');
+        void fetch(`/api/inventory?username=${encodeURIComponent(username)}`)
+          .then((inventoryRes) => inventoryRes.ok ? inventoryRes.json() as Promise<{ inventory: Record<string, number> }> : null)
+          .then((inventoryData) => { if (inventoryData) setSpecialInventory(inventoryData.inventory); })
+          .catch(() => {});
+        playSound('purifier_restored');
+      } catch (_e) {
+        playSound(_lastPurifierCondition ? 'purifier_repair_unavailable' : 'purifier_no_incident');
+      }
+    }
     const pendingRefuel = consumePendingRefuel();
     if (pendingRefuel) {
       void fetch('/api/refuel', {
@@ -1449,9 +1567,6 @@ async function pollEconomy() {
         if (shipRes.ok) {
           console.log('[SHIPS] buy success');
           if (pendingShip.shipTypeId === 11) colonizationTopicAction('probe_built');
-          if (pendingShip.shipTypeId === 8) {
-            startColonizationTopic(false, 'colony_building');
-          }
           playSound('begin_building_ship');
           journeyAction('buy_ship');
           journeyProgress(0.20, 'first_ship_built');
@@ -1540,7 +1655,25 @@ async function pollEconomy() {
       buildings: data.buildings,
       completeCharges: data.completeCharges ?? 0,
       ...(data.richness ? { richness: data.richness } : {}),
+      ...(data.starCondition ? { starCondition: data.starCondition } : {}),
+      ...(data.capacityPercent != null ? { capacityPercent: data.capacityPercent } : {}),
     }, econUsername === username);
+    if (econUsername === username && data.starCondition && data.starCondition !== 'normal') {
+      if (data.starCondition !== _lastPurifierCondition) {
+        if (data.starCondition === 'critical_failure') playSound('purifier_critical');
+        else if (data.starCondition === 'reduced_capacity' && !_lastPurifierCondition) playSound('purifier_warning');
+        else if (data.starCondition === 'reduced_capacity') playSound('purifier_capacity_reduced');
+        _lastPurifierCondition = data.starCondition;
+      }
+    } else if (econUsername === username && (!data.starCondition || data.starCondition === 'normal')) {
+      _lastPurifierCondition = null;
+    }
+    if (econUsername === username) {
+      void fetch(`/api/inventory?username=${encodeURIComponent(username)}`)
+        .then((inventoryRes) => inventoryRes.ok ? inventoryRes.json() as Promise<{ inventory: Record<string, number> }> : null)
+        .then((inventoryData) => { if (inventoryData) setSpecialInventory(inventoryData.inventory); })
+        .catch(() => {});
+    }
     // Track economy for journey progress calculation
     if (econUsername === username && data.buildings) {
       _lastEconomyData.set(data.starIndex, { buildings: data.buildings as Record<string, { level?: number }> });
@@ -1616,9 +1749,15 @@ async function pollEconomy() {
           const tradeData = await tradeRes.json() as TradeStationInfoResponse;
           setTradeStationInfo(tradeData);
         }
+        const orderRes = await fetch(`/api/quest/air-purifier/order?username=${encodeURIComponent(username)}`);
+        if (orderRes.ok) {
+          const orderData = await orderRes.json() as { order: Parameters<typeof setPurifierOrder>[0] };
+          setPurifierOrder(orderData.order);
+        }
       } catch (_e) { /* ignore */ }
     } else {
       setTradeStationInfo(null);
+      setPurifierOrder(null);
     }
   } catch (_e) {
     // Ignore temporary network errors.
@@ -1793,31 +1932,59 @@ function journeyAction(action?: string) {
 }
 
 // ── Idle timeout: return to splash after 30 minutes of no interaction ──────
+// Tracked as a wall-clock deadline rather than one long setTimeout: background
+// tabs throttle/freeze timers and a sleeping machine skips them entirely.
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
-let _idleTimer: ReturnType<typeof setTimeout> | null = null;
+const IDLE_CHECK_INTERVAL_MS = 1000;
+const _idleTimeoutMs = IDLE_TIMEOUT_MS;
+let _lastActivityMs = Date.now();
+let _idleFired = false;
+let _idleWatch: ReturnType<typeof setInterval> | null = null;
 let _isPlaying = false; // set true once startMultiplayer runs
 
-function resetIdleTimer() {
-  if (!_isPlaying) return;
-  if (_idleTimer) clearTimeout(_idleTimer);
-  _idleTimer = setTimeout(() => {
-    console.log('[IDLE] 30 min idle — returning to splash');
-    savePositionIfChanged();
-    journeyProgress(0, 'idle_timeout');
-    void telemetry.endJourney({ complete: false, game: { win: false, score: 0 } })
-      .then(() => console.log('[TELEMETRY] journey ended — idle timeout'))
-      .catch(() => {})
-      .finally(() => {
-        location.hash = 'idle';
-        location.reload();
-      });
-  }, IDLE_TIMEOUT_MS);
+function triggerIdleTimeout() {
+  if (_idleFired) return;
+  _idleFired = true;
+  if (_idleWatch) clearInterval(_idleWatch);
+  console.log(`[IDLE] ${Math.round(_idleTimeoutMs / 1000)}s idle — returning to splash`);
+  savePositionIfChanged();
+  journeyProgress(0, 'idle_timeout');
+  void telemetry.endJourney({ complete: false, game: { win: false, score: 0 } })
+    .then(() => console.log('[TELEMETRY] journey ended — idle timeout'))
+    .catch(() => {})
+    .finally(() => {
+      location.hash = 'idle';
+      location.reload();
+    });
 }
-window.addEventListener('pointerdown', resetIdleTimer, { passive: true });
-window.addEventListener('keydown', resetIdleTimer, { passive: true });
-window.addEventListener('pointermove', resetIdleTimer, { passive: true });
-window.addEventListener('wheel', resetIdleTimer, { passive: true });
-window.addEventListener('touchstart', resetIdleTimer, { passive: true });
+
+function markActivity() {
+  if (!_isPlaying) return;
+  _lastActivityMs = Date.now();
+}
+
+function checkIdle() {
+  if (!_isPlaying || _idleFired) return;
+  const idleFor = Date.now() - _lastActivityMs;
+  if (idleFor >= _idleTimeoutMs) triggerIdleTimeout();
+}
+
+function startIdleWatch() {
+  _lastActivityMs = Date.now();
+  if (_idleWatch) clearInterval(_idleWatch);
+  _idleWatch = setInterval(checkIdle, IDLE_CHECK_INTERVAL_MS);
+  console.log(`[IDLE] watch started — ${Math.round(_idleTimeoutMs / 1000)}s timeout`);
+}
+
+window.addEventListener('pointerdown', markActivity, { passive: true });
+window.addEventListener('keydown', markActivity, { passive: true });
+window.addEventListener('pointermove', markActivity, { passive: true });
+window.addEventListener('wheel', markActivity, { passive: true });
+window.addEventListener('touchstart', markActivity, { passive: true });
+// A tab returning to the foreground may have blown past the deadline while frozen.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) checkIdle();
+});
 
 function sendStatsHeartbeat() {
   const now = Date.now();
@@ -1842,11 +2009,12 @@ function startMultiplayer() {
   bridge.beginPlay(); // Activate networking callbacks on existing game
   console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — beginPlay done, game is READY`);
   _isPlaying = true;
-  resetIdleTimer(); // start the 30-min idle countdown
+  startIdleWatch(); // start the 30-min idle countdown
   journeyAppReady();
   ghostPollInterval = setInterval(pollGhosts, 1000);
   shotPollInterval = setInterval(pollShots, 1000);
   economyPollInterval = setInterval(pollEconomy, 5000);
+  setInterval(checkStarChanged, 250); // detect star arrival between economy polls
   _savePositionInterval = setInterval(savePositionIfChanged, 5000);
   setInterval(sendStatsHeartbeat, STATS_HEARTBEAT_MS);
   setInterval(pollComsLoop, 2000); // fast detection, rate-limited fetches
@@ -1979,8 +2147,20 @@ function startMultiplayer() {
     .catch(() => {});
 }
 
+// Returning from an idle timeout must not drop the player straight back into the
+// game — expanded mode otherwise auto-starts and the logout looks like a no-op.
+if (!isInline && _returningFromIdle) {
+  console.log('[IDLE] returned from idle timeout — waiting for player to rejoin');
+  const idleMsg = document.getElementById('idle-msg');
+  if (idleMsg) idleMsg.style.display = 'block';
+  overlay.classList.add('visible');
+  const ls = document.getElementById('loading-screen');
+  if (ls) ls.style.display = 'none';
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
 // In expanded mode, start immediately. In inline mode, wait for button press.
-if (!isInline) {
+if (!isInline && !_returningFromIdle) {
   console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — expanded mode, starting profile load`);
   // Show loading screen for expanded mode (user already committed to play)
   const ls = document.getElementById('loading-screen');
@@ -2403,11 +2583,204 @@ const adminResultsPanel = document.getElementById('admin-results-panel');
 const adminResultsTitle = document.getElementById('admin-results-title');
 const adminResultsContent = document.getElementById('admin-results-content');
 
+function openGlobalStatusPreview(): void {
+  const existing = document.getElementById('global-status-preview');
+  if (existing) {
+    existing.remove();
+    return;
+  }
+
+  const style = document.createElement('style');
+  style.id = 'global-status-preview-style';
+  style.textContent = `
+    #global-status-preview { position:fixed; inset:0; z-index:210; display:flex; align-items:center; justify-content:center; padding:16px; box-sizing:border-box; background:rgba(0,5,3,.82); font-family:monospace; color:#8ff7cf; }
+    .gsp-shell { width:min(760px,100%); max-height:calc(100vh - 32px); overflow:auto; background:rgba(3,16,12,.98); border:1px solid #4fffb0; box-shadow:0 0 28px rgba(79,255,176,.18); }
+    .gsp-head { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 11px; border-bottom:1px solid rgba(79,255,176,.35); }
+    .gsp-title { color:#4fffb0; font-size:15px; font-weight:bold; letter-spacing:1px; }
+    .gsp-subtitle { color:#5a9e86; font-size:10px; margin-top:4px; }
+    .gsp-close { background:transparent; border:1px solid #5a9e86; color:#8ff7cf; font:inherit; font-size:16px; line-height:20px; width:28px; height:28px; cursor:pointer; }
+    .gsp-close:hover { border-color:#4fffb0; color:#4fffb0; }
+    .gsp-summary { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding:12px 16px; }
+    .gsp-metric { border:1px solid rgba(79,255,176,.25); padding:8px 10px; }
+    .gsp-metric b { display:block; color:#4fffb0; font-size:16px; }
+    .gsp-metric span { color:#6ab89a; font-size:9px; }
+    .gsp-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:0 16px 16px; }
+    .gsp-section { min-width:0; }
+    .gsp-section h3 { color:#ffcc66; font-size:10px; letter-spacing:1px; border-bottom:1px solid rgba(255,204,102,.35); padding:8px 0 6px; margin:0; }
+    .gsp-row { display:grid; grid-template-columns:24px minmax(0,1fr) auto; gap:7px; align-items:center; padding:8px 0; border-bottom:1px solid rgba(79,255,176,.12); font-size:10px; }
+    .gsp-row strong { color:#4fffb0; font-size:10px; }
+    .gsp-row small { display:block; color:#6ab89a; font-size:9px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .gsp-value { color:#ffcc66; text-align:right; white-space:nowrap; }
+    .gsp-event { display:grid; grid-template-columns:42px minmax(0,1fr); gap:7px; padding:8px 0; border-bottom:1px solid rgba(79,255,176,.12); font-size:9px; }
+    .gsp-event em { color:#ffcc66; font-style:normal; }
+    .gsp-repair { margin-top:6px; padding:4px 7px; background:rgba(20,80,60,.7); border:1px solid #4fffb0; color:#4fffb0; font:bold 9px monospace; cursor:pointer; }
+    .gsp-repair:disabled { opacity:.6; cursor:wait; }
+    .gsp-foot { color:#527d6c; font-size:9px; padding:0 16px 14px; }
+    @media (max-width:600px) { #global-status-preview { padding:8px; align-items:flex-start; } .gsp-shell { max-height:calc(100vh - 16px); } .gsp-grid { grid-template-columns:1fr; gap:4px; } .gsp-summary { padding:10px; } .gsp-grid, .gsp-head { padding-left:10px; padding-right:10px; } .gsp-foot { padding-left:10px; padding-right:10px; } }
+  `;
+  document.head.appendChild(style);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'global-status-preview';
+  overlay.innerHTML = `
+    <div class="gsp-shell" role="dialog" aria-label="Global status preview">
+      <header class="gsp-head">
+        <div><div class="gsp-title">GLOBAL STATUS</div><div class="gsp-subtitle">LIVE ADMIN DATA</div></div>
+        <button class="gsp-close" type="button" aria-label="Close preview">X</button>
+      </header>
+      <div class="gsp-summary">
+        <div class="gsp-metric"><b>3</b><span>OWNED STARS</span></div>
+        <div class="gsp-metric"><b>18</b><span>SHIPS DEPLOYED</span></div>
+        <div class="gsp-metric"><b>4</b><span>RECENT EVENTS</span></div>
+      </div>
+      <div class="gsp-grid">
+        <section class="gsp-section"><h3>OWNED STARS</h3>
+          <div class="gsp-row"><span>★</span><div><strong>Jemra</strong><small>8 ships / 2 active builds</small></div><span class="gsp-value">HOME</span></div>
+          <div class="gsp-row"><span>★</span><div><strong>Valcordia</strong><small>5 ships / 1 active build</small></div><span class="gsp-value">CLAIMED</span></div>
+          <div class="gsp-row"><span>★</span><div><strong>Nereid</strong><small>5 ships / ready</small></div><span class="gsp-value">CLAIMED</span></div>
+        </section>
+        <section class="gsp-section"><h3>FLEET IN TRANSIT</h3>
+          <div class="gsp-row"><span>→</span><div><strong>Colony Ship</strong><small>Jemra → Nereid</small></div><span class="gsp-value">02:14</span></div>
+          <div class="gsp-row"><span>→</span><div><strong>Scout</strong><small>Nereid → Kessara</small></div><span class="gsp-value">00:38</span></div>
+          <div class="gsp-row"><span>↩</span><div><strong>Freighter</strong><small>Valcordia → Jemra</small></div><span class="gsp-value">RETURNING</span></div>
+        </section>
+        <section class="gsp-section"><h3>UNDER CONSTRUCTION</h3>
+          <div class="gsp-row"><span>◆</span><div><strong>Solar Array LV5</strong><small>Jemra</small></div><span class="gsp-value">01:42</span></div>
+          <div class="gsp-row"><span>◆</span><div><strong>Station LV3</strong><small>Valcordia</small></div><span class="gsp-value">06:20</span></div>
+          <div class="gsp-row"><span>◆</span><div><strong>Destroyer</strong><small>Nereid / shipyard</small></div><span class="gsp-value">03:11</span></div>
+        </section>
+        <section class="gsp-section"><h3>RECENT EVENTS</h3>
+          <div class="gsp-event"><em>BUILD</em><span>Solar Array LV4 completed at Jemra</span></div>
+          <div class="gsp-event"><em>FLEET</em><span>Scout arrived at Kessara</span></div>
+          <div class="gsp-event"><em>BUILD</em><span>Destroyer construction started</span></div>
+          <div class="gsp-event"><em>COLONY</em><span>Nereid colony established</span></div>
+        </section>
+        <section class="gsp-section"><h3>INVENTORY</h3>
+          <div class="gsp-event"><em>ITEM</em><span>Loading inventory...</span></div>
+        </section>
+        <section class="gsp-section"><h3>ACTIVE INCIDENT</h3>
+          <div class="gsp-event"><em>INFO</em><span>Checking daily events...</span></div>
+        </section>
+      </div>
+      <div class="gsp-foot">Preview only. Values are synthetic and do not reflect your fleet.</div>
+    </div>`;
+  document.body.appendChild(overlay);
+  let refreshTimer: ReturnType<typeof setInterval> | null = null;
+  let requestGeneration = 0;
+  const nameForStar = (index: number): string => getGameState()?.galaxy.stars[index]?.name ?? `STAR ${index}`;
+  const shipNames: Record<number, string> = { 1: 'Scout', 2: 'Freighter', 3: 'Destroyer', 4: 'Frigate', 5: 'Battleship', 6: 'Command Cruiser', 7: 'Dreadnought', 8: 'Colony Ship', 10: 'Troop Transport', 11: 'Basic Probe', 12: 'Enhanced Probe', 14: 'Wrecker', 15: 'Raider' };
+  const countdown = (at: number): string => {
+    const seconds = Math.max(0, Math.ceil((at - Date.now()) / 1000));
+    return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
+  };
+  const sections = overlay.querySelectorAll<HTMLElement>('.gsp-section');
+  for (const section of sections) section.innerHTML = '<h3>LOADING</h3><div class="gsp-event"><em>WAIT</em><span>Collecting current fleet and construction data...</span></div>';
+
+  const loadStatus = async (): Promise<void> => {
+    const generation = ++requestGeneration;
+    try {
+      const response = await fetch(`/api/admin/global-status?username=${encodeURIComponent(username)}&postId=${encodeURIComponent(postId)}`);
+      if (!response.ok) throw new Error(`status request failed (${response.status})`);
+      const data = await response.json() as GlobalStatusResponse;
+      if (generation !== requestGeneration || !document.body.contains(overlay)) return;
+      const totalShips = data.stars.reduce((sum, star) => sum + star.ships.reduce((starSum, ship) => starSum + ship.count, 0), 0);
+      const activeBuilds = data.stars.flatMap((star) => star.activeBuilds.map((build) => ({ ...build, starIndex: star.starIndex })));
+      const report = getReturningReportItems();
+      const homeStarIndex = getGameState()?.galaxy.homeStarIndex ?? data.stars[data.stars.length - 1]?.starIndex;
+      const starRows = data.stars.map((star) => `<div class="gsp-row"><span>${star.starIndex === homeStarIndex ? '⌂' : '★'}</span><div><strong>${nameForStar(star.starIndex)}</strong><small>${star.ships.reduce((sum, ship) => sum + ship.count, 0)} ships / ${star.activeBuilds.length} active builds</small></div><span class="gsp-value">${star.starIndex === homeStarIndex ? 'HOME' : 'CLAIMED'}</span></div>`).join('');
+      const transitRows = [...data.transits.map((transit) => `<div class="gsp-row"><span>→</span><div><strong>${shipNames[transit.shipTypeId] ?? 'Ship'} x${transit.count}</strong><small>${nameForStar(transit.fromStarIndex)} → ${nameForStar(transit.toStarIndex)}</small></div><span class="gsp-value">${countdown(transit.arrivalAt)}</span></div>`), ...data.freighterRoutes.map((route) => `<div class="gsp-row"><span>↩</span><div><strong>Freighter</strong><small>${nameForStar(route.targetStarIndex)} → ${nameForStar(route.homeStarIndex)}${route.items?.length ? `<br>${route.items.map((item) => `${item.itemId} x${item.count}`).join(', ')}` : ''}</small></div><span class="gsp-value">${route.leg.toUpperCase()}</span></div>`), ...data.raidRoutes.map((route) => `<div class="gsp-row"><span>!</span><div><strong>Raider</strong><small>${nameForStar(route.homeStarIndex)} → ${nameForStar(route.targetStarIndex)}</small></div><span class="gsp-value">${countdown(route.arrivalAt)}</span></div>`)];
+      const buildRows = activeBuilds.map((build) => `<div class="gsp-row"><span>◆</span><div><strong>${build.type === 'ship' ? shipNames[build.shipTypeId ?? 0] ?? 'Ship' : `${(build.buildType ?? 'building').toUpperCase()} BUILD`}</strong><small>${nameForStar(build.starIndex)}</small></div><span class="gsp-value">${countdown(build.completeAt)}</span></div>`).join('');
+      const eventRows = report.length > 0 ? report.map((item) => `<div class="gsp-event"><em>${item.category.toUpperCase()}</em><span>${item.text}</span></div>`).join('') : '<div class="gsp-event"><em>INFO</em><span>No new events while away</span></div>';
+      const metricValues = overlay.querySelectorAll<HTMLElement>('.gsp-metric b');
+      if (metricValues[0]) metricValues[0].textContent = String(data.stars.length);
+      if (metricValues[1]) metricValues[1].textContent = String(totalShips);
+      if (metricValues[2]) metricValues[2].textContent = String(report.length);
+      if (sections[0]) sections[0].innerHTML = '<h3>OWNED STARS</h3>' + (starRows || '<div class="gsp-event"><em>INFO</em><span>No owned stars found</span></div>');
+      if (sections[1]) sections[1].innerHTML = '<h3>FLEET IN TRANSIT</h3>' + (transitRows.join('') || '<div class="gsp-event"><em>INFO</em><span>No ships in transit</span></div>');
+      if (sections[2]) sections[2].innerHTML = '<h3>UNDER CONSTRUCTION</h3>' + (buildRows || '<div class="gsp-event"><em>INFO</em><span>No active construction</span></div>');
+      if (sections[3]) sections[3].innerHTML = '<h3>RECENT EVENTS</h3>' + eventRows;
+      const itemNames: Record<string, string> = {
+        luminari_artifact: 'Luminari Artifact',
+        air_purifier_unit: 'Air Purifier Unit',
+        air_purifier_repair_kit: 'Air Purifier Repair Kit',
+      };
+      const inventoryRows = Object.entries(data.inventory)
+        .filter(([, count]) => count > 0)
+        .map(([itemId, count]) => `<div class="gsp-event"><em>ITEM</em><span>${itemNames[itemId] ?? itemId} x${count}</span></div>`)
+        .join('');
+      if (sections[4]) sections[4].innerHTML = '<h3>INVENTORY</h3>' + (inventoryRows || '<div class="gsp-event"><em>INFO</em><span>No special inventory items held</span></div>');
+      const quest = data.airPurifierQuest;
+      const questSourceStar = quest ? getGameState()?.galaxy.stars[quest.sourceStarIndex] : undefined;
+      const questSourcePlanet = quest && questSourceStar
+        ? generateSystem(questSourceStar, postId).find((body) => body.index === quest.sourceBodyIndex)?.name
+        : undefined;
+      const questAffectedStar = quest ? getGameState()?.galaxy.stars[quest.starIndex] : undefined;
+      const questAffectedPlanet = quest && questAffectedStar
+        ? generateSystem(questAffectedStar, postId).find((body) => body.index === quest.affectedBodyIndex)?.name
+        : undefined;
+      const order = data.airPurifierOrder;
+      const orderSummary = order?.status === 'open'
+        ? `<br>Trade order: O ${order.paid.ore}/${order.required.ore} F ${order.paid.food}/${order.required.food} E ${order.paid.energy}/${order.required.energy} Fu ${order.paid.fuel}/${order.required.fuel}`
+        : order?.status === 'complete' ? '<br>Trade order complete: replacement unit ready' : '';
+      const incidentRows = quest && quest.state === 'active'
+        ? `<div class="gsp-event"><em>WARN</em><span>Air purifier failure at ${nameForStar(quest.starIndex)} / ${questAffectedPlanet ?? `Planet ${quest.affectedBodyIndex + 1}`}<br>Capacity ${quest.capacityPercent}% / deadline ${countdown(quest.deadlineAt)}<br>Replacement target: ${nameForStar(quest.sourceStarIndex)} / ${questSourcePlanet ?? `Planet ${quest.sourceBodyIndex + 1}`}${orderSummary}${data.inventory.air_purifier_unit ? `<br><button type="button" class="gsp-repair">REPAIR WITH UNIT</button>` : ''}</span></div>`
+        : quest && quest.state === 'failed'
+          ? `<div class="gsp-event"><em>LOST</em><span>Starbase services lost at ${nameForStar(quest.starIndex)} / ${questAffectedPlanet ?? `Planet ${quest.affectedBodyIndex + 1}`}</span></div>`
+          : '<div class="gsp-event"><em>OK</em><span>No active incidents</span></div>';
+      if (sections[5]) sections[5].innerHTML = '<h3>ACTIVE INCIDENT</h3>' + incidentRows;
+      sections[5]?.querySelector<HTMLButtonElement>('.gsp-repair')?.addEventListener('click', async () => {
+        const repairButton = sections[5]?.querySelector<HTMLButtonElement>('.gsp-repair');
+        if (!repairButton) return;
+        repairButton.disabled = true;
+        repairButton.textContent = 'REPAIRING...';
+        try {
+          const response = await fetch('/api/quest/air-purifier/repair', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, postId, starIndex: quest?.starIndex }),
+          });
+          if (!response.ok) throw new Error('repair failed');
+          await loadStatus();
+        } catch {
+          repairButton.disabled = false;
+          repairButton.textContent = 'REPAIR FAILED';
+        }
+      });
+      const foot = overlay.querySelector<HTMLElement>('.gsp-foot');
+      if (foot) foot.textContent = 'Live admin data. Report items are the current returning-player report.';
+    } catch (error) {
+      if (generation !== requestGeneration || !document.body.contains(overlay)) return;
+      console.warn('[GLOBAL STATUS] live data unavailable:', error);
+      for (const section of sections) section.innerHTML = '<h3>STATUS UNAVAILABLE</h3><div class="gsp-event"><em>ERROR</em><span>Could not load current data. Retrying automatically...</span></div>';
+    }
+  };
+  void loadStatus();
+  refreshTimer = setInterval(() => { void loadStatus(); }, 10_000);
+  overlay.querySelector<HTMLButtonElement>('.gsp-close')?.addEventListener('click', () => {
+    requestGeneration++;
+    if (refreshTimer) clearInterval(refreshTimer);
+    overlay.remove();
+    document.getElementById('global-status-preview-style')?.remove();
+  });
+}
+
+// Canvas STATUS tab callback. The button is only drawn for an authorized admin.
+(globalThis as unknown as { __openGlobalStatus?: () => void }).__openGlobalStatus = openGlobalStatusPreview;
+
 console.log('[ADMIN] elements:', !!adminBtn, !!adminPanel, !!adminStatus, 'username=', username);
 if (adminBtn && adminPanel && ADMIN_USERS.some(u => u.toLowerCase() === username.toLowerCase())) {
   adminBtn.style.display = 'inline-flex';
   setIsAdmin(true);
-  startCoach(true); // admin always sees the coach marks (review mode)
+  const adminGrid = adminPanel.querySelector('.admin-grid');
+  if (adminGrid && !document.getElementById('admin-global-status-preview')) {
+    const previewBtn = document.createElement('button');
+    previewBtn.id = 'admin-global-status-preview';
+    previewBtn.className = 'admin-btn';
+    previewBtn.textContent = 'Preview Global Status';
+    previewBtn.style.cssText = 'background:rgba(20,60,80,0.6);border-color:#66ccff;color:#66ccff';
+    previewBtn.addEventListener('click', openGlobalStatusPreview);
+    adminGrid.appendChild(previewBtn);
+  }
   console.log('[ADMIN] button shown');
 }
 
@@ -2578,6 +2951,41 @@ document.getElementById('admin-copy-stats')!.addEventListener('click', async () 
     }).join('');
     adminOutput(`Player Stats (${players.length})`, text, html);
   } catch (_e) { adminStatus.textContent = 'error loading stats'; }
+});
+
+document.getElementById('admin-inventory-all')?.addEventListener('click', async () => {
+  adminStatus.textContent = 'loading global inventory...';
+  try {
+    const res = await fetch(`/api/admin/inventory/all?postId=${encodeURIComponent(postId)}`);
+    const data = await res.json() as { players?: Array<{ username: string; displayName: string; inventory: Record<string, number> }>; itemLocations?: Array<{ owner: string; itemId: string; itemName: string; starIndex: number; starName: string; bodyIndex: number; bodyName: string; explored: boolean; status: string }>; message?: string };
+    if (!res.ok) throw new Error(data.message ?? `request failed (${res.status})`);
+    const itemLabels: Record<string, string> = {
+      luminari_artifact: 'Luminari Artifact',
+      air_purifier_unit: 'Air Purifier Unit',
+      air_purifier_repair_kit: 'Air Purifier Repair Kit',
+    };
+    const holders = (data.players ?? []).flatMap((player) => Object.entries(player.inventory)
+      .filter(([, count]) => count > 0)
+      .map(([itemId, count]) => ({ ...player, itemId, count })));
+    const itemLocations = data.itemLocations ?? [];
+    const lines = [
+      'SPECIAL INVENTORY HOLDERS',
+      ...(holders.length > 0 ? holders.map((holder) => `${holder.displayName} (${holder.username}) | ${itemLabels[holder.itemId] ?? holder.itemId} x${holder.count}`) : ['none']),
+      '',
+      'SPECIAL ITEM LOCATIONS',
+      ...(itemLocations.length > 0 ? itemLocations.map((item) => `${item.owner} | ${item.itemName} | ${item.starName} / ${item.bodyName} (#${item.bodyIndex}) | ${item.status.toUpperCase()}`) : ['none assigned']),
+    ];
+    const html = [
+      '<div class="admin-result-row"><b>SPECIAL INVENTORY HOLDERS</b></div>',
+      ...(holders.length > 0 ? holders.map((holder) => `<div class="admin-result-row"><b>${holder.displayName}</b> <span style="color:#777">(${holder.username})</span><br/>${itemLabels[holder.itemId] ?? holder.itemId} x${holder.count}</div>`) : ['<div class="admin-result-row">none</div>']),
+      '<div class="admin-result-row"><b>SPECIAL ITEM LOCATIONS</b></div>',
+      ...(itemLocations.length > 0 ? itemLocations.map((item) => `<div class="admin-result-row"><b>${item.itemName}</b> for ${item.owner}<br/>${item.starName} / ${item.bodyName} (#${item.bodyIndex}) · ${item.status.toUpperCase()}</div>`) : ['<div class="admin-result-row">none assigned</div>']),
+    ].join('');
+    if (adminPanelMode) adminPanelMode.checked = true;
+    adminOutput(`Global Inventory (${holders.length} holders, ${itemLocations.length} locations)`, `Global Inventory (${new Date().toISOString()})\n${'─'.repeat(40)}\n${lines.join('\n')}`, html);
+  } catch (_e) {
+    adminStatus.textContent = `error loading global inventory: ${_e instanceof Error ? _e.message : String(_e)}`;
+  }
 });
 
 document.getElementById('admin-reset-claims')!.addEventListener('click', async () => {

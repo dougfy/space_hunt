@@ -56,12 +56,19 @@ import {
 } from '../../shared/buildings';
 import { SHIP_CATALOG, canBuildShip, getUpgradeTarget, canUpgradeShip } from '../../shared/ships';
 import { getStarName } from '../../shared/star-names';
+import { ITEM_CATALOG, normalizeInventory } from '../../shared/items';
+import type { ItemId, PlayerInventory } from '../../shared/items';
+import type { AirPurifierQuest, ActiveQuestResponse, AirPurifierTradeOrder } from '../../shared/quests';
+import { getAirPurifierCondition, getUtcDayKey, isActiveAirPurifierQuest } from '../../shared/quests';
+import { calculateLeaderboardPower } from '../../shared/leaderboard';
 import { isTradingStation } from '../../shared/trading';
 import { pushSensorAlert } from './sensor-alerts';
 import { filterActiveBuffs, hasActiveBuff, RESONANCE_MULTIPLIER, HYPERDRIVE_MULTIPLIER, CHRONO_MULTIPLIER } from '../../shared/buffs';
 import type { ActiveBuff } from '../../shared/buffs';
 
 const ECONOMY_FIELD = 'economy';
+const GALAXY_STAR_COUNT = 100;
+const SYSTEM_BODY_MAX = 8;
 const DEFAULT_STORE: ResourceStore = { ore: 640, food: 640, energy: 640, fuel: 0 };
 
 type StoredEconomyProfile = {
@@ -170,6 +177,220 @@ async function loadEconomyProfile(store: RedisGameStore, username: string): Prom
 
 async function saveEconomyProfile(store: RedisGameStore, username: string, economy: StoredEconomyProfile): Promise<void> {
   await store.hSet(`profile:${username}`, { [ECONOMY_FIELD]: JSON.stringify(economy) });
+}
+
+const INVENTORY_FIELD = 'inventory';
+const ACTIVE_QUEST_FIELD = 'activeQuest';
+const AIR_PURIFIER_ORDER_FIELD = 'airPurifierOrder';
+
+function parseInventory(raw: string | undefined): PlayerInventory {
+  if (!raw) return {};
+  try {
+    return normalizeInventory(JSON.parse(raw) as PlayerInventory);
+  } catch {
+    return {};
+  }
+}
+
+export async function getInventory(store: RedisGameStore, username: string): Promise<PlayerInventory> {
+  return parseInventory(await store.hGet(`profile:${username}`, INVENTORY_FIELD));
+}
+
+export async function grantItem(store: RedisGameStore, username: string, itemId: ItemId, count = 1): Promise<PlayerInventory> {
+  if (!Number.isInteger(count) || count <= 0) throw new Error('Item count must be a positive integer');
+  const inventory = await getInventory(store, username);
+  inventory[itemId] = (inventory[itemId] ?? 0) + count;
+  await store.hSet(`profile:${username}`, { [INVENTORY_FIELD]: JSON.stringify(inventory) });
+  return inventory;
+}
+
+export async function consumeItem(store: RedisGameStore, username: string, itemId: ItemId, count = 1): Promise<PlayerInventory> {
+  if (!Number.isInteger(count) || count <= 0) throw new Error('Item count must be a positive integer');
+  const inventory = await getInventory(store, username);
+  if ((inventory[itemId] ?? 0) < count) throw new Error(`Not enough ${itemId}`);
+  const remaining = (inventory[itemId] ?? 0) - count;
+  if (remaining > 0) inventory[itemId] = remaining;
+  else delete inventory[itemId];
+  await store.hSet(`profile:${username}`, { [INVENTORY_FIELD]: JSON.stringify(inventory) });
+  return inventory;
+}
+
+function parseAirPurifierQuest(raw: string | undefined): AirPurifierQuest | null {
+  if (!raw) return null;
+  try {
+    const quest = JSON.parse(raw) as AirPurifierQuest;
+    if (!quest || quest.eventId == null || !Number.isInteger(quest.starIndex) || !Number.isFinite(quest.deadlineAt)) return null;
+    return quest;
+  } catch {
+    return null;
+  }
+}
+
+/** Start at most one air-purifier incident per player and UTC day. */
+export async function ensureAirPurifierQuest(
+  store: RedisGameStore,
+  postId: string,
+  username: string,
+  now = Date.now(),
+): Promise<AirPurifierQuest | null> {
+  const profileKey = `profile:${username}`;
+  const economy = await loadEconomyProfile(store, username);
+  const claims = await getClaimedStars(store, postId);
+  const owned = claims.filter((claim) => claim.username.toLowerCase() === username.toLowerCase());
+  if (owned.length < 2) return null;
+
+  const existing = parseAirPurifierQuest(await store.hGet(profileKey, ACTIVE_QUEST_FIELD));
+  if (existing) {
+    if (isActiveAirPurifierQuest(existing)) {
+      const progression = getAirPurifierCondition(existing, now);
+      if (progression.condition === 'lost') {
+        const failed = { ...existing, state: 'failed' as const, condition: 'lost' as const, capacityPercent: 0 };
+        await store.hSet(profileKey, { [ACTIVE_QUEST_FIELD]: JSON.stringify(failed) });
+        return failed;
+      }
+      return { ...existing, ...progression };
+    }
+    return existing;
+  }
+
+  const dayKey = getUtcDayKey(now);
+  const dailyKey = `daily:${postId}:${dayKey}:air-purifier:${username.toLowerCase()}`;
+  const generated = await store.get(dailyKey);
+  if (generated) return parseAirPurifierQuest(generated);
+
+  const homeStar = economy.homeStar ?? owned[0]!.starIndex;
+  const affected = owned.filter((claim) => claim.starIndex !== homeStar).at(-1) ?? owned[0]!;
+  const galaxyStars = generateStarPositions(postId);
+  const candidates = galaxyStars
+    .map((star) => star.index)
+    .filter((index) => index !== affected.starIndex && !owned.some((claim) => claim.starIndex === index));
+  const sourceStarIndex = candidates.length > 0
+    ? candidates[(dayKey.length + username.length + affected.starIndex) % candidates.length]!
+    : affected.starIndex;
+  const startedAt = now;
+  const quest: AirPurifierQuest = {
+    eventId: `air-purifier:${dayKey}:${affected.starIndex}`,
+    dayKey,
+    starIndex: affected.starIndex,
+    affectedBodyIndex: affected.bodyIndex ?? 0,
+    sourceStarIndex,
+    sourceBodyIndex: 0,
+    startedAt,
+    deadlineAt: startedAt + 24 * 60 * 60 * 1000,
+    state: 'active',
+    condition: 'reduced_capacity',
+    capacityPercent: 75,
+  };
+  await store.set(dailyKey, JSON.stringify(quest));
+  await store.hSet(profileKey, { [ACTIVE_QUEST_FIELD]: JSON.stringify(quest) });
+  console.log(`[QUEST] air purifier started user=${username} star=${quest.starIndex} deadline=${quest.deadlineAt}`);
+  return quest;
+}
+
+export async function getActiveQuest(
+  store: RedisGameStore,
+  postId: string,
+  username: string,
+  now = Date.now(),
+): Promise<ActiveQuestResponse> {
+  return { airPurifier: await ensureAirPurifierQuest(store, postId, username, now) };
+}
+
+export async function repairAirPurifierQuest(
+  store: RedisGameStore,
+  postId: string,
+  username: string,
+  starIndex: number,
+  now = Date.now(),
+): Promise<AirPurifierQuest> {
+  const quest = await ensureAirPurifierQuest(store, postId, username, now);
+  if (!quest || quest.state !== 'active') throw new Error('No active air-purifier incident');
+  if (quest.starIndex !== starIndex) throw new Error('Repair must be performed at the affected starbase');
+  if (now >= quest.deadlineAt) throw new Error('The starbase failure deadline has passed');
+  await consumeItem(store, username, 'air_purifier_unit');
+  const repaired: AirPurifierQuest = {
+    ...quest,
+    state: 'resolved',
+    condition: 'normal',
+    capacityPercent: 100,
+    repairMethod: 'found_unit',
+    resolvedAt: now,
+  };
+  await store.hSet(`profile:${username}`, { [ACTIVE_QUEST_FIELD]: JSON.stringify(repaired) });
+  return repaired;
+}
+
+const AIR_PURIFIER_ORDER_COST: ResourceStore = { ore: 2400, food: 1800, energy: 2200, fuel: 600 };
+
+export async function getAirPurifierOrder(store: RedisGameStore, username: string): Promise<AirPurifierTradeOrder | null> {
+  const raw = await store.hGet(`profile:${username}`, AIR_PURIFIER_ORDER_FIELD);
+  if (!raw) return null;
+  try { return JSON.parse(raw) as AirPurifierTradeOrder; } catch { return null; }
+}
+
+export async function createAirPurifierOrder(
+  store: RedisGameStore,
+  postId: string,
+  username: string,
+  stationStarIndex: number,
+  now = Date.now(),
+): Promise<AirPurifierTradeOrder> {
+  const quest = await ensureAirPurifierQuest(store, postId, username, now);
+  if (!quest || quest.state !== 'active') throw new Error('No active air-purifier incident');
+  const existing = await getAirPurifierOrder(store, username);
+  if (existing?.status === 'open') return existing;
+  if (!isTradingStation(postId, stationStarIndex)) throw new Error('Not a trading station');
+  const order: AirPurifierTradeOrder = {
+    orderId: `purifier_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    itemId: 'air_purifier_unit',
+    stationStarIndex,
+    targetStarIndex: quest.starIndex,
+    required: { ...AIR_PURIFIER_ORDER_COST },
+    paid: { ore: 0, food: 0, energy: 0, fuel: 0 },
+    status: 'open',
+    createdAt: now,
+  };
+  await store.hSet(`profile:${username}`, { [AIR_PURIFIER_ORDER_FIELD]: JSON.stringify(order) });
+  return order;
+}
+
+export async function payAirPurifierOrder(
+  store: RedisGameStore,
+  postId: string,
+  username: string,
+  paymentStarIndex: number,
+  payment: ResourceStore,
+  now = Date.now(),
+): Promise<AirPurifierTradeOrder> {
+  const order = await getAirPurifierOrder(store, username);
+  if (!order || order.status !== 'open') throw new Error('No open air-purifier order');
+  const quest = await ensureAirPurifierQuest(store, postId, username, now);
+  if (!quest || quest.state !== 'active' || quest.starIndex !== order.targetStarIndex) throw new Error('Air-purifier incident is no longer active');
+  const claims = await getClaimedStars(store, postId);
+  if (!claims.some((claim) => claim.username.toLowerCase() === username.toLowerCase() && claim.starIndex === paymentStarIndex)) throw new Error('Payment star is not owned by this player');
+  for (const resource of ['ore', 'food', 'energy', 'fuel'] as const) {
+    if (!Number.isInteger(payment[resource]) || payment[resource] < 0) throw new Error('Payment amounts must be non-negative integers');
+    const remaining = order.required[resource] - order.paid[resource];
+    if (payment[resource] > remaining) throw new Error(`Payment exceeds remaining ${resource} requirement`);
+  }
+  const economy = await loadEconomyProfile(store, username);
+  const key = starKey(paymentStarIndex);
+  const rich = starRichness(paymentStarIndex, economy);
+  const base = normalizeStarState(economy.stars[key] ?? {}, now, rich);
+  const current = tickStarEconomy(base, now);
+  if (!hasEnoughResources(current.store, payment)) throw new Error('Insufficient resources for purifier order');
+  current.store = subtractResources(current.store, payment);
+  economy.stars[key] = current;
+  await saveEconomyProfile(store, username, economy);
+  const updated: AirPurifierTradeOrder = { ...order, paid: { ore: order.paid.ore + payment.ore, food: order.paid.food + payment.food, energy: order.paid.energy + payment.energy, fuel: order.paid.fuel + payment.fuel } };
+  const complete = (['ore', 'food', 'energy', 'fuel'] as const).every((resource) => updated.paid[resource] >= updated.required[resource]);
+  if (complete) {
+    await grantItem(store, username, 'air_purifier_unit');
+    updated.status = 'complete';
+    updated.completedAt = now;
+  }
+  await store.hSet(`profile:${username}`, { [AIR_PURIFIER_ORDER_FIELD]: JSON.stringify(updated) });
+  return updated;
 }
 
 export type RedisGameStore = {
@@ -517,11 +738,27 @@ export async function loadStarEconomy(
   const activeBuffs = filterActiveBuffs(buffs, now);
   const rateMult = hasActiveBuff(activeBuffs, 'resonance', now) ? RESONANCE_MULTIPLIER : 1;
 
-  const ticked = tickStarEconomy(reconciledBase, now, rateMult);
+  const activeQuest = parseAirPurifierQuest(await store.hGet(`profile:${username}`, ACTIVE_QUEST_FIELD));
+  const questCondition = activeQuest && activeQuest.starIndex === starIndex
+    ? getAirPurifierCondition(activeQuest, now)
+    : { condition: 'normal' as const, capacityPercent: 100 };
+  const capacityMultiplier = questCondition.capacityPercent / 100;
+  const conditionedBase: StarEconomyState = {
+    ...reconciledBase,
+    cap: Math.max(1, Math.floor(reconciledBase.cap * capacityMultiplier)),
+    rates: {
+      ore: reconciledBase.rates.ore * capacityMultiplier,
+      food: reconciledBase.rates.food * capacityMultiplier,
+      energy: reconciledBase.rates.energy * capacityMultiplier,
+      fuel: reconciledBase.rates.fuel * capacityMultiplier,
+    },
+  };
+  conditionedBase.store = clampStore(conditionedBase.store, conditionedBase.cap);
+  const conditioned = tickStarEconomy(conditionedBase, now, rateMult);
   // Only persist economy data if the player already had data at this star (owns it).
   // Prevents phantom economy entries when visiting foreign stars.
   if (hadExistingData) {
-    economy.stars[key] = ticked;
+    economy.stars[key] = conditioned;
     await saveEconomyProfile(store, username, economy);
   }
 
@@ -532,7 +769,7 @@ export async function loadStarEconomy(
   // Stamp preferredSkinId onto ALL buildings in response (response only, not persisted).
   // This ensures all buildings display with the user's current skin preference,
   // even if they were originally built with a different skin.
-  const responseBuildings = { ...ticked.buildings } as Record<BuildType, typeof ticked.buildings[BuildType]>;
+  const responseBuildings = { ...conditioned.buildings } as Record<BuildType, typeof conditioned.buildings[BuildType]>;
   const fallbackSkin = economy.preferredSkinId ?? 'raster';
   for (const bt of Object.keys(responseBuildings) as BuildType[]) {
     const b = responseBuildings[bt];
@@ -544,17 +781,19 @@ export async function loadStarEconomy(
   return {
     starKey: key,
     starIndex,
-    store: ticked.store,
-    rates: ticked.rates,
-    cap: ticked.cap,
+    store: conditioned.store,
+    rates: conditioned.rates,
+    cap: conditioned.cap,
     buildings: responseBuildings,
-    shieldRaised: ticked.shieldRaised,
-    defenseScore: computeDefenseScore(ticked.buildings, ticked.shieldRaised),
-    lastTickMs: ticked.lastTickMs,
+    shieldRaised: conditioned.shieldRaised,
+    defenseScore: computeDefenseScore(conditioned.buildings, conditioned.shieldRaised),
+    lastTickMs: conditioned.lastTickMs,
     completeCharges: charges,
     richness: rich,
     ...(activeBuffs.length > 0 ? { buffs: activeBuffs } : {}),
     ...(economy.preferredSkinId ? { preferredSkinId: economy.preferredSkinId } : {}),
+    starCondition: questCondition.condition,
+    capacityPercent: questCondition.capacityPercent,
   };
 }
 
@@ -1130,10 +1369,20 @@ export async function loadAllFleet(
           economy.stars[hKey] = ticked;
           await saveEconomyProfile(store, username, economy);
 
+          if (route.items && !route.itemsDelivered) {
+            const inventory = await getInventory(store, username);
+            for (const item of route.items) {
+              inventory[item.itemId] = (inventory[item.itemId] ?? 0) + item.count;
+            }
+            await store.hSet(`profile:${username}`, { [INVENTORY_FIELD]: JSON.stringify(inventory) });
+            route.itemsDelivered = true;
+          }
+
           // Start next outbound leg (empty cargo)
           const speed = SHIP_CATALOG[2].speed;
           const transitMs = Math.round((BASE_TRANSIT_SECONDS / speed) * 1000);
           route.cargo = { ore: 0, food: 0, energy: 0, fuel: 0 };
+          route.items = undefined;
           route.leg = 'outbound';
           route.departedAt = now;
           route.arrivalAt = now + transitMs;
@@ -1306,12 +1555,29 @@ export async function assignFreighterRoute(
   username: string,
   homeStarIndex: number,
   targetStarIndex: number,
+  items: Array<{ itemId: ItemId; count: number }> = [],
   now = Date.now(),
 ): Promise<FreighterRouteResponse> {
   if (homeStarIndex === targetStarIndex) throw new Error('Cannot route to same star');
 
   const raw = await store.hGet(`profile:${username}`, SHIPS_FIELD);
   const profile = parseShipsProfile(raw);
+
+  const requestedItems = new Map<ItemId, number>();
+  for (const item of items) {
+    if (!ITEM_CATALOG[item.itemId]) throw new Error(`Unknown item: ${item.itemId}`);
+    if (!Number.isInteger(item.count) || item.count < 1) throw new Error('Item count must be a positive integer');
+    requestedItems.set(item.itemId, (requestedItems.get(item.itemId) ?? 0) + item.count);
+  }
+  if (requestedItems.size > 0) {
+    const inventory = await getInventory(store, username);
+    for (const [itemId, count] of requestedItems) {
+      if ((inventory[itemId] ?? 0) < count) throw new Error(`Not enough ${itemId} for freight`);
+      inventory[itemId] = (inventory[itemId] ?? 0) - count;
+      if (inventory[itemId] === 0) delete inventory[itemId];
+    }
+    await store.hSet(`profile:${username}`, { [INVENTORY_FIELD]: JSON.stringify(inventory) });
+  }
 
   const homeKey = starKey(homeStarIndex);
   const homeData = normalizeStarShipData(profile.stars[homeKey]);
@@ -1339,6 +1605,7 @@ export async function assignFreighterRoute(
     departedAt: now,
     arrivalAt: now + transitMs,
     leg: 'outbound',
+    ...(requestedItems.size > 0 ? { items: [...requestedItems].map(([itemId, count]) => ({ itemId, count })) } : {}),
   };
 
   profile.stars[homeKey] = homeData;
@@ -1374,6 +1641,13 @@ export async function cancelFreighterRoute(
     slot.count += 1;
   } else {
     homeData.ships.push({ typeId: FREIGHTER_TYPE_ID, count: 1 });
+  }
+
+  // Return any reserved item cargo if the route is cancelled before delivery.
+  if (route.items && !route.itemsDelivered) {
+    const inventory = await getInventory(store, username);
+    for (const item of route.items) inventory[item.itemId] = (inventory[item.itemId] ?? 0) + item.count;
+    await store.hSet(`profile:${username}`, { [INVENTORY_FIELD]: JSON.stringify(inventory) });
   }
 
   // If the freighter was returning with cargo, deliver it to home star
@@ -2028,6 +2302,27 @@ export async function getAdminPlayerStats(
   for (const claim of claims) {
     const profileRaw = await store.hGetAll(`profile:${claim.username}`);
     const stats = parseStats(profileRaw[STATS_FIELD]);
+    const exploredPlanetsValue = Number(profileRaw.exploredPlanets);
+    let exploredPlanets = Number.isFinite(exploredPlanetsValue) ? exploredPlanetsValue : 0;
+    if (profileRaw.exploredPlanetsBackfilled !== '1') {
+      const explorationKeys: Array<[string, string]> = [];
+      for (let starIndex = 0; starIndex < GALAXY_STAR_COUNT; starIndex++) {
+        for (let bodyIndex = 0; bodyIndex < SYSTEM_BODY_MAX; bodyIndex++) {
+          explorationKeys.push([
+            `explored:${claim.username}:${starIndex}:${bodyIndex}:p`,
+            `explored:${claim.username}:${starIndex}:${bodyIndex}`,
+          ]);
+        }
+      }
+      const explored = await Promise.all(explorationKeys.map(async ([planetKey, legacyKey]) => (
+        (await store.get(planetKey)) ?? (await store.get(legacyKey))
+      )));
+      exploredPlanets = Math.max(exploredPlanets, explored.filter(Boolean).length);
+      await store.hSet(`profile:${claim.username}`, {
+        exploredPlanets: String(exploredPlanets),
+        exploredPlanetsBackfilled: '1',
+      });
+    }
 
     // Economy: sum building levels across all stars (reconcile to count completed upgrades)
     const economy = parseEconomy(profileRaw[ECONOMY_FIELD]);
@@ -2060,6 +2355,7 @@ export async function getAdminPlayerStats(
 
     const shipBreakdown = Object.entries(shipCounts)
       .map(([tid, count]) => ({
+        typeId: Number(tid) as ShipTypeId,
         name: SHIP_CATALOG[Number(tid) as ShipTypeId]?.name ?? `Type ${tid}`,
         count,
       }))
@@ -2074,6 +2370,7 @@ export async function getAdminPlayerStats(
       interactions: stats.interactions,
       lastSeen: stats.lastSeen,
       totalBuildingLevels,
+      exploredPlanets,
       totalShips,
       shipBreakdown,
     });
@@ -2290,7 +2587,26 @@ export async function buildReturningReport(
       const lastRank = lastRankRaw ? parseInt(lastRankRaw, 10) : 0;
       // Compute current rank from player stats
       const statsResponse = await getAdminPlayerStats(store, postId);
-      const sorted = statsResponse.players.sort((a, b) => b.totalBuildingLevels - a.totalBuildingLevels);
+      const claims = await getClaimedStars(store, postId);
+      const starCounts = new Map<string, number>();
+      for (const claim of claims) {
+        starCounts.set(claim.username.toLowerCase(), (starCounts.get(claim.username.toLowerCase()) ?? 0) + 1);
+      }
+      const sorted = statsResponse.players.sort((a, b) => {
+        const scoreA = calculateLeaderboardPower(
+          starCounts.get(a.username.toLowerCase()) ?? 0,
+          a.shipBreakdown.map((ship) => ({ typeId: ship.typeId, count: ship.count })),
+          a.totalBuildingLevels,
+          a.exploredPlanets,
+        );
+        const scoreB = calculateLeaderboardPower(
+          starCounts.get(b.username.toLowerCase()) ?? 0,
+          b.shipBreakdown.map((ship) => ({ typeId: ship.typeId, count: ship.count })),
+          b.totalBuildingLevels,
+          b.exploredPlanets,
+        );
+        return scoreB - scoreA;
+      });
       const currentRank = sorted.findIndex(p => p.username.toLowerCase() === username.toLowerCase()) + 1;
       if (currentRank > 0) {
         // Save current rank for next login comparison

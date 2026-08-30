@@ -38,9 +38,9 @@
   },
   "scheduler": {
     "tasks": {
-      "weekly-leaderboard": {
+      "daily-leaderboard": {
         "endpoint": "/internal/scheduler/weekly-leaderboard",
-        "cron": "0 12 * * 1"
+        "cron": "0 12 * * *"
       },
       "autobot-tick": {
         "endpoint": "/internal/scheduler/autobot-tick",

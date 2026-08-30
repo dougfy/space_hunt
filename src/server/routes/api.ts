@@ -15,6 +15,8 @@ import type {
   ColonizeResponse,
   DecrementResponse,
   FleetAllResponse,
+  GlobalStatusResponse,
+  AdminInventoryInspectionResponse,
   FleetTransferRequest,
   FleetTransferResponse,
   FreighterRouteRequest,
@@ -43,6 +45,7 @@ import type {
   ToggleShieldResponse,
   UpgradeShipRequest,
   UpgradeShipResponse,
+  ResourceStore,
 } from '../../shared/api';
 import {
   buyBuilding,
@@ -53,6 +56,14 @@ import {
   completeAllBuilds,
   getClaimedPods,
   getClaimedStars,
+  getInventory,
+  grantItem,
+  ensureAirPurifierQuest,
+  getActiveQuest,
+  repairAirPurifierQuest,
+  getAirPurifierOrder,
+  createAirPurifierOrder,
+  payAirPurifierOrder,
   getAdminPlayerStats,
   loadAllFleet,
   loadStarEconomy,
@@ -80,6 +91,8 @@ import { isTradingStation } from '../../shared/trading';
 import type { ResourceType } from '../../shared/trading';
 import { SHIP_CATALOG } from '../../shared/ships';
 import { rollDiscovery } from '../../shared/exploration';
+import { generateStarPositions } from '../../shared/galaxy-positions';
+import { getStarName } from '../../shared/star-names';
 import { popSensorAlerts } from '../core/sensor-alerts';
 import type { ExploreRequest, ExploreResponse } from '../../shared/exploration';
 import { rollBuff, filterActiveBuffs } from '../../shared/buffs';
@@ -684,6 +697,8 @@ api.get('/economy', async (c) => {
     return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
   }
 
+  if (context.postId) await ensureAirPurifierQuest(redis, context.postId, username);
+
   const response = await loadStarEconomy(redis, username, starIndex);
   return c.json<StarEconomyResponse>(response);
 });
@@ -700,6 +715,8 @@ api.get('/buildings', async (c) => {
   if (Number.isNaN(starIndex) || starIndex < 0) {
     return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
   }
+
+  if (context.postId) await ensureAirPurifierQuest(redis, context.postId, username);
 
   const response = await loadStarEconomy(redis, username, starIndex, Date.now(), skinId ?? undefined);
   return c.json<StarEconomyResponse>(response);
@@ -864,6 +881,156 @@ api.get('/fleet/all', async (c) => {
   return c.json<FleetAllResponse>(response);
 });
 
+/** Admin preview data: aggregate the player's owned-star fleet and builds. */
+api.get('/admin/global-status', requireDev, async (c) => {
+  const username = c.req.query('username');
+  const postId = c.req.query('postId') ?? context.postId;
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
+
+  const airPurifierQuest = await ensureAirPurifierQuest(redis, postId, username);
+  const airPurifierOrder = await getAirPurifierOrder(redis, username);
+
+  const [claims, fleet, inventory] = await Promise.all([
+    getClaimedStars(redis, postId),
+    loadAllFleet(redis, username),
+    getInventory(redis, username),
+  ]);
+  const owned = claims.filter((claim) => claim.username.toLowerCase() === username.toLowerCase());
+  const stars: GlobalStatusResponse['stars'] = [];
+  for (const claim of owned) {
+    const starIndex = claim.starIndex;
+    const economy = await loadStarEconomy(redis, username, starIndex);
+    const fleetStar = fleet.stars[`s:${starIndex}`];
+    const activeBuilds: GlobalStatusResponse['stars'][number]['activeBuilds'] = [];
+    for (const [buildType, building] of Object.entries(economy.buildings) as Array<[GlobalStatusResponse['stars'][number]['activeBuilds'][number]['buildType'], { status: string; completeAt: number | null }]>) {
+      if (building.status === 'UPGRADING' && building.completeAt) {
+        activeBuilds.push({ type: 'building', buildType, completeAt: building.completeAt });
+      }
+    }
+    if (fleetStar?.building) activeBuilds.push({ type: 'ship', shipTypeId: fleetStar.building.typeId, completeAt: fleetStar.building.completeAt });
+    stars.push({ starIndex, ships: fleetStar?.ships ?? [], activeBuilds });
+  }
+  return c.json<GlobalStatusResponse>({ generatedAt: Date.now(), inventory, airPurifierQuest, airPurifierOrder, stars, transits: fleet.transits, freighterRoutes: fleet.freighterRoutes, raidRoutes: fleet.raidRoutes });
+});
+
+/** Admin inventory inspection endpoint used by the quest-item preview. */
+api.get('/admin/inventory', requireDev, async (c) => {
+  const username = c.req.query('username');
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  return c.json({ inventory: await getInventory(redis, username) });
+});
+
+api.get('/inventory', async (c) => {
+  const username = c.req.query('username');
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  return c.json({ inventory: await getInventory(redis, username) });
+});
+
+/** Admin: inspect persistent items held by every claimed player. */
+api.get('/admin/inventory/all', requireDev, async (c) => {
+  const postId = c.req.query('postId');
+  if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'postId required' }, 400);
+  const claims = await getClaimedStars(redis, postId);
+  const usernames = [...new Set(claims.map((claim) => claim.username))];
+  const players: AdminInventoryInspectionResponse['players'] = [];
+  const itemLocations: AdminInventoryInspectionResponse['itemLocations'] = [];
+  const planets: AdminInventoryInspectionResponse['planets'] = [];
+  let galaxySeed = 23;
+  for (const char of `${postId}:galaxy`) galaxySeed = (galaxySeed * 31 + char.charCodeAt(0)) | 0;
+  const galaxy = generateStarPositions(postId);
+  const planetNames = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'];
+  for (const user of usernames) {
+    const [inventory, profile] = await Promise.all([getInventory(redis, user), loadProfile(redis, user)]);
+    players.push({ username: user, displayName: profile.name?.trim() || user, inventory });
+    const quest = (await getActiveQuest(redis, postId, user)).airPurifier;
+    if (quest) {
+      const sourceExplored = Boolean(await redis.get(`explored:${user}:${quest.sourceStarIndex}:${quest.sourceBodyIndex}:p`) || await redis.get(`explored:${user}:${quest.sourceStarIndex}:${quest.sourceBodyIndex}`));
+      const unitHeld = (inventory.air_purifier_unit ?? 0) > 0;
+      itemLocations.push({
+        owner: user,
+        itemId: 'air_purifier_unit',
+        itemName: 'Air Purifier Unit',
+        starIndex: quest.sourceStarIndex,
+        starName: getStarName(quest.sourceStarIndex),
+        bodyIndex: quest.sourceBodyIndex,
+        bodyName: `Planet ${['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'][quest.sourceBodyIndex] ?? quest.sourceBodyIndex + 1}`,
+        explored: sourceExplored,
+        status: unitHeld ? 'held' : sourceExplored ? 'searched' : 'available',
+      });
+    }
+    for (const claim of claims.filter((entry) => entry.username.toLowerCase() === user.toLowerCase())) {
+      const star = galaxy[claim.starIndex];
+      if (!star) continue;
+      for (let bodyIndex = 0; bodyIndex < planetNames.length; bodyIndex++) {
+        const explored = Boolean(await redis.get(`explored:${user}:${claim.starIndex}:${bodyIndex}:p`) || await redis.get(`explored:${user}:${claim.starIndex}:${bodyIndex}`));
+        planets.push({
+          owner: user,
+          starIndex: claim.starIndex,
+          starName: getStarName(claim.starIndex),
+          bodyIndex,
+          bodyName: `Planet ${planetNames[bodyIndex]}`,
+          artifactCandidate: rollDiscovery(galaxySeed >>> 0, claim.starIndex, bodyIndex).kind === 'artifact',
+          explored,
+        });
+      }
+    }
+  }
+  return c.json<AdminInventoryInspectionResponse>({ players, itemLocations, planets });
+});
+
+api.get('/quest/air-purifier', async (c) => {
+  const username = c.req.query('username');
+  const postId = c.req.query('postId') ?? context.postId;
+  if (!username || !postId) return c.json<ErrorResponse>({ status: 'error', message: 'username and postId required' }, 400);
+  return c.json(await getActiveQuest(redis, postId, username));
+});
+
+api.post('/quest/air-purifier/repair', async (c) => {
+  const body = await c.req.json<{ username: string; postId?: string; starIndex: number }>();
+  const postId = body.postId ?? context.postId;
+  if (!body.username || !postId || !Number.isInteger(body.starIndex)) {
+    return c.json<ErrorResponse>({ status: 'error', message: 'username, postId, and starIndex required' }, 400);
+  }
+  try {
+    const quest = await repairAirPurifierQuest(redis, postId, body.username, body.starIndex);
+    return c.json({ ok: true, quest });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to repair air purifier';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+api.get('/quest/air-purifier/order', async (c) => {
+  const username = c.req.query('username');
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  return c.json({ order: await getAirPurifierOrder(redis, username) });
+});
+
+api.post('/quest/air-purifier/order', async (c) => {
+  const body = await c.req.json<{ username: string; postId?: string; stationStarIndex: number }>();
+  const postId = body.postId ?? context.postId;
+  if (!body.username || !postId || !Number.isInteger(body.stationStarIndex)) return c.json<ErrorResponse>({ status: 'error', message: 'username, postId, and stationStarIndex required' }, 400);
+  try {
+    return c.json({ ok: true, order: await createAirPurifierOrder(redis, postId, body.username, body.stationStarIndex) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to create purifier order';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
+api.post('/quest/air-purifier/order/pay', async (c) => {
+  const body = await c.req.json<{ username: string; postId?: string; paymentStarIndex: number; payment: ResourceStore }>();
+  const postId = body.postId ?? context.postId;
+  if (!body.username || !postId || !Number.isInteger(body.paymentStarIndex) || !body.payment) return c.json<ErrorResponse>({ status: 'error', message: 'username, postId, paymentStarIndex, and payment required' }, 400);
+  try {
+    return c.json({ ok: true, order: await payAirPurifierOrder(redis, postId, body.username, body.paymentStarIndex, body.payment) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to fund purifier order';
+    return c.json<ErrorResponse>({ status: 'error', message }, 400);
+  }
+});
+
 /** Transfer ships between stars. */
 api.post('/fleet/transfer', async (c) => {
   const body = await c.req.json<FleetTransferRequest>();
@@ -905,7 +1072,7 @@ api.post('/fleet/freighter-route', async (c) => {
     return c.json<ErrorResponse>({ status: 'error', message: 'targetStarIndex must be >= 0' }, 400);
   }
   try {
-    const response = await assignFreighterRoute(redis, body.username, body.homeStarIndex, body.targetStarIndex);
+    const response = await assignFreighterRoute(redis, body.username, body.homeStarIndex, body.targetStarIndex, body.items);
     return c.json<FreighterRouteResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to assign freighter route';
@@ -1134,10 +1301,16 @@ api.get('/admin/active-players', requireDev, async (c) => {
 // ── Leaderboard (public) ────────────────────────────────────────────────────
 
 import { isAutoBot } from '../core/autobot';
+import { calculateLeaderboardPower, getWeightedShipValue } from '../../shared/leaderboard';
 
 api.get('/leaderboard', async (c) => {
-  const postId = context.postId;
-  if (!postId) return c.json<LeaderboardResponse>({ players: [] });
+  // Client sends postId explicitly; context is only a fallback since it can be
+  // absent on plain GETs, which would silently return an empty board.
+  const postId = c.req.query('postId') ?? context.postId;
+  if (!postId) {
+    console.warn('[LEADERBOARD] no postId (query or context) — returning empty');
+    return c.json<LeaderboardResponse>({ players: [] });
+  }
 
   const adminStats = await getAdminPlayerStats(redis, postId);
   const claims = await getClaimedStars(redis, postId);
@@ -1160,13 +1333,17 @@ api.get('/leaderboard', async (c) => {
 
   const entries: LeaderboardEntry[] = [...seen.values()].map(p => {
     const starCount = starCounts.get(p.username) ?? 0;
-    const power = starCount * 100 + p.totalShips * 10 + p.totalBuildingLevels * 25 + Math.floor(p.playtimeSeconds / 720);
+    const ships = p.shipBreakdown.map((ship) => ({ typeId: ship.typeId, count: ship.count }));
+    const weightedShipValue = getWeightedShipValue(ships);
+    const power = calculateLeaderboardPower(starCount, ships, p.totalBuildingLevels, p.exploredPlanets);
     return {
       rank: 0,
       username: p.username,
       starCount,
       totalShips: p.totalShips,
+      weightedShipValue,
       totalBuildingLevels: p.totalBuildingLevels,
+      exploredPlanets: p.exploredPlanets,
       playtimeSeconds: p.playtimeSeconds,
       power,
     };
@@ -1175,6 +1352,7 @@ api.get('/leaderboard', async (c) => {
   entries.sort((a, b) => b.power - a.power);
   entries.forEach((e, i) => { e.rank = i + 1; });
 
+  console.log(`[LEADERBOARD] postId=${postId} claims=${claims.length} players=${entries.length}`);
   return c.json<LeaderboardResponse>({ players: entries });
 });
 
@@ -1320,6 +1498,13 @@ api.post('/explore', async (c) => {
       return c.json<ExploreResponse>({ ...cached, explored: false });
     }
 
+    if (!isStation) {
+      const profileKey = `profile:${username}`;
+      const countRaw = await redis.hGet(profileKey, 'exploredPlanets');
+      const exploredPlanets = (Number.isFinite(Number(countRaw)) ? Number(countRaw) : 0) + 1;
+      await redis.hSet(profileKey, { exploredPlanets: String(exploredPlanets) });
+    }
+
     // Check scan cooldown — after a successful find, player must wait before next scan yields results
     const SCAN_COOLDOWN_MS = 60_000; // 60 seconds between meaningful finds
     const cooldownKey = `scan_cooldown:${username.toLowerCase()}`;
@@ -1351,7 +1536,18 @@ api.post('/explore', async (c) => {
     }
 
     // Roll discovery (deterministic per planet; stations exclude ore)
-    const result = rollDiscovery(galaxySeed, starIndex, bodyIndex, !!body.isStation);
+    let result = rollDiscovery(galaxySeed, starIndex, bodyIndex, !!body.isStation);
+    const purifier = (await getActiveQuest(redis, postId, username)).airPurifier;
+    if (!body.isStation && purifier?.state === 'active' && purifier.sourceStarIndex === starIndex && purifier.sourceBodyIndex === bodyIndex) {
+      result = {
+        kind: 'artifact',
+        amount: 1,
+        label: 'Air purifier replacement unit recovered',
+        icon: 'unit',
+        itemId: 'air_purifier_unit',
+        itemCount: 1,
+      };
+    }
 
     // Grant resources to the star the player is exploring
     if (result.kind === 'ore' || result.kind === 'food' || result.kind === 'energy' || result.kind === 'fuel') {
@@ -1371,6 +1567,11 @@ api.post('/explore', async (c) => {
       const chargeKey = `complete_charges:${username.toLowerCase()}`;
       await redis.incrBy(chargeKey, 1);
       console.log(`[EXPLORE] user=${username} found blueprint — granted 1 complete charge`);
+    }
+
+    if (result.itemId && result.itemCount) {
+      await grantItem(redis, username, result.itemId, result.itemCount);
+      console.log(`[EXPLORE] user=${username} found item=${result.itemId} count=${result.itemCount}`);
     }
 
     // Grant a random buff for anomaly finds

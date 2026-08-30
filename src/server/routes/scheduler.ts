@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { redis, reddit } from '@devvit/web/server';
-import { getAdminPlayerStats, getClaimedStars } from '../core/game-service';
+import { getAdminPlayerStats, getClaimedStars, loadProfile } from '../core/game-service';
 import { tickAutoBot, isAutoBot } from '../core/autobot';
+import { calculateLeaderboardPower, getWeightedShipValue } from '../../shared/leaderboard';
 
 export const schedulerRoutes = new Hono();
 
@@ -17,10 +18,10 @@ async function getActivePostId(): Promise<string | undefined> {
   return (await redis.get(ACTIVE_POST_KEY)) ?? undefined;
 }
 
-// ── Weekly Leaderboard ──────────────────────────────────────────────────────
+// ── Daily Leaderboard ───────────────────────────────────────────────────────
 
 schedulerRoutes.post('/weekly-leaderboard', async (c) => {
-  console.log('[SCHEDULER] weekly-leaderboard triggered');
+  console.log('[SCHEDULER] daily-leaderboard triggered');
 
   const postId = await getActivePostId();
   if (!postId) {
@@ -50,8 +51,9 @@ schedulerRoutes.post('/weekly-leaderboard', async (c) => {
     // Compute power scores and sort
     const entries = [...seen.values()].map(p => {
       const starCount = starCounts.get(p.username) ?? 0;
-      const power = starCount * 100 + p.totalShips * 10 + p.totalBuildingLevels * 25 + Math.floor(p.playtimeSeconds / 720);
-      return { username: p.username, starCount, totalShips: p.totalShips, power };
+      const ships = p.shipBreakdown.map((ship) => ({ typeId: ship.typeId, count: ship.count }));
+      const power = calculateLeaderboardPower(starCount, ships, p.totalBuildingLevels, p.exploredPlanets);
+      return { username: p.username, starCount, totalShips: p.totalShips, power, weightedShipValue: getWeightedShipValue(ships), totalBuildingLevels: p.totalBuildingLevels, exploredPlanets: p.exploredPlanets };
     });
 
     entries.sort((a, b) => b.power - a.power);
@@ -63,18 +65,24 @@ schedulerRoutes.post('/weekly-leaderboard', async (c) => {
 
     // Format the leaderboard comment
     const top = entries.slice(0, 10);
+    const displayNames = new Map<string, string>();
+    for (const entry of top) {
+      const profile = await loadProfile(redis, entry.username);
+      const displayName = profile.name?.trim().replace(/[|\r\n]/g, ' ');
+      displayNames.set(entry.username, displayName || entry.username);
+    }
     const lines = [
-      '## 🏆 Weekly Leaderboard',
+      '## 🏆 Daily Leaderboard',
       '',
-      '| Rank | Commander | Stars | Ships | Power |',
-      '|---:|:---|---:|---:|---:|',
+      '| Rank | Commander | Stars | Planets | Ships | Power |',
+      '|---:|:---|---:|---:|---:|---:|',
     ];
     for (let i = 0; i < top.length; i++) {
       const e = top[i]!;
       const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
-      lines.push(`| ${medal} | u/${e.username} | ${e.starCount} | ${e.totalShips} | ${e.power} |`);
+      lines.push(`| ${medal} | ${displayNames.get(e.username) ?? e.username} | ${e.starCount} | ${e.exploredPlanets} | ${e.totalShips} | ${e.power} |`);
     }
-    lines.push('', `*${entries.length} commanders active this week.*`);
+    lines.push('', `*${entries.length} commanders active today.*`);
 
     const text = lines.join('\n');
 
@@ -85,10 +93,10 @@ schedulerRoutes.post('/weekly-leaderboard', async (c) => {
       runAs: 'APP',
     });
 
-    console.log(`[SCHEDULER] Weekly leaderboard posted (${top.length} entries)`);
+    console.log(`[SCHEDULER] Daily leaderboard posted (${top.length} entries)`);
     return c.json({ status: 'ok', message: `posted ${top.length} entries` });
   } catch (e) {
-    console.error('[SCHEDULER] Failed to post weekly leaderboard:', e);
+    console.error('[SCHEDULER] Failed to post daily leaderboard:', e);
     return c.json({ status: 'error', message: String(e) }, 500);
   }
 });

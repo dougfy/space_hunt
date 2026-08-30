@@ -57,6 +57,41 @@
 | 40 | **Wire staged new sound pack into runtime audio map** | ❌ Open | 19 new voice/sfx files were moved out of runtime `public/sounds` into `assets/reference/source-audio/pending/` because they are not currently referenced by exact filename in source. Next pass: (1) pick canonical names, (2) move selected files back to `public/sounds`, (3) add mappings in `src/game/audio.ts`, (4) prune/replace near-duplicates (for example `Anomalous signal detected (2).wav` and `Warning hostile raider (1).wav`), (5) run a quick in-game audio smoke test. |
 | 41 | **Galaxy/System return can reset moving ship to home star** | ❌ Open | Bug observed in the galaxy view/system transition flow: while the ship is moving through the galaxy, using the return/navigation path can snap the player ship back to the home star instead of preserving the in-progress galaxy position/target. Investigate `_savedDock`, `currentStarIndex`, `galaxy.tier` transitions, and any `◄ SYSTEM` / fleet-panel revert paths that reconstruct system state from home/current star rather than the ship's active galaxy location. Required fix: returning from galaxy/system views must preserve the ship's actual movement state and never teleport it home unless the player explicitly chooses home. |
 | 42 | **Colony expansion sequence and guided tutorial** | ❌ Open | Treat expansion as a deliberate multi-step journey rather than a single `COLONIZE` action. **Recommended gates:** (1) Colony Ship construction requires either a Basic Probe in stock or at least one previously visited non-home star; this teaches scouting while preserving a direct-flight path for players who explore manually. (2) Sending a Colony Ship requires the destination to be an unowned star with discovery level `probed` or `visited`; the target picker should explain why other stars are unavailable. (3) On arrival, the colony ship remains staged at the destination and the player must travel there personally. (4) In the destination system, show the colony-ship marker beside its assigned planet; optionally require a planet scan to reveal/confirm that marker. (5) When the player enters the planet's local orbit, expose the `COLONIZE` action. (6) Server validates the ship, star, body, ownership, and arrival state before consuming the ship and claiming the star. **Tutorial lead-through:** `BUILD PROBE` → `SEND PROBE` or `VISIT A STAR` → `BUILD COLONY SHIP` → `OPEN FLEET / SEND` → select highlighted discovered star → wait for arrival → `VISIT DESTINATION` → identify/scan marked planet → orbit it → press `COLONIZE` → show confirmation and new-star setup. Use resumable checkpoints and contextual callouts; do not unlock the final button early. Add explicit transit/arrival states and recovery text for an occupied, invalidated, or already claimed target. |
+| 43 | **Splash command center** | ⚠️ Leaderboard shipped; tutorial pending | Put the public leaderboard and a clear tutorial/help entry on the first splash screen before gameplay. The leaderboard should be read-only, compact, and responsive, with loading, empty, and unavailable states. Reuse the existing scoring endpoint rather than creating a second ranking system. Later add a tutorial entry that opens the existing Help documentation without auto-starting any guided sequence. |
+
+Detailed quest-item and air-purifier event design: [quest-items.md](quest-items.md).
+
+### Daily Return Mechanics for the Splash Command Center
+
+These mechanics extend #43 beyond a static splash. Each should be:
+
+- Server-authoritative
+- Generated once per UTC day
+- Visible as a return summary or actionable card
+- Free of unsolicited tutorial flashing or voice prompts
+
+| Priority | Mechanic | Return experience | Reason to return |
+|---|---|---|---|
+| ★★★★★ | **Daily Probe Report** | “Long-range probe detected an unknown Luminari signature near Deneb.” | Something happened while I was gone. |
+| ★★★★★ | **Daily Command Directive** | Choose one of three missions: Explore, Mine, or Military. | A new decision every day. |
+| ★★★★★ | **Daily Anomaly** | A temporary relic, derelict, signal, comet, or similar opportunity appears somewhere. | Today’s opportunity disappears. |
+| ★★★★☆ | **24-hour Automaton Threat** | Automatons approach one of the player’s systems. | Defend the empire. |
+| ★★★★★ | **Daily Shared Challenge** | Everyone receives the same mission or target system. | Compare progress with everyone else. |
+| ★★★☆☆ | **Command Streak** | “Day 6 of active command” with escalating modest rewards. | Don’t break the streak. |
+| ★★★★☆ | **Daily Research Choice** | Choose one temporary research focus for the next 24 hours. | Shape tomorrow’s empire. |
+| ★★★☆☆ | **Galactic Market/Event** | Ore shortage, fuel surplus, shipbuilding discount, or another daily modifier. | Today’s economics are different. |
+| ★★★★☆ | **Community Campaign** | All players contribute toward defeating or exploring a shared objective. | Individual actions affect Reddit-wide progress. |
+| ★★★★★ | **Daily Reddit Dispatch** | A fresh Reddit post announces the day’s situation. | Creates a new feed entry into the game. |
+
+#### Recommended Rollout
+
+1. **Daily Reddit Dispatch** — creates the daily public entry point.
+2. **Daily Probe Report** — uses existing fleet and returning-report concepts.
+3. **Daily Command Directive** — adds a meaningful daily decision.
+4. **Daily Anomaly** — adds a time-limited opportunity on the galaxy map.
+5. **Shared challenge and Automaton threat** — introduce competition and defensive urgency.
+6. **Streak, research, market, and community systems** — add longer-term retention once the daily loop is proven.
+
 | 25 | **Undocking not discoverable** | ✅ Fixed (v1.4.54) | Coach step 4/7 rings the UNDOCK button with a callout. `undock()` also now picks a release heading with clear line-of-sight to the planet (`findClearReleaseDir()`) so players don't immediately re-dock at the starbase. |
 | 26 | **Tutorial mode (restartable)** | ⚠️ Onboarding complete; topic continuation open | Seven-step onboarding is shipped: BUILD → STATION → skin → undock → fly/dock → scan → Help. It persists `coachStep` + `coachSkipped`; SKIP preserves resumable progress while GO PLAY completes it. Feedback waits until the coach ends. **Current post-scan flow (v1.4.76+):** Help is clean reading only; closing it shows congratulations; MORE TUTORIALS opens the Help Next hub; GO PLAY ends onboarding. **Do not restore the old in-Help Replay controls** — they caused conflicting UI. Remaining: named topic sequences / per-sequence progress / true sequence hub tracked in #39. |
 | 35 | **Legacy journey hints — rescoped, not retired** | ✅ Repurposed (v1.4.57) | `ENABLE_JOURNEY_HINTS = true`. The old tab pulse / UNDOCK pulse / idle voice prompts now serve **only** players who have already seen the coach tutorial and have stalled without acting — `startJourney()` runs on the returning-player branch, `skipJourney()` on the new-player branch, so the two systems never overlap. UNDOCK pulse gated on `dock.docked`. The `?` icon also rings during the idle pulse to advertise the replay button. |

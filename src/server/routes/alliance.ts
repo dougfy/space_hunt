@@ -14,7 +14,12 @@ import type {
   AllianceChatSendRequest,
   AllianceInvite,
   DirectMessage,
+  AllianceItemOffer,
+  AllianceItemOfferCreateRequest,
+  AllianceItemOfferResponse,
 } from '../../shared/api';
+import { ITEM_CATALOG } from '../../shared/items';
+import { grantItem, consumeItem } from '../core/game-service';
 
 const alliance = new Hono();
 
@@ -87,6 +92,54 @@ async function saveInvites(username: string, invites: AllianceInvite[]): Promise
   }
 }
 
+function itemOfferKey(offerId: string): string {
+  return `alliance_item_offer:${offerId}`;
+}
+
+async function getItemOffer(offerId: string): Promise<AllianceItemOffer | null> {
+  const raw = await redis.get(itemOfferKey(offerId));
+  if (!raw) return null;
+  try { return JSON.parse(raw) as AllianceItemOffer; } catch { return null; }
+}
+
+async function saveItemOffer(offer: AllianceItemOffer): Promise<void> {
+  await redis.set(itemOfferKey(offer.offerId), JSON.stringify(offer));
+}
+
+async function areAllianceMembers(first: string, second: string): Promise<boolean> {
+  const firstAlliance = await getPlayerAllianceId(first);
+  const secondAlliance = await getPlayerAllianceId(second);
+  return firstAlliance != null && firstAlliance === secondAlliance;
+}
+
+async function listItemOffers(username: string): Promise<AllianceItemOffer[]> {
+  const offers: AllianceItemOffer[] = [];
+  const now = Date.now();
+  const rawKeys = await redis.get(`alliance_item_offers:${username.toLowerCase()}`);
+  if (!rawKeys) return offers;
+  let ids: string[];
+  try { ids = JSON.parse(rawKeys) as string[]; } catch { return offers; }
+  for (const id of ids) {
+    const offer = await getItemOffer(id);
+    if (!offer) continue;
+    if (offer.status === 'offered' && offer.expiresAt <= now) {
+      await grantItem(redis, offer.fromUser, offer.itemId, offer.count);
+      offer.status = 'expired';
+      await saveItemOffer(offer);
+    }
+    if (offer.status === 'offered' && offer.toUser.toLowerCase() === username.toLowerCase()) offers.push(offer);
+  }
+  return offers;
+}
+
+async function indexItemOffer(username: string, offerId: string): Promise<void> {
+  const key = `alliance_item_offers:${username.toLowerCase()}`;
+  const raw = await redis.get(key);
+  let ids: string[] = [];
+  if (raw) { try { ids = JSON.parse(raw) as string[]; } catch { ids = []; } }
+  if (!ids.includes(offerId)) await redis.set(key, JSON.stringify([...ids, offerId]));
+}
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 /** Get current user's alliance info. */
@@ -105,6 +158,70 @@ alliance.get('/info', async (c) => {
   }
 
   return c.json<AllianceInfoResponse>({ alliance: a });
+});
+
+/** List pending item offers for the current player. */
+alliance.get('/item-offers', async (c) => {
+  const username = c.req.query('username');
+  if (!username) return c.json<AllianceItemOfferResponse>({ offers: [] });
+  return c.json<AllianceItemOfferResponse>({ offers: await listItemOffers(username) });
+});
+
+/** Offer an existing inventory item to an alliance member. */
+alliance.post('/item-offers', async (c) => {
+  const body = await c.req.json<AllianceItemOfferCreateRequest>();
+  if (!body.username || !body.target || !ITEM_CATALOG[body.itemId]) return c.json({ error: 'username, target, and valid itemId required' }, 400);
+  if (!Number.isInteger(body.count) || body.count < 1) return c.json({ error: 'count must be a positive integer' }, 400);
+  if (body.username.toLowerCase() === body.target.toLowerCase()) return c.json({ error: 'Cannot offer an item to yourself' }, 400);
+  if (!await areAllianceMembers(body.username, body.target)) return c.json({ error: 'Both players must be in the same alliance' }, 400);
+  try {
+    await consumeItem(redis, body.username, body.itemId, body.count);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Unable to reserve item' }, 400);
+  }
+  const now = Date.now();
+  const offer: AllianceItemOffer = {
+    offerId: `offer_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    fromUser: body.username,
+    toUser: body.target,
+    itemId: body.itemId,
+    count: body.count,
+    createdAt: now,
+    expiresAt: now + 24 * 60 * 60 * 1000,
+    status: 'offered',
+  };
+  await saveItemOffer(offer);
+  await indexItemOffer(body.target, offer.offerId);
+  return c.json({ ok: true, offer });
+});
+
+/** Accept or decline an item offer. */
+alliance.post('/item-offers/respond', async (c) => {
+  const body = await c.req.json<{ username: string; offerId: string; accept: boolean }>();
+  const offer = await getItemOffer(body.offerId);
+  if (!offer || offer.status !== 'offered') return c.json({ error: 'Offer is no longer available' }, 400);
+  if (offer.toUser.toLowerCase() !== body.username?.toLowerCase()) return c.json({ error: 'Only the recipient can respond' }, 403);
+  if (offer.expiresAt <= Date.now()) {
+    offer.status = 'expired';
+    await grantItem(redis, offer.fromUser, offer.itemId, offer.count);
+    await saveItemOffer(offer);
+    return c.json({ error: 'Offer expired' }, 400);
+  }
+  if (body.accept) {
+    if (!await areAllianceMembers(offer.fromUser, offer.toUser)) {
+      await grantItem(redis, offer.fromUser, offer.itemId, offer.count);
+      offer.status = 'expired';
+      await saveItemOffer(offer);
+      return c.json({ error: 'Players are no longer in the same alliance' }, 400);
+    }
+    await grantItem(redis, offer.toUser, offer.itemId, offer.count);
+    offer.status = 'accepted';
+  } else {
+    await grantItem(redis, offer.fromUser, offer.itemId, offer.count);
+    offer.status = 'declined';
+  }
+  await saveItemOffer(offer);
+  return c.json({ ok: true, offer });
 });
 
 /** Create a new alliance. */

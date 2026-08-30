@@ -1303,14 +1303,19 @@ export function isInTransferMode(): boolean {
 }
 
 /** Hit-test galaxy stars for transfer target. Returns starIndex or -1. */
-export function hitTestGalaxyStar(sx: number, sy: number, radius = 28): number {
+export function hitTestGalaxyStar(sx: number, sy: number, radius = 44): number {
+  let nearest: { starIndex: number; distance: number } | null = null;
   for (const s of _lastScreenStars) {
     const dx = sx - s.sx;
     const dy = sy - s.sy;
-    if (dx * dx + dy * dy < radius * radius) {
-      console.log('[GALAXY] star hit', { starIndex: s.starIndex, tap: { x: Math.round(sx), y: Math.round(sy) }, center: { x: Math.round(s.sx), y: Math.round(s.sy) }, radius });
-      return s.starIndex;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    if (distance < radius && (!nearest || distance < nearest.distance)) {
+      nearest = { starIndex: s.starIndex, distance };
     }
+  }
+  if (nearest) {
+    console.log('[GALAXY] star hit', { starIndex: nearest.starIndex, tap: { x: Math.round(sx), y: Math.round(sy) }, distance: Math.round(nearest.distance), radius });
+    return nearest.starIndex;
   }
   console.log('[GALAXY] star miss', { tap: { x: Math.round(sx), y: Math.round(sy) }, renderedStars: _lastScreenStars.length, radius });
   return -1;
@@ -1762,11 +1767,25 @@ export function drawGalaxyView(
       }
       _validTransferTargets.add(s.star.index);
       ctx.save();
-      ctx.strokeStyle = `rgba(79, 255, 176, ${0.2 + pulse * 0.3})`;
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = `rgba(79, 255, 176, ${0.55 + pulse * 0.4})`;
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.arc(s.sx, s.sy, 14 + pulse * 4, 0, Math.PI * 2);
+      ctx.arc(s.sx, s.sy, 22 + pulse * 5, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.font = f(8, 'bold');
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = '#4fffb0';
+      const targetLabel = _transferMode.shipTypeId === 8
+        ? 'COLONY TARGET'
+        : _transferMode.shipTypeId === 2
+          ? 'PICKUP STAR'
+          : _transferMode.shipTypeId === 15
+            ? 'RAID TARGET'
+            : _transferMode.shipTypeId === 11 || _transferMode.shipTypeId === 12
+              ? 'PROBE DESTINATION'
+              : 'FLEET DESTINATION';
+      ctx.fillText(targetLabel, s.sx, s.sy - 28 - pulse * 2);
       ctx.restore();
     }
 
@@ -1801,7 +1820,7 @@ export function drawGalaxyView(
         : isProbe
           ? `SENDING ${shipName.toUpperCase()} (⛽${PROBE_MIN_FUEL_COST}) — TAP DESTINATION`
           : `SENDING ${shipName.toUpperCase()} — TAP DESTINATION STAR`;
-    ctx.fillText(bannerText, screenW / 2, screenH - bannerH / 2 - 2);
+    ctx.fillText(`${bannerText}  [${_validTransferTargets.size} TARGETS]`, screenW / 2, screenH - bannerH / 2 - 2);
 
     // Cancel button
     const cancelW = 60;
@@ -1818,6 +1837,26 @@ export function drawGalaxyView(
 
     // Store cancel button rect for hit testing
     _transferCancelButton = { x: cancelX, y: cancelY, w: cancelW, h: 18 };
+
+    // Keep the colonization guide visible over the Galaxy map while the player
+    // chooses a highlighted destination. The Fleet panel is redrawn separately
+    // and cannot reliably host this instruction during transfer mode.
+    if (_transferMode.shipTypeId === 8 && isColonizationTopicActive()) {
+      const tutorialTarget = screenStars.find((s) => _validTransferTargets.has(s.star.index));
+      if (tutorialTarget) {
+        drawTopicPointer(ctx, screenW, screenH,
+          { x: tutorialTarget.sx, y: tutorialTarget.sy, w: 2, h: 2 },
+          'above', 'SELECT COLONY TARGET', [
+            'Tap a green COLONY TARGET ring.',
+            'The star must be probed or visited.',
+          ]);
+      } else {
+        drawTopicInfoCard(ctx, screenW, screenH, 'NO VALID TARGETS', [
+          'Probe or visit an unowned star first.',
+          'Then return to FLEET and press SEND.',
+        ], 'OK');
+      }
+    }
   } else {
     _transferCancelButton = null;
   }
@@ -1841,7 +1880,7 @@ export function drawGalaxyView(
 
       // Info card dimensions
       const cardW = 180;
-      const cardH = 110;
+      const cardH = 126;
       // Position card to the right of star, or left if too close to edge
       let cardX = starSx + 24;
       let cardY = starSy - cardH / 2;
@@ -1931,6 +1970,18 @@ export function drawGalaxyView(
       } else {
         ctx.fillStyle = G_DIM;
         ctx.fillText('NO FLEET', cardX + 8, cardY + 66);
+      }
+
+      const economyInfo = _serverEconomyByStarIndex.get(star.index);
+      if (economyInfo?.starCondition && economyInfo.starCondition !== 'normal') {
+        const conditionLabel = economyInfo.starCondition === 'lost'
+          ? 'AIR PURIFIER: LOST'
+          : economyInfo.starCondition === 'critical_failure'
+            ? `AIR PURIFIER: CRITICAL (${economyInfo.capacityPercent ?? 40}%)`
+            : `AIR PURIFIER: DEGRADED (${economyInfo.capacityPercent ?? 75}%)`;
+        ctx.fillStyle = economyInfo.starCondition === 'lost' ? '#ff6666' : '#ffcc44';
+        ctx.font = f(7, 'bold');
+        ctx.fillText(conditionLabel, cardX + 8, cardY + 80);
       }
 
       // VISIT button
@@ -2218,12 +2269,20 @@ export function drawSystemView(
       const colonyFleet = colonyTarget === galaxy.currentStarIndex ? _serverShipsByStarIndex.get(colonyTarget) : null;
       const hasColonyShip = colonyFleet?.ships.some((ship) => ship.typeId === 8 && ship.count > 0) ?? false;
       if (body.index === 0 && hasColonyShip && isColonizationTopicActive()) {
+        ensureShipIconsLoaded();
+        const colonyIcon = getShipIcon(SHIP_CATALOG[8].icon);
+        const colonyIconSize = 20;
+        const colonyMarkerX = nameX + ctx.measureText(body.name).width + colonyIconSize / 2 + 12;
+        const colonyMarkerY = sc.y;
+        if (colonyIcon) {
+          ctx.drawImage(colonyIcon, colonyMarkerX - colonyIconSize / 2, colonyMarkerY - colonyIconSize / 2, colonyIconSize, colonyIconSize);
+        }
         ctx.save();
         ctx.font = f(8, 'bold');
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#ffb84d';
-        ctx.fillText('COLONY SHIP -> LAND HERE', nameX, sc.y + radPx + 14);
+        ctx.fillText('COLONY SHIP', colonyMarkerX + colonyIconSize / 2 + 4, colonyMarkerY);
         ctx.restore();
       }
 
@@ -2986,6 +3045,7 @@ export function togglePlanetPanel(index: number): 'fleet-opened' | 'fleet-closed
   if (index === 1 && !wasOpen) coachAdvance('upgrade_station');
   if (index === 2 && !wasOpen) shipsTopicShipsOpened();
   if (index === 2 && !wasOpen) colonizationTopicAction('ships_opened');
+  if (index === 3 && !wasOpen) colonizationTopicAction('fleet_opened');
   if (wasOpen && index === 3) queueFleetRevert();
   if (index === 3) return wasOpen ? 'fleet-closed' : 'fleet-opened';
   return null;
@@ -3079,6 +3139,8 @@ export function hitTestPlanetPanels(
       // Handle interactive clicks inside BUILD / SHIPS / FLEET tabs
       if (_openPanel === 1) {
         hitTestBuildPanel(sx, sy);
+      } else if (_openPanel === 0) {
+        hitTestGlobalStatusButton(sx, sy);
       } else if (_openPanel === 5) {
         hitTestTradeButtons(sx, sy);
       } else if (_openPanel === 2) {
@@ -3142,7 +3204,7 @@ let _completeCharges = 0; // auto-complete charges from yellow pods
 let _comsUnreadCount = 0;
 
 // ── DM state ────────────────────────────────────────────────────────────────
-import type { DirectMessage, PublicComment, Alliance, AllianceInvite, AllianceChatMessage } from '../shared/api';
+import type { DirectMessage, PublicComment, Alliance, AllianceInvite, AllianceChatMessage, AllianceItemOffer } from '../shared/api';
 let _knownPlayerNames: string[] = [];
 let _dmPeer: string | null = null;       // currently open DM conversation
 let _dmMessages: DirectMessage[] = [];
@@ -3171,15 +3233,17 @@ let _allianceView: AllianceView = 'none';
 let _allianceInfo: Alliance | null = null;
 let _allianceInvites: AllianceInvite[] = [];
 let _allianceChat: AllianceChatMessage[] = [];
+let _allianceItemOffers: AllianceItemOffer[] = [];
 let _allianceChatPage = 0;
 const ALLIANCE_CHAT_PAGE_SIZE = 5;
 let _username: string | null = null; // current player username for alliance manager checks
 const _allianceInvitedPlayers: Set<string> = new Set(); // track recently invited players for UI feedback
 let _pendingAllianceAction: {
-  type: 'create' | 'chat' | 'invite' | 'respond' | 'leave' | 'kick' | 'join' | 'reject';
+  type: 'create' | 'chat' | 'invite' | 'respond' | 'leave' | 'kick' | 'join' | 'reject' | 'accept_item' | 'decline_item';
   name?: string;
   text?: string;
   target?: string;
+  offerId?: string;
   allianceId?: string;
   accept?: boolean;
 } | null = null;
@@ -3188,8 +3252,6 @@ let _allianceInputRequested: { type: 'create' | 'chat' } | null = null;
 // ── Leaderboard state ───────────────────────────────────────────────────────
 import type { LeaderboardEntry } from '../shared/api';
 let _leaderboardData: LeaderboardEntry[] = [];
-let _leaderboardSeedButton: { x: number; y: number; w: number; h: number } | null = null;
-let _pendingSeedBots = false;
 
 // ── Fleet Share ─────────────────────────────────────────────────────────────
 let _pendingFleetShare = false;
@@ -3207,11 +3269,6 @@ export function setFleetShareCooldown(durationMs: number): void {
 
 export function setLeaderboardData(data: LeaderboardEntry[]): void {
   _leaderboardData = data;
-}
-
-export function consumePendingSeedBots(): boolean {
-  if (_pendingSeedBots) { _pendingSeedBots = false; return true; }
-  return false;
 }
 
 export function setKnownPlayers(names: string[]): void {
@@ -3347,6 +3404,10 @@ export function setAllianceChat(messages: AllianceChatMessage[]): void {
   _allianceChat = messages;
 }
 
+export function setAllianceItemOffers(offers: AllianceItemOffer[]): void {
+  _allianceItemOffers = offers;
+}
+
 export function getAllianceView(): AllianceView { return _allianceView; }
 
 export function consumeAllianceAction(): typeof _pendingAllianceAction {
@@ -3458,7 +3519,12 @@ export function consumePendingTierRevert(): 'system' | 'local' | 'planet' | null
 function hitTestTradeButtons(sx: number, sy: number): void {
   for (const btn of _tradeButtons) {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
-      _pendingTrade = { giveType: btn.giveType, receiveType: btn.receiveType };
+      if (btn.action === null) return;
+      if (btn.action) {
+        _pendingPurifierAction = btn.action;
+      } else {
+        _pendingTrade = { giveType: btn.giveType!, receiveType: btn.receiveType! };
+      }
       playSound('click');
       return;
     }
@@ -3534,6 +3600,9 @@ function hitTestFleetPanel(sx: number, sy: number): void {
   for (const btn of _fleetSendButtons) {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
       enterTransferMode(btn.starIndex, btn.shipTypeId);
+      // Transfer mode owns the Galaxy map now; hide the panel without queueing
+      // a tier revert so the player can choose a destination.
+      _openPanel = -1;
       playSound('click');
       return;
     }
@@ -3575,6 +3644,7 @@ export function drawPlanetPanels(
   const tabX = screenW - TAB_W;
   _coachBuildTabRect = null;
   _coachShipsTabRect = null;
+  _coachFleetTabRect = null;
 
   ctx.save();
 
@@ -3596,6 +3666,7 @@ export function drawPlanetPanels(
 
     if (i === 1 && !isDisabled) _coachBuildTabRect = { x: tabX - 4, y: ty, w: TAB_W + 4, h: TAB_H };
     if (i === 2 && !isDisabled) _coachShipsTabRect = { x: tabX - 4, y: ty, w: TAB_W + 4, h: TAB_H };
+    if (i === 3 && !isDisabled) _coachFleetTabRect = { x: tabX - 4, y: ty, w: TAB_W + 4, h: TAB_H };
 
     // Journey pulse: brighten non-disabled tabs
     const pulseAlpha = getJourneyPulseAlpha();
@@ -3730,6 +3801,7 @@ export function drawPlanetPanels(
 let _coachBuildTabRect: { x: number; y: number; w: number; h: number } | null = null;
 /** SHIPS tab rect, captured the same way, used by the post-onboarding Ships topic guide. */
 let _coachShipsTabRect: { x: number; y: number; w: number; h: number } | null = null;
+let _coachFleetTabRect: { x: number; y: number; w: number; h: number } | null = null;
 /** Rect of the primary (GOT IT) button drawn by the last coach overlay. */
 let _coachGotItButton: { x: number; y: number; w: number; h: number } | null = null;
 /** Rect of the SKIP button shown once a step has been acknowledged. */
@@ -4123,12 +4195,33 @@ function drawColonizationTopicOverlay(ctx: CanvasRenderingContext2D, screenW: nu
     ]);
     return;
   }
+  if (step === 'open_fleet') {
+    const target = _coachFleetTabRect;
+    if (target) {
+      drawTopicPointer(ctx, screenW, screenH, target, 'left', 'OPEN FLEET', [
+        'Open FLEET to send your Colony Ship.',
+      ]);
+    } else {
+      drawTopicInfoCard(ctx, screenW, screenH, 'OPEN FLEET', [
+        'Use the FLEET tab to manage ships',
+        'and send your Colony Ship.',
+      ], 'OK');
+    }
+    return;
+  }
   if (step === 'send_colony') {
-    drawTopicInfoCard(ctx, screenW, screenH, 'SEND THE COLONY SHIP', [
-      'Open FLEET, press SEND, and choose',
-      'a highlighted probed or visited star.',
-      'Unexplored stars are unavailable.',
-    ], 'NEXT');
+    const target = _fleetSendButtons.find((button) => button.shipTypeId === 8);
+    if (target) {
+      drawTopicPointer(ctx, screenW, screenH, target, 'above', 'SEND COLONY SHIP', [
+        'Press SEND, then choose a highlighted',
+        'probed or visited unowned star.',
+      ]);
+    } else {
+      drawTopicInfoCard(ctx, screenW, screenH, 'SEND THE COLONY SHIP', [
+        'Find your Colony Ship and press SEND.',
+        'Then choose a highlighted destination.',
+      ], 'OK');
+    }
     return;
   }
   if (step === 'arrival') {
@@ -4561,12 +4654,24 @@ function drawPanelFrame(
 }
 
 /** STATUS panel: resources, fuel, shields */
+let _globalStatusButton: { x: number; y: number; w: number; h: number } | null = null;
+
+export function hitTestGlobalStatusButton(sx: number, sy: number): boolean {
+  if (!_isAdmin) return false;
+  const button = _globalStatusButton;
+  if (!button) return false;
+  if (sx < button.x || sx > button.x + button.w || sy < button.y || sy > button.y + button.h) return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as any).__openGlobalStatus?.();
+  return true;
+}
+
 function drawStatusPanelBody(
   ctx: CanvasRenderingContext2D,
   x: number, y: number, w: number,
   statusRows: string[],
 ): number {
-  const bodyH = Math.max(TAB_H, statusRows.length * ROW_H + PANEL_PAD * 2 + 24);
+  const bodyH = Math.max(TAB_H, statusRows.length * ROW_H + PANEL_PAD * 2 + (_isAdmin ? 58 : 24));
   drawPanelFrame(ctx, x, y, w, bodyH, 'STATUS', '\u25B3');
 
   ctx.font = f(8);
@@ -4577,6 +4682,23 @@ function drawStatusPanelBody(
     const row = statusRows[r];
     if (!row) continue;
     ctx.fillText(row, x + PANEL_PAD, y + 28 + r * ROW_H);
+  }
+  _globalStatusButton = null;
+  if (_isAdmin) {
+    const button = { x: x + PANEL_PAD, y: y + bodyH - 26, w: w - PANEL_PAD * 2, h: 16 };
+    _globalStatusButton = button;
+    roundedRect(ctx, button.x, button.y, button.w, button.h, 3);
+    ctx.fillStyle = 'rgba(20, 60, 80, 0.65)';
+    ctx.fill();
+    roundedRect(ctx, button.x, button.y, button.w, button.h, 3);
+    ctx.strokeStyle = '#66ccff';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.font = f(7, 'bold');
+    ctx.fillStyle = '#66ccff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('GLOBAL STATUS', button.x + button.w / 2, button.y + button.h / 2);
   }
   return bodyH;
 }
@@ -4615,7 +4737,7 @@ function drawTradePanelBody(
   ];
   const btnH = 16;
   const btnGap = 3;
-  const headerH = 42;
+  const headerH = 64;
   const bodyH = headerH + trades.length * (btnH + btnGap) + PANEL_PAD;
   drawPanelFrame(ctx, x, y, w, bodyH, 'TRADE', '\u2696');
 
@@ -4625,6 +4747,19 @@ function drawTradePanelBody(
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillText(`STOCK O:${Math.floor(_tradeStationInfo.stock.ore)} F:${Math.floor(_tradeStationInfo.stock.food)} E:${Math.floor(_tradeStationInfo.stock.energy)} \u26FD:${Math.floor(_tradeStationInfo.stock.fuel)}`, x + PANEL_PAD, y + 28);
+
+  const orderButton = { x: x + PANEL_PAD, y: y + 36, w: w - PANEL_PAD * 2, h: 16 };
+  ctx.fillStyle = _purifierOrder?.status === 'complete' ? 'rgba(20, 80, 40, 0.75)' : 'rgba(60, 45, 0, 0.75)';
+  roundedRect(ctx, orderButton.x, orderButton.y, orderButton.w, orderButton.h, 3);
+  ctx.fill();
+  ctx.strokeStyle = _purifierOrder?.status === 'complete' ? '#6f6' : '#ffd700';
+  roundedRect(ctx, orderButton.x, orderButton.y, orderButton.w, orderButton.h, 3);
+  ctx.stroke();
+  ctx.font = f(7, 'bold');
+  ctx.fillStyle = _purifierOrder?.status === 'complete' ? '#6f6' : '#ffd700';
+  ctx.textAlign = 'center';
+  ctx.fillText(_purifierOrder?.status === 'complete' ? 'PURIFIER READY' : _purifierOrder?.status === 'open' ? 'PAY REMAINING' : 'START PURIFIER ORDER', orderButton.x + orderButton.w / 2, orderButton.y + orderButton.h / 2);
+  _tradeButtons.push({ ...orderButton, action: _purifierOrder?.status === 'open' ? 'pay_purifier' : _purifierOrder?.status === 'complete' ? null : 'start_purifier' });
 
   // Trade buttons
   for (let i = 0; i < trades.length; i++) {
@@ -4688,7 +4823,7 @@ function drawBuildPanelBody(
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillStyle = G_MED;
-  ctx.fillText(`LV${toRoman(stationLevel)} O:${oreNow} F:${foodNow} E:${energyNow} Fu:${fuelNow}`, x + PANEL_PAD, y + 28);
+  ctx.fillText(`LV${toRoman(stationLevel)} O:${formatCompactNumber(oreNow)} F:${formatCompactNumber(foodNow)} E:${formatCompactNumber(energyNow)} Fu:${formatCompactNumber(fuelNow)}`, x + PANEL_PAD, y + 28);
 
   // COMPLETE button (if any build in progress)
   const hasActiveBuild = serverEcon
@@ -4832,7 +4967,7 @@ function drawBuildPanelBody(
       ctx.fillRect(barX, barY, fillW, 5);
     } else {
       ctx.fillStyle = canAfford ? G_COST : G_COST_OFF;
-      ctx.fillText(`${effectiveCost.ore}/${effectiveCost.food}/${effectiveCost.energy}`, bx + extBtnW / 2, by + 18);
+      ctx.fillText(`${formatCompactNumber(effectiveCost.ore)}/${formatCompactNumber(effectiveCost.food)}/${formatCompactNumber(effectiveCost.energy)}`, bx + extBtnW / 2, by + 18);
       const isBusy = activeBuildCount > 0 && !isActive;
       const isFlashing = isLocked && _lockFlash && _lockFlash.action === ext.action && _lockFlash.expireMs > Date.now();
       const statusLabel = isFlashing && lockReason
@@ -5633,7 +5768,7 @@ function drawLeaderboardBody(
   const headerH = 28;
   const players = _leaderboardData;
   const rowCount = Math.max(players.length, 1);
-  const bodyH = headerH + rowCount * rowH + PANEL_PAD * 2 + 18; // +18 for seed button
+  const bodyH = headerH + rowCount * rowH + PANEL_PAD * 2;
 
   drawPanelFrame(ctx, x, y, w, bodyH, 'LEADERBOARD', '\u{1F3C6}');
 
@@ -5643,32 +5778,16 @@ function drawLeaderboardBody(
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('NO PLAYER DATA', x + w / 2, y + headerH + 14);
-    // Seed button (admin only)
-    if (_isAdmin) {
-      const btnW = 80;
-      const btnH = 14;
-      const btnX = x + (w - btnW) / 2;
-      const btnY = y + bodyH - PANEL_PAD - btnH;
-      ctx.fillStyle = 'rgba(128, 0, 255, 0.15)';
-      ctx.fillRect(btnX, btnY, btnW, btnH);
-      ctx.strokeStyle = '#a060ff';
-      ctx.lineWidth = 0.5;
-      ctx.strokeRect(btnX, btnY, btnW, btnH);
-      ctx.font = f(7, 'bold');
-      ctx.fillStyle = '#c090ff';
-      ctx.fillText('SEED TEST DATA', btnX + btnW / 2, btnY + btnH / 2);
-      _leaderboardSeedButton = { x: btnX, y: btnY, w: btnW, h: btnH };
-    }
     return bodyH;
   }
-  _leaderboardSeedButton = null;
-
   // Column header
   const colX = {
     rank: x + PANEL_PAD,
     name: x + PANEL_PAD + 18,
-    stars: x + w - PANEL_PAD - 68,
-    ships: x + w - PANEL_PAD - 40,
+    stars: x + w - PANEL_PAD - 116,
+    planets: x + w - PANEL_PAD - 92,
+    ships: x + w - PANEL_PAD - 66,
+    buildings: x + w - PANEL_PAD - 38,
     power: x + w - PANEL_PAD,
   };
 
@@ -5680,7 +5799,9 @@ function drawLeaderboardBody(
   ctx.fillText('#', colX.rank, hdrY);
   ctx.fillText('PLAYER', colX.name, hdrY);
   ctx.fillText('STAR', colX.stars, hdrY);
+  ctx.fillText('PLN', colX.planets, hdrY);
   ctx.fillText('SHIP', colX.ships, hdrY);
+  ctx.fillText('BLDG', colX.buildings, hdrY);
   ctx.textAlign = 'right';
   ctx.fillText('PWR', colX.power, hdrY);
 
@@ -5720,29 +5841,12 @@ function drawLeaderboardBody(
     ctx.fillStyle = G_MED;
     ctx.textAlign = 'left';
     ctx.fillText(`${entry.starCount}`, colX.stars, ry + rowH / 2);
+    ctx.fillText(`${entry.exploredPlanets}`, colX.planets, ry + rowH / 2);
     ctx.fillText(`${entry.totalShips}`, colX.ships, ry + rowH / 2);
+    ctx.fillText(`${entry.totalBuildingLevels}`, colX.buildings, ry + rowH / 2);
     ctx.textAlign = 'right';
     ctx.fillStyle = rankColor;
     ctx.fillText(`${entry.power}`, colX.power, ry + rowH / 2);
-  }
-
-  // Seed button at bottom (admin only)
-  if (_isAdmin) {
-    const seedBtnW = 80;
-    const seedBtnH = 14;
-    const seedBtnX = x + (w - seedBtnW) / 2;
-    const seedBtnY = y + bodyH - PANEL_PAD - seedBtnH;
-    ctx.fillStyle = 'rgba(128, 0, 255, 0.15)';
-    ctx.fillRect(seedBtnX, seedBtnY, seedBtnW, seedBtnH);
-    ctx.strokeStyle = '#a060ff';
-    ctx.lineWidth = 0.5;
-    ctx.strokeRect(seedBtnX, seedBtnY, seedBtnW, seedBtnH);
-    ctx.font = f(7, 'bold');
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#c090ff';
-    ctx.fillText('SEED TEST DATA', seedBtnX + seedBtnW / 2, seedBtnY + seedBtnH / 2);
-    _leaderboardSeedButton = { x: seedBtnX, y: seedBtnY, w: seedBtnW, h: seedBtnH };
   }
 
   return bodyH;
@@ -5934,6 +6038,33 @@ function drawAllianceHomeView(
     ctx.fillStyle = G_DIM;
     ctx.fillText(`  +${a.members.length - maxShow} more`, x + 6, cy + 6);
     cy += 10;
+  }
+
+  if (_allianceItemOffers.length > 0) {
+    ctx.font = f(7, 'bold');
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillText('ITEM OFFERS', x + 6, cy + 8);
+    cy += 13;
+    const offerItemNames: Record<string, string> = { luminari_artifact: 'Luminari Artifact', air_purifier_unit: 'Air Purifier Unit', air_purifier_repair_kit: 'Air Purifier Repair Kit' };
+    for (const offer of _allianceItemOffers.slice(0, 2)) {
+      ctx.font = f(7);
+      ctx.fillStyle = G_MED;
+      ctx.fillText(`${offerItemNames[offer.itemId] ?? offer.itemId} x${offer.count} from ${offer.fromUser}`, x + 6, cy + 7);
+      const actionW = 30;
+      const acceptX = x + w - actionW * 2 - 12;
+      const declineX = x + w - actionW - 6;
+      ctx.fillStyle = '#4fffb0';
+      ctx.strokeStyle = '#4fffb0';
+      ctx.strokeRect(acceptX, cy, actionW, 13);
+      ctx.fillText('TAKE', acceptX + 5, cy + 9);
+      ctx.fillStyle = '#ff6666';
+      ctx.strokeStyle = '#ff6666';
+      ctx.strokeRect(declineX, cy, actionW, 13);
+      ctx.fillText('NO', declineX + 9, cy + 9);
+      _allianceButtons.push({ action: `accept_item:${offer.offerId}`, x: acceptX, y: cy, w: actionW, h: 13 });
+      _allianceButtons.push({ action: `decline_item:${offer.offerId}`, x: declineX, y: cy, w: actionW, h: 13 });
+      cy += 16;
+    }
   }
 
   cy += 4;
@@ -7017,6 +7148,10 @@ export function hitTestComsPanel(sx: number, sy: number): boolean {
         _allianceInputRequested = { type: 'chat' };
       } else if (a.startsWith('kick:')) {
         _pendingAllianceAction = { type: 'kick', target: a.slice(5) };
+      } else if (a.startsWith('accept_item:')) {
+        _pendingAllianceAction = { type: 'accept_item', offerId: a.slice(12) };
+      } else if (a.startsWith('decline_item:')) {
+        _pendingAllianceAction = { type: 'decline_item', offerId: a.slice(13) };
       } else if (a.startsWith('join:')) {
         _pendingAllianceAction = { type: 'join', allianceId: a.slice(5) };
       } else if (a.startsWith('reject:')) {
@@ -7042,14 +7177,6 @@ export function hitTestComsPanel(sx: number, sy: number): boolean {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
       if (btn.dir === 'prev') _allianceChatPage--;
       else _allianceChatPage++;
-      return true;
-    }
-  }
-  // Leaderboard seed button
-  if (_leaderboardSeedButton) {
-    const b = _leaderboardSeedButton;
-    if (sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
-      _pendingSeedBots = true;
       return true;
     }
   }
@@ -7096,7 +7223,7 @@ interface DockButton {
 let _lastDockButtons: DockButton[] = [];
 
 type DockExtensionAction = 'upgrade_station' | 'extend_habitat' | 'extend_ore' | 'extend_defense' | 'extend_warehouse' | 'extend_dock' | 'extend_shield' | 'extend_cannon' | 'extend_refinery';
-export type DockPanelAction = DockAction | DockExtensionAction | 'buy_ships' | 'debug_complete' | 'toggle_shield' | 'refuel';
+export type DockPanelAction = DockAction | DockExtensionAction | 'buy_ships' | 'debug_complete' | 'toggle_shield' | 'refuel' | 'repair_air';
 
 let _completeButton: { x: number; y: number; w: number; h: number } | null = null;
 
@@ -7166,6 +7293,8 @@ type ServerEconomySnapshot = {
   completeCharges?: number;
   richness?: { ore: number; food: number; energy: number; fuel: number };
   preferredSkinId?: string;
+  starCondition?: 'normal' | 'reduced_capacity' | 'critical_failure' | 'lost';
+  capacityPercent?: number;
 };
 
 const _serverEconomyByStarIndex = new Map<number, ServerEconomySnapshot>();
@@ -7190,6 +7319,13 @@ let _skinPickerCancelBtn: { x: number; y: number; w: number; h: number } | null 
 
 import type { ReportItem } from '../shared/api';
 
+function formatCompactNumber(value: number): string {
+  const rounded = Math.floor(value);
+  if (Math.abs(rounded) < 1000) return String(rounded);
+  const compact = rounded / 1000;
+  return `${compact.toFixed(compact < 10 ? 1 : 0).replace(/\.0$/, '')}K`;
+}
+
 let _reportItems: ReportItem[] = [];
 let _reportVisible = false;
 let _reportBadgeVisible = false;
@@ -7201,6 +7337,10 @@ export function setReturningReport(items: ReportItem[]): void {
   _reportItems = items;
   _reportBadgeVisible = items.length > 0;
   _reportVisible = false;
+}
+
+export function getReturningReportItems(): ReportItem[] {
+  return [..._reportItems];
 }
 
 /** Draw the orange report badge on the left side of the screen. */
@@ -7627,6 +7767,20 @@ let _videoPlayButtons: Array<{ x: number; y: number; w: number; h: number; video
 let _lastExploreResult: { kind: string; label: string; icon: string; amount: number; showUntil: number } | null = null;
 let _colonizeButton: { x: number; y: number; w: number; h: number } | null = null;
 let _shieldToggleButton: { x: number; y: number; w: number; h: number } | null = null;
+let _airPurifierRepairButton: { x: number; y: number; w: number; h: number } | null = null;
+let _specialInventory: Record<string, number> = {};
+
+export function setSpecialInventory(inventory: Record<string, number>): void {
+  _specialInventory = { ...inventory };
+}
+
+let _pendingAirPurifierRepair: { starIndex: number } | null = null;
+
+export function consumePendingAirPurifierRepair(): { starIndex: number } | null {
+  const repair = _pendingAirPurifierRepair;
+  _pendingAirPurifierRepair = null;
+  return repair;
+}
 
 // Shield charging state — visual delay between button press and server-confirmed state
 const SHIELD_CHARGE_DURATION_MS = 3000; // 3 seconds to raise/lower
@@ -7717,9 +7871,23 @@ export function getTradeStationInfo(): TradeStationInfoResponse | null {
 }
 
 // Trade buttons state
-type TradeButtonDef = { x: number; y: number; w: number; h: number; giveType: 'ore' | 'food' | 'energy' | 'fuel'; receiveType: 'ore' | 'food' | 'energy' | 'fuel' };
+type TradeButtonDef = { x: number; y: number; w: number; h: number; giveType?: 'ore' | 'food' | 'energy' | 'fuel'; receiveType?: 'ore' | 'food' | 'energy' | 'fuel'; action?: 'start_purifier' | 'pay_purifier' | null };
 let _tradeButtons: TradeButtonDef[] = [];
 let _pendingTrade: { giveType: 'ore' | 'food' | 'energy' | 'fuel'; receiveType: 'ore' | 'food' | 'energy' | 'fuel' } | null = null;
+let _pendingPurifierAction: 'start_purifier' | 'pay_purifier' | null = null;
+
+import type { AirPurifierTradeOrder } from '../shared/quests';
+let _purifierOrder: AirPurifierTradeOrder | null = null;
+
+export function setPurifierOrder(order: AirPurifierTradeOrder | null): void {
+  _purifierOrder = order;
+}
+
+export function consumePendingPurifierAction(): 'start_purifier' | 'pay_purifier' | null {
+  const action = _pendingPurifierAction;
+  _pendingPurifierAction = null;
+  return action;
+}
 
 export function consumePendingTrade(): { giveType: 'ore' | 'food' | 'energy' | 'fuel'; receiveType: 'ore' | 'food' | 'energy' | 'fuel' } | null {
   const t = _pendingTrade;
@@ -8075,13 +8243,6 @@ export function drawDockPanel(
   ctx.fill();
   ctx.stroke();
 
-  // Orbit status text
-  ctx.font = f(9, 'bold');
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = G_BRIGHT;
-  ctx.fillText(`\u25CF ORBIT: ${dock.targetName.toUpperCase()}`, barX + 10, barY + barH / 2);
-
   // NO INTERCHANGE indicator at opponent stations (no resource transfer available)
   const isForeignStation = _panelsForeign && dock.targetType === 'feature' && dock.targetLabel === 'Station';
   if (isForeignStation && dock.docked) {
@@ -8141,6 +8302,31 @@ export function drawDockPanel(
   }
 
   const shieldBtnW = 58; // slightly wider for SHIELDS label
+
+  // Reserve the action-button strip so long station names cannot run beneath it.
+  const actionStripW = orbitBtns.reduce((total, button, index) => {
+    const buttonW = button.action === 'toggle_shield' ? shieldBtnW : btnW;
+    return total + buttonW + (index > 0 ? btnGap : 0);
+  }, 0);
+  const titleMaxW = Math.max(0, barW - actionStripW - 22);
+  ctx.font = f(9, 'bold');
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = G_BRIGHT;
+  const orbitTitle = `\u25CF ORBIT: ${dock.targetName.toUpperCase()}`;
+  if (titleMaxW > 0) {
+    let displayOrbitTitle = orbitTitle;
+    while (ctx.measureText(`${displayOrbitTitle}...`).width > titleMaxW && displayOrbitTitle.length > 8) {
+      displayOrbitTitle = displayOrbitTitle.slice(0, -1);
+    }
+    if (displayOrbitTitle !== orbitTitle) displayOrbitTitle += '...';
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(barX + 8, barY, titleMaxW, barH);
+    ctx.clip();
+    ctx.fillText(displayOrbitTitle, barX + 10, barY + barH / 2);
+    ctx.restore();
+  }
 
   _lastDockButtons = [];
   _shieldToggleButton = null;
@@ -8240,6 +8426,34 @@ export function drawDockPanel(
   // ── COLONIZE button (above orbit bar) ──
   // Show when: docked (planet or station) + star not player-owned + Colony Ship present + NOT a trading station
   _colonizeButton = null;
+  _airPurifierRepairButton = null;
+  const currentEconomy = starIndex != null ? _serverEconomyByStarIndex.get(starIndex) : null;
+  const canRepairAirPurifier = dock.docked
+    && dock.targetType === 'feature'
+    && dock.targetLabel === 'Station'
+    && currentEconomy?.starCondition !== undefined
+    && currentEconomy.starCondition !== 'normal'
+    && currentEconomy.starCondition !== 'lost'
+    && (_specialInventory.air_purifier_unit ?? 0) > 0;
+  if (canRepairAirPurifier) {
+    const repairW = 140;
+    const repairH = 28;
+    const repairX = (screenW - repairW) / 2;
+    const repairY = barY - repairH - 12;
+    ctx.fillStyle = 'rgba(80, 60, 10, 0.92)';
+    roundedRect(ctx, repairX, repairY, repairW, repairH, 5);
+    ctx.fill();
+    ctx.strokeStyle = '#ffcc44';
+    ctx.lineWidth = 2;
+    roundedRect(ctx, repairX, repairY, repairW, repairH, 5);
+    ctx.stroke();
+    ctx.font = f(11, 'bold');
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffcc44';
+    ctx.fillText('\u2692 REPAIR AIR', repairX + repairW / 2, repairY + repairH / 2);
+    _airPurifierRepairButton = { x: repairX, y: repairY, w: repairW, h: repairH };
+  }
   const canColonizeTarget = dock.targetLabel === 'Station' || dock.targetLabel === 'Planet';
   const isTradeStation = _postId && starIndex != null && isTradingStation(_postId, starIndex);
   if (dock.docked && canColonizeTarget && starIndex != null && !isTradeStation) {
@@ -8278,6 +8492,14 @@ export function drawDockPanel(
 
 /** Hit-test dock panel buttons (orbit bar). Returns the action if clicked, null otherwise. */
 export function hitTestDockPanel(screenPos: Vec2): DockPanelAction | null {
+  if (_airPurifierRepairButton) {
+    const b = _airPurifierRepairButton;
+    if (screenPos.x >= b.x && screenPos.x <= b.x + b.w && screenPos.y >= b.y && screenPos.y <= b.y + b.h) {
+      if (_panelsStarIndex != null) _pendingAirPurifierRepair = { starIndex: _panelsStarIndex };
+      playSound('click');
+      return 'repair_air';
+    }
+  }
   // Check SHIELD TOGGLE button
   if (_shieldToggleButton) {
     const b = _shieldToggleButton;

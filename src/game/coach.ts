@@ -172,7 +172,7 @@ export function dismissShipsTopic(): void {
 // Separate from onboarding and the Ships topic so expansion can be resumed
 // across a long ship build/transit without changing the first-session flow.
 
-export type ColonizationTopicStep = 'info' | 'open_ships' | 'build_probe' | 'colony_building' | 'build_colony' | 'send_colony' | 'arrival' | 'visit' | 'locate_planet' | 'orbit' | 'done';
+export type ColonizationTopicStep = 'info' | 'open_ships' | 'build_probe' | 'colony_building' | 'build_colony' | 'open_fleet' | 'send_colony' | 'arrival' | 'visit' | 'locate_planet' | 'orbit' | 'done';
 
 let _colonizationTopicActive = false;
 let _colonizationTopicStep: ColonizationTopicStep = 'done';
@@ -206,20 +206,21 @@ export function colonizationTopicNext(): void {
     send_colony: 'arrival',
     arrival: 'visit',
     visit: 'locate_planet',
-    locate_planet: 'orbit',
+    locate_planet: 'open_fleet',
   };
   const following = next[_colonizationTopicStep];
   if (following) _colonizationTopicStep = following;
 }
 
 /** Advance only when the player performs the requested action. */
-export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' | 'colony_built' | 'colony_sent' | 'arrived' | 'visited' | 'planet_found' | 'orbit_reached' | 'colonized', targetStar = -1): void {
+export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' | 'colony_built' | 'fleet_opened' | 'colony_sent' | 'arrived' | 'visited' | 'planet_found' | 'orbit_reached' | 'colonized', targetStar = -1): void {
   if (!_colonizationTopicActive) return;
   const next: Partial<Record<ColonizationTopicStep, ColonizationTopicStep>> = {
     open_ships: 'build_probe',
     build_probe: 'build_colony',
-    colony_building: 'send_colony',
-    build_colony: 'send_colony',
+    colony_building: 'open_fleet',
+    build_colony: 'open_fleet',
+    open_fleet: 'send_colony',
     send_colony: 'arrival',
     arrival: 'visit',
     visit: 'locate_planet',
@@ -227,7 +228,7 @@ export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' |
     orbit: 'orbit',
   };
   const expected: Record<ColonizationTopicStep, string> = {
-    info: '', open_ships: 'ships_opened', build_probe: 'probe_built', colony_building: 'colony_built', build_colony: 'colony_built',
+    info: '', open_ships: 'ships_opened', build_probe: 'probe_built', colony_building: 'colony_built', build_colony: 'colony_built', open_fleet: 'fleet_opened',
     send_colony: 'colony_sent', arrival: 'arrived', visit: 'visited', locate_planet: 'planet_found',
     orbit: 'colonized', done: 'colonized',
   };

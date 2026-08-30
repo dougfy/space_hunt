@@ -1,6 +1,7 @@
 // ── Planet Exploration Discovery System ──────────────────────────────────────
 // Deterministic discovery rolls based on global seed (starIndex + bodyIndex).
 // Each player gets ONE exploration per planet, stored server-side.
+import type { ItemId } from './items';
 
 /** Pod resource/effect types collected in belt & splash. */
 export type PodKind = 'refuel' | 'dock' | 'energy' | 'ore' | 'food' | 'upgrade';
@@ -22,6 +23,8 @@ export interface DiscoveryResult {
   amount: number;       // resource quantity (0 for non-resource)
   label: string;        // human-readable description
   icon: string;         // short emoji/symbol for HUD
+  itemId?: ItemId;      // persistent item granted by this discovery
+  itemCount?: number;
 }
 
 // ── Discovery Table ─────────────────────────────────────────────────────────
@@ -114,6 +117,7 @@ export function rollDiscovery(galaxySeed: number, starIndex: number, bodyIndex: 
     amount,
     label: entry.label,
     icon: entry.icon,
+    ...(entry.kind === 'artifact' ? { itemId: 'luminari_artifact' as const, itemCount: 1 } : {}),
   };
 }
 

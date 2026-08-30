@@ -55,7 +55,11 @@ export function getScifiStationSprite(level: number): HTMLImageElement | null {
 
 /** Get a sci-fi solar array sprite for the given level (1-8). */
 export function getScifiSolarArraySprite(level: number): HTMLImageElement | null {
-  const key = `scifi_solar_array_lv${Math.min(Math.max(level, 1), 8)}`;
+  const clampedLevel = Math.min(Math.max(level, 1), 8);
+  // The supplied level-5 file repeats the level-4 four-arm silhouette. The
+  // next asset is the first five-arm design, which is the intended LV5 step.
+  const assetLevel = clampedLevel === 5 ? 6 : clampedLevel >= 6 ? Math.min(clampedLevel + 1, 8) : clampedLevel;
+  const key = `scifi_solar_array_lv${assetLevel}`;
   const img = _scifiSprites.get(key);
   if (img && img.complete && img.naturalWidth > 0) return img;
   return null;
