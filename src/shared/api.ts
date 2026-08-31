@@ -39,6 +39,55 @@ export function normalizeSharedShipShape(shape: string | undefined): SharedShipS
   }
 }
 
+export type FeedbackType = 'bug' | 'comment';
+export type FeedbackChoice = 'controls' | 'too_slow' | 'didnt_know' | 'bug' | 'im_good' | 'really_good' | 'other';
+
+export type GlobalFeedbackEntry = {
+  id: string;
+  type: FeedbackType;
+  choice: FeedbackChoice | 'unknown';
+  comment: string;
+  user: string;
+  postId: string;
+  date: string;
+  version: string;
+  tier: string;
+  createdAt: number;
+};
+
+export function normalizeFeedbackEntry(input: {
+  type?: string;
+  choice?: string;
+  comment?: string;
+  username?: string;
+  user?: string;
+  postId?: string;
+  version?: string;
+  tier?: string;
+}): GlobalFeedbackEntry {
+  const type = input.type === 'bug' || input.type === 'comment' ? input.type : 'comment';
+  const choice = (input.choice ?? 'unknown') as FeedbackChoice | 'unknown';
+  const comment = (input.comment ?? '').trim();
+  const user = (input.username ?? input.user ?? 'anonymous').trim() || 'anonymous';
+  const postId = (input.postId ?? 'unknown').trim() || 'unknown';
+  const version = (input.version ?? 'unknown').trim() || 'unknown';
+  const tier = (input.tier ?? 'unknown').trim() || 'unknown';
+  const date = new Date().toISOString();
+
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+    type,
+    choice,
+    comment,
+    user,
+    postId,
+    date,
+    version,
+    tier,
+    createdAt: Date.now(),
+  };
+}
+
 export type OkResponse = {
   ok: true;
 };

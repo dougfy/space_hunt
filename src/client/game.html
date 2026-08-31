@@ -510,6 +510,43 @@
         text-transform: none;
       }
       .feedback-option:hover { background: rgba(80, 60, 10, 0.9); color: #ffffff; }
+      .feedback-option.other {
+        border-color: #ff9966;
+        background: rgba(90, 40, 15, 0.82);
+        color: #ffd6a6;
+      }
+      .feedback-option.other:hover { background: rgba(130, 60, 20, 0.9); color: #ffffff; }
+      #feedback-other { display: block; }
+      #feedback-text-label {
+        display: none;
+        color: #ffcc44;
+        font-family: monospace;
+        font-size: 9px;
+        margin-top: 4px;
+      }
+      #feedback-other-input {
+        display: none;
+        width: 100%;
+        min-height: 56px;
+        background: rgba(6, 16, 30, 0.92);
+        border: 1px solid #ffcc44;
+        color: #f7f2d0;
+        font-family: monospace;
+        font-size: 10px;
+        box-sizing: border-box;
+        resize: vertical;
+        padding: 6px;
+      }
+      #feedback-submit {
+        display: none;
+        background: rgba(25, 80, 30, 0.8);
+        border: 1px solid #66ffaa;
+        color: #caffd9;
+        font-family: monospace;
+        font-size: 10px;
+        padding: 8px 10px;
+        cursor: pointer;
+      }
       #feedback-thanks {
         display: none;
         color: #ffcc44;
@@ -540,8 +577,12 @@
       <button class="feedback-option" data-feedback="too_slow">Too slow</button>
       <button class="feedback-option" data-feedback="didnt_know">Didn't know what to do</button>
       <button class="feedback-option" data-feedback="bug">Bug</button>
+      <button id="feedback-other" class="feedback-option other" data-feedback="other">Other / not listed</button>
       <button class="feedback-option" data-feedback="im_good">I'm good</button>
       <button class="feedback-option" data-feedback="really_good">It's really good</button>
+      <label id="feedback-text-label" for="feedback-other-input">Add details</label>
+      <textarea id="feedback-other-input" placeholder="Tell us what happened or what you wanted to do..."></textarea>
+      <button id="feedback-submit" type="button">Submit</button>
       <div id="feedback-thanks">Thanks for the feedback!</div>
     </div>
     <div id="admin-panel">
@@ -567,6 +608,7 @@
         <button id="admin-autobot-reset" class="admin-btn danger" style="border-color:#ff6644">Bot Reset</button>
         <button id="admin-play-video" class="admin-btn" style="background:rgba(80,20,120,0.6);border-color:#c090ff;color:#c090ff">&#x25B6; Play Video</button>
         <button id="admin-audit-log" class="admin-btn" style="background:rgba(20,40,80,0.6);border-color:#88aaff;color:#88aaff">Audit Log</button>
+        <button id="admin-feedback-log" class="admin-btn" style="background:rgba(80,30,50,0.6);border-color:#ff88aa;color:#ffb4cc">Feedback Log</button>
       </div>
       <div id="admin-status"></div>
     </div>

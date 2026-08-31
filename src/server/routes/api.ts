@@ -110,6 +110,11 @@ function auditLog(postId: string, event: string, data: Record<string, unknown>):
   redis.zAdd(`audit:${postId}`, { member: entry, score: Date.now() }).catch(() => {});
 }
 
+function logGlobalFeedback(entry: Record<string, unknown>): void {
+  const payload = JSON.stringify({ ...entry, createdAt: Date.now() });
+  redis.zAdd('feedback:global', { member: payload, score: Date.now() }).catch(() => {});
+}
+
 export const api = new Hono();
 
 api.get('/init', async (c) => {
@@ -342,14 +347,58 @@ api.get('/debug/audit', requireDev, async (c) => {
   }
 });
 
-/** Player feedback — logged to audit for admin review */
+/** Player feedback — stored globally for admin review */
 api.post('/feedback', async (c) => {
-  const body = await c.req.json<{ username?: string; postId?: string; choice?: string }>();
-  const pid = body.postId ?? context.postId ?? 'unknown';
-  const user = body.username ?? 'anonymous';
-  const choice = body.choice ?? 'unknown';
-  auditLog(pid, 'feedback', { user, choice });
-  return c.json({ ok: true });
+  const body = await c.req.json<{
+    username?: string;
+    user?: string;
+    postId?: string;
+    type?: 'bug' | 'comment';
+    choice?: string;
+    comment?: string;
+    version?: string;
+    tier?: string;
+    date?: string;
+  }>();
+
+  const type = body.type === 'bug' || body.type === 'comment' ? body.type : 'comment';
+  const user = (body.username ?? body.user ?? 'anonymous').trim() || 'anonymous';
+  const comment = (body.comment ?? '').trim();
+  const payload = {
+    id: `fb:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    type,
+    choice: body.choice ?? 'unknown',
+    comment,
+    user,
+    postId: body.postId ?? context.postId ?? 'unknown',
+    version: body.version ?? 'unknown',
+    tier: body.tier ?? 'unknown',
+    date: body.date ?? new Date().toISOString(),
+  };
+
+  logGlobalFeedback(payload);
+  return c.json({ ok: true, saved: payload });
+});
+
+api.get('/admin/feedback', requireDev, async (c) => {
+  const type = c.req.query('type');
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '200', 10), 1000);
+  const raw = await redis.zRange('feedback:global', 0, -1).catch(() => [] as Array<string | { member: string; score: number }>);
+  const entries = raw
+    .map((entry) => {
+      const rawEntry = typeof entry === 'string' ? entry : entry?.member ?? '';
+      try {
+        return JSON.parse(rawEntry) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry): entry is Record<string, unknown> => entry !== null)
+    .filter((entry) => !type || String(entry.type ?? '') === type)
+    .slice(-limit)
+    .reverse();
+
+  return c.json({ count: entries.length, entries });
 });
 
 /** Admin: toggle dev mode (controls visibility of debug UI for all users). */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  normalizeFeedbackEntry,
   normalizeSharedShipShape,
   type ClaimPodResponse,
   type PlayerProfileResponse,
@@ -51,5 +52,26 @@ describe('shared API contracts', () => {
     expect(shotItem.shooterId).toBe('pilot:abcd');
     expect(claim.mine).toBe(true);
     expect(profile.name).toBe('pilot');
+  });
+
+  it('normalizes bug and comment submissions with global debug metadata', () => {
+    const entry = normalizeFeedbackEntry({
+      type: 'bug',
+      choice: 'other',
+      comment: '  The fleet screen froze after I clicked the ship menu.  ',
+      username: 'pilot',
+      postId: 'abc123',
+      version: '1.4.137',
+      tier: 'fleet',
+    });
+
+    expect(entry.type).toBe('bug');
+    expect(entry.choice).toBe('other');
+    expect(entry.comment).toBe('The fleet screen froze after I clicked the ship menu.');
+    expect(entry.user).toBe('pilot');
+    expect(entry.postId).toBe('abc123');
+    expect(entry.version).toBe('1.4.137');
+    expect(entry.tier).toBe('fleet');
+    expect(entry.date).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 });

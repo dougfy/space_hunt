@@ -2417,11 +2417,59 @@ for (const button of document.querySelectorAll<HTMLElement>('.tutorial-topic-btn
 // ── Feedback button + panel ─────────────────────────────────────────────────
 const feedbackBtn = document.getElementById('feedback-btn')!;
 const feedbackThanks = document.getElementById('feedback-thanks')!;
+const feedbackOther = document.getElementById('feedback-other') as HTMLDivElement | null;
+const feedbackOtherInput = document.getElementById('feedback-other-input') as HTMLTextAreaElement | null;
+const feedbackSubmit = document.getElementById('feedback-submit') as HTMLButtonElement | null;
+const feedbackTextLabel = document.getElementById('feedback-text-label');
 let feedbackSubmitted = false;
+
+function getFeedbackTierLabel(): string {
+  const state = getGameState();
+  const tier = state?.galaxy?.tier;
+  switch (tier) {
+    case 0: return 'galaxy';
+    case 1: return 'system';
+    case 2: return 'local';
+    case 3: return 'planet';
+    default: return 'unknown';
+  }
+}
+
+function submitFeedback(choice: string, customComment?: string): void {
+  if (feedbackSubmitted) return;
+  feedbackSubmitted = true;
+  const type = choice === 'bug' || choice === 'other' ? 'bug' : 'comment';
+  const comment = customComment ? customComment.trim() : '';
+  document.querySelectorAll('.feedback-option').forEach(b => (b as HTMLElement).style.display = 'none');
+  if (feedbackOther) feedbackOther.style.display = 'none';
+  if (feedbackSubmit) feedbackSubmit.style.display = 'none';
+  if (feedbackOtherInput) feedbackOtherInput.style.display = 'none';
+  if (feedbackTextLabel) feedbackTextLabel.style.display = 'none';
+  feedbackThanks.style.display = 'block';
+
+  fetch('/api/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username,
+      postId,
+      type,
+      choice,
+      comment,
+      version: versionJson.version,
+      tier: getFeedbackTierLabel(),
+      date: new Date().toISOString(),
+    }),
+  }).catch(() => {});
+
+  console.log('[FEEDBACK] submitted:', { choice, type, comment, tier: getFeedbackTierLabel() });
+  setTimeout(() => {
+    feedbackPanel.classList.remove('visible');
+  }, 2000);
+}
 
 function showFeedbackPanel(): void {
   if (feedbackSubmitted) return;
-  // The tutorial can start after the timer does (replay button), so re-check on fire.
   if (isCoachActive()) {
     console.log('[FEEDBACK] deferred — tutorial in progress');
     setTimeout(showFeedbackPanel, FEEDBACK_RETRY_MS);
@@ -2443,7 +2491,6 @@ function startFeedbackTimer(): void {
   setTimeout(showFeedbackPanel, FEEDBACK_DELAY_MS);
 }
 
-// The clock only starts once the tutorial is finished, so it can't interrupt onboarding.
 const feedbackGate = setInterval(() => {
   if (!_profileProcessed || isCoachActive()) return;
   clearInterval(feedbackGate);
@@ -2460,31 +2507,46 @@ feedbackBtn.addEventListener('click', (e) => {
 feedbackPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
 feedbackPanel.addEventListener('click', (e) => e.stopPropagation());
 
+if (feedbackOther && feedbackOtherInput && feedbackSubmit && feedbackTextLabel) {
+  feedbackOther.addEventListener('click', () => {
+    const current = feedbackOtherInput.value.trim();
+    if (current) {
+      submitFeedback('other', current);
+      return;
+    }
+    feedbackOtherInput.style.display = 'block';
+    feedbackTextLabel.style.display = 'block';
+    feedbackSubmit.style.display = 'inline-block';
+    feedbackOtherInput.focus();
+  });
+
+  feedbackSubmit.addEventListener('click', () => {
+    const custom = feedbackOtherInput.value.trim();
+    if (!custom) {
+      feedbackOtherInput.focus();
+      return;
+    }
+    submitFeedback('other', custom);
+  });
+}
+
 document.querySelectorAll('.feedback-option').forEach(btn => {
   btn.addEventListener('pointerdown', (e) => e.stopPropagation());
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     const choice = (btn as HTMLElement).dataset.feedback;
     if (!choice || feedbackSubmitted) return;
-    feedbackSubmitted = true;
-    // Hide options, show thanks
-    document.querySelectorAll('.feedback-option').forEach(b => (b as HTMLElement).style.display = 'none');
-    feedbackThanks.style.display = 'block';
-    // Send to server
-    fetch('/api/feedback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, postId, choice }),
-    }).catch(() => {});
-    console.log('[FEEDBACK] submitted:', choice);
-    // Auto-hide after 2 seconds
-    setTimeout(() => {
-      feedbackPanel.classList.remove('visible');
-    }, 2000);
+
+    if (choice === 'other') {
+      feedbackOtherInput?.focus();
+      return;
+    }
+
+    const input = (btn as HTMLElement).dataset.custom ?? '';
+    submitFeedback(choice, input);
   });
 });
 
-// Also show feedback panel on first completed objective (first_building)
 function showFeedbackButton(): void {
   showFeedbackPanel();
 }
@@ -3159,6 +3221,51 @@ document.getElementById('admin-audit-log')?.addEventListener('click', async () =
     ).join('');
     adminOutput(`Audit Log (${data.count})`, text, html);
   } catch (e) { adminStatus!.textContent = `audit error: ${e}`; }
+});
+
+document.getElementById('admin-feedback-log')?.addEventListener('click', async () => {
+  adminStatus!.textContent = 'Loading feedback log...';
+  try {
+    const res = await fetch('/api/admin/feedback?limit=100');
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({})) as Record<string, unknown>;
+      adminStatus!.textContent = `feedback error: ${res.status} ${errBody.error ?? errBody.detail ?? ''}`;
+      return;
+    }
+    const data = await res.json() as { count: number; entries: Array<Record<string, unknown>> };
+    const toFeedbackTimestamp = (entry: Record<string, unknown>) => {
+      if (entry.date !== undefined && entry.date !== null) {
+        return String(entry.date);
+      }
+      const createdAt = Number(entry.createdAt);
+      const fallbackMs = Number.isFinite(createdAt) ? createdAt : Date.now();
+      return new Date(fallbackMs).toISOString();
+    };
+    const lines = (data.entries ?? []).map((entry) => {
+      const ts = toFeedbackTimestamp(entry);
+      const type = String(entry.type ?? 'unknown');
+      const user = String(entry.user ?? 'unknown');
+      const choice = String(entry.choice ?? 'unknown');
+      const comment = String(entry.comment ?? '');
+      const version = String(entry.version ?? 'unknown');
+      const tier = String(entry.tier ?? 'unknown');
+      const postId = String(entry.postId ?? 'unknown');
+      return `${ts} | ${type} | ${user} | ${choice} | ${tier} | v${version} | post=${postId}\n${comment || '(no comment)'}`;
+    });
+    const text = `Global Feedback (${data.count} entries)\n${'─'.repeat(60)}\n${lines.join('\n\n') || 'No feedback yet'}`;
+    const html = (data.entries ?? []).map((entry) => {
+      const ts = toFeedbackTimestamp(entry);
+      const type = String(entry.type ?? 'unknown');
+      const user = String(entry.user ?? 'unknown');
+      const choice = String(entry.choice ?? 'unknown');
+      const comment = String(entry.comment ?? '(no comment)');
+      const version = String(entry.version ?? 'unknown');
+      const tier = String(entry.tier ?? 'unknown');
+      const postId = String(entry.postId ?? 'unknown');
+      return `<div class="admin-result-row"><span style="color:#666">${ts}</span> <span style="color:#ff88aa">${type}</span> <b>${user}</b><br/>choice=${choice} · tier=${tier} · v${version} · post=${postId}<br/>${comment}</div>`;
+    }).join('') || '<div class="admin-result-row">No feedback yet</div>';
+    adminOutput(`Global Feedback (${data.count})`, text, html);
+  } catch (e) { adminStatus!.textContent = `feedback error: ${e}`; }
 });
 
 // Video player — preload so it's instant on click
