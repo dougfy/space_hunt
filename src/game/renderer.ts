@@ -359,6 +359,8 @@ export function drawPlayerFleetAtStar(
   starIndex: number,
   stationWorldPos: Vec2,
 ) {
+  // At foreign stars, _serverShipsByStarIndex contains the foreign player's data; skip.
+  if (_panelsForeign) return;
   const fleet = _serverShipsByStarIndex.get(starIndex);
   if (!fleet || fleet.ships.length === 0) return;
 
@@ -485,7 +487,7 @@ export function drawShipStatus(r: Renderer, fuelUnits: number, fuelCapacity: num
   ctx.save();
   ctx.font = f(12, 'bold');
   ctx.textBaseline = 'top';
-  const y0 = 52; // below system info panel
+  const y0 = 72; // below sector title + home star label
   const fuelPct = fuelCapacity > 0 ? (fuelUnits / fuelCapacity) * 100 : 0;
   const fuelColor = fuelPct <= 25 ? '#FF5A3D' : '#4fffb0';
   ctx.fillStyle = fuelColor;
@@ -916,8 +918,8 @@ function getGalaxyZoomBtnPositions(r: Renderer) {
   const dpr = window.devicePixelRatio || 1;
   const screenH = r.height / dpr;
   return {
-    plus:  { x: 28, y: screenH - 68 },
-    minus: { x: 28, y: screenH - 38 },
+    plus:  { x: 28, y: screenH - 148 },
+    minus: { x: 28, y: screenH - 118 },
   };
 }
 
@@ -1417,7 +1419,7 @@ export function drawGalaxyModeToggle(r: Renderer): void {
   const screenH = r.height / dpr;
   // Position above the zoom buttons (bottom-left)
   const btnX = 28 - MODE_BTN_W / 2;
-  const btnY = screenH - 115;
+  const btnY = screenH - 195;
 
   const isFleet = _galaxyMode === 'fleet';
   const label = isFleet ? '⚓ FLEET' : '🧭 NAV';
@@ -1557,6 +1559,7 @@ export function drawGalaxyView(
   }
 
   // ── Stars (starburst effect) ──
+  const isFleetMode = _galaxyMode === 'fleet';
   for (const { star, tone, sx, sy } of screenStars) {
     const dist = Math.sqrt((star.pos.x - shipPos.x) ** 2 + (star.pos.y - shipPos.y) ** 2);
     const nearFactor = Math.max(0, 1 - dist / 30); // brighter when close
@@ -1575,6 +1578,23 @@ export function drawGalaxyView(
       tone,
       cardinalBoost,
     );
+
+    // Highlight current location in fleet mode
+    if (isFleetMode && star.index === galaxy.currentStarIndex) {
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.004);
+      ctx.save();
+      ctx.strokeStyle = `rgba(79, 255, 176, ${0.4 + pulse * 0.5})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx, sy, rayLen + 8 + pulse * 3, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.font = f(7, 'bold');
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = `rgba(79, 255, 176, ${0.6 + pulse * 0.4})`;
+      ctx.fillText('YOU ARE HERE', sx, sy - rayLen - 10);
+      ctx.restore();
+    }
 
     if (showNames) {
       ctx.save();
@@ -3661,7 +3681,8 @@ export function drawPlanetPanels(
     const isHidden = (i === 5 && !isAtTradingStation);
     const isDisabled = isHidden
       || (i === 5 && !_panelsDocked)
-      || (i !== 5 && tab.requiresDock && (!_panelsDocked || !_panelsOwned));
+      || (i !== 5 && tab.requiresDock && (!_panelsDocked || !_panelsOwned))
+      || ((i === 3 || i === 4) && isCoachActive());
     if (isHidden) continue; // skip rendering this tab entirely
 
     if (i === 1 && !isDisabled) _coachBuildTabRect = { x: tabX - 4, y: ty, w: TAB_W + 4, h: TAB_H };
@@ -4671,7 +4692,7 @@ function drawStatusPanelBody(
   x: number, y: number, w: number,
   statusRows: string[],
 ): number {
-  const bodyH = Math.max(TAB_H, statusRows.length * ROW_H + PANEL_PAD * 2 + (_isAdmin ? 58 : 24));
+  const bodyH = Math.max(TAB_H, statusRows.length * ROW_H + PANEL_PAD * 2 + (_isAdmin ? 68 : 24));
   drawPanelFrame(ctx, x, y, w, bodyH, 'STATUS', '\u25B3');
 
   ctx.font = f(8);
@@ -7833,6 +7854,29 @@ export function getBaseFuel(starIndex: number): number {
   return _serverEconomyByStarIndex.get(starIndex)?.store.fuel ?? 0;
 }
 
+/** Return local star economy data for the STATUS overlay. */
+export function getLocalStatusData(starIndex: number): {
+  store: { ore: number; food: number; energy: number; fuel: number };
+  rates: { ore: number; food: number; energy: number; fuel: number };
+  cap: number;
+  shieldRaised: boolean;
+  defenseScore: { shield: number; cannon: number; total: number };
+  starCondition?: string | undefined;
+  capacityPercent?: number | undefined;
+} | null {
+  const econ = _serverEconomyByStarIndex.get(starIndex);
+  if (!econ) return null;
+  return {
+    store: { ...econ.store },
+    rates: { ...econ.rates },
+    cap: econ.cap,
+    shieldRaised: econ.shieldRaised,
+    defenseScore: econ.defenseScore ?? { shield: 0, cannon: 0, total: 0 },
+    starCondition: econ.starCondition,
+    capacityPercent: econ.capacityPercent,
+  };
+}
+
 type ServerShipSnapshot = {
   ships: Array<{ typeId: number; count: number }>;
   building: { typeId: number; completeAt: number } | null;
@@ -7928,12 +7972,16 @@ const _foreignShipsByStarIndex = new Map<number, { owner: string; ships: Array<{
 export function setForeignFleet(
   stars: Record<string, { owner: string; ships: Array<{ typeId: number; count: number }>; skinId?: string }>,
 ): void {
-  _foreignShipsByStarIndex.clear();
+  const newKeys = new Set<number>();
   for (const [key, val] of Object.entries(stars)) {
     const idx = parseInt(key.replace('s:', ''), 10);
     if (!Number.isNaN(idx)) {
       _foreignShipsByStarIndex.set(idx, val);
+      newKeys.add(idx);
     }
+  }
+  for (const key of _foreignShipsByStarIndex.keys()) {
+    if (!newKeys.has(key)) _foreignShipsByStarIndex.delete(key);
   }
 }
 
@@ -8459,7 +8507,7 @@ export function drawDockPanel(
   if (dock.docked && canColonizeTarget && starIndex != null && !isTradeStation) {
     const starShips = _serverShipsByStarIndex.get(starIndex);
     const hasColonyShip = starShips?.ships.some(s => s.typeId === 8 && s.count > 0) ?? false;
-    if (!_panelsOwned && hasColonyShip) {
+    if (!_panelsOwned && !_panelsForeign && hasColonyShip) {
       const colBtnW = 140;
       const colBtnH = 28;
       const colBtnX = (screenW - colBtnW) / 2;
@@ -8567,5 +8615,47 @@ export function isShipPanelOpen(): boolean {
 
 export function closeShipPanel(): void {
   if (_openPanel === 2) _openPanel = -1;
+}
+
+// ── Abandon Ship Button ─────────────────────────────────────────────────────
+let _abandonBtn: { x: number; y: number; w: number; h: number } | null = null;
+
+export function drawAbandonButton(r: Renderer): void {
+  const { ctx } = r;
+  const dpr = window.devicePixelRatio || 1;
+  const screenW = r.width / dpr;
+  const screenH = r.height / dpr;
+  const w = 160;
+  const h = 28;
+  const x = (screenW - w) / 2;
+  const y = screenH * 0.55;
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
+
+  ctx.save();
+  roundedRect(ctx, x, y, w, h, 5);
+  ctx.fillStyle = `rgba(120, 20, 10, ${0.7 + pulse * 0.25})`;
+  ctx.fill();
+  roundedRect(ctx, x, y, w, h, 5);
+  ctx.strokeStyle = `rgba(255, 80, 60, ${0.6 + pulse * 0.4})`;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.font = f(11, 'bold');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = `rgba(255, 100, 80, ${0.7 + pulse * 0.3})`;
+  ctx.fillText('\u26A0 ABANDON SHIP', x + w / 2, y + h / 2);
+  ctx.restore();
+
+  _abandonBtn = { x, y, w, h };
+}
+
+export function hitTestAbandonButton(sx: number, sy: number): boolean {
+  if (!_abandonBtn) return false;
+  const b = _abandonBtn;
+  return sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h;
+}
+
+export function clearAbandonButton(): void {
+  _abandonBtn = null;
 }
 

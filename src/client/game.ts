@@ -7,7 +7,7 @@ console.log(`[STARTUP] game.ts module executing, t=${(performance.now() - ((glob
 import { context, requestExpandedMode } from '@devvit/web/client';
 import { telemetry } from '@devvit/analytics/client/reddit';
 import versionJson from '../../version.json';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, isJourneyDone, startCoach, restoreCoach, isCoachSkipped, getCoachStep, coachAdvance, isCoachActive, startShipsTopic, startComsTopic, startColonizationTopic, colonizationTopicAction, getColonizationTopicStep, getColonizationTopicTarget, openComsPanelForTutorial, getFontScaleName, setFontScaleByName, setTextAuditEnabled, getOverflowReport, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, setAllianceItemOffers, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, consumePendingAirPurifierRepair, setSpecialInventory, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getReturningReportItems, getTestState, confirmSkinPicker, getSoundHistory, showBuildError, setBuildCooldown } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, isJourneyDone, startCoach, restoreCoach, isCoachSkipped, getCoachStep, coachAdvance, isCoachActive, startShipsTopic, startComsTopic, startColonizationTopic, colonizationTopicAction, getColonizationTopicStep, getColonizationTopicTarget, openComsPanelForTutorial, getFontScaleName, setFontScaleByName, setTextAuditEnabled, getOverflowReport, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, setAllianceItemOffers, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, consumePendingAirPurifierRepair, setSpecialInventory, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getReturningReportItems, getTestState, confirmSkinPicker, getSoundHistory, consumePendingAbandon, showBuildError, setBuildCooldown } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
@@ -47,7 +47,7 @@ import type {
 } from '../shared/api';
 import { isTradingStation } from '../shared/trading';
 import { initSplashLeaderboard } from './splash-leaderboard';
-import { consumePendingPurifierAction, setPurifierOrder } from '../game/renderer';
+import { consumePendingPurifierAction, setPurifierOrder, getLocalStatusData } from '../game/renderer';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) throw new Error('Canvas #game-canvas not found');
@@ -137,6 +137,40 @@ let _lastPurifierCondition: string | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).__REDDIT_USERNAME__ = username;
 console.log(`[PERF] context resolved in ${(performance.now() - _t0).toFixed(0)}ms`);
+
+// ── Client Error Capture ────────────────────────────────────────────────────
+// Posts unhandled errors and bracketed console warnings to /api/telemetry/error
+{
+  const ERROR_PREFIXES = ['[TRADE]', '[ECON]', '[FLEET]', '[QUEST]', '[DOCK]', '[AUDIO]', '[FEEDBACK]', '[EXPLORE]'];
+  let _errorQueue: Array<{ message: string; stack?: string | undefined; source?: string | undefined; tier?: string | undefined }> = [];
+  let _errorFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  let _inErrorHandler = false;
+
+  function flushErrors(): void {
+    if (_inErrorHandler || _errorQueue.length === 0) return;
+    _inErrorHandler = true;
+    const batch = _errorQueue.splice(0, 20);
+    fetch('/api/telemetry/error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, postId, version: versionJson.version, errors: batch }),
+    }).catch(() => {}).finally(() => { _inErrorHandler = false; });
+  }
+
+  function queueError(message: string, stack?: string, source?: string): void {
+    _errorQueue.push({ message, stack, source, tier: getGameState()?.galaxy.tier?.toString() });
+    if (_errorQueue.length > 50) _errorQueue = _errorQueue.slice(-50);
+    if (!_errorFlushTimer) _errorFlushTimer = setTimeout(() => { _errorFlushTimer = null; flushErrors(); }, 5000);
+  }
+
+  window.addEventListener('error', (e) => { queueError(e.message, e.error?.stack, `${e.filename}:${e.lineno}`); });
+  window.addEventListener('unhandledrejection', (e) => { queueError(String(e.reason), (e.reason as Error)?.stack, 'unhandledrejection'); });
+
+  const origWarn = console.warn;
+  const origError = console.error;
+  console.warn = (...args: unknown[]) => { origWarn.apply(console, args); try { const msg = args.map(String).join(' '); if (ERROR_PREFIXES.some((p) => msg.includes(p))) queueError(msg, undefined, 'console.warn'); } catch { /* */ } };
+  console.error = (...args: unknown[]) => { origError.apply(console, args); try { const msg = args.map(String).join(' '); queueError(msg, undefined, 'console.error'); } catch { /* */ } };
+}
 
 // Direct entry (play.html) reaches game.ts before a deferred loader.
 initSplashLeaderboard();
@@ -1527,6 +1561,15 @@ async function pollEconomy() {
         body: JSON.stringify({ username, starIndex: pendingRefuel.starIndex, amount: pendingRefuel.amount }),
       }).catch(() => {});
     }
+    if (consumePendingAbandon()) {
+      currentShape = 'scout';
+      bridge.setShipShape('scout');
+      void fetch('/api/abandon-ship', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, postId }),
+      }).catch(() => {});
+    }
     const pendingShieldToggle = consumePendingToggleShield();
     if (pendingShieldToggle) {
       const charging = getShieldCharging();
@@ -2502,6 +2545,16 @@ feedbackBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   settingsPanel.classList.remove('visible');
   helpPanel.classList.remove('visible');
+  // Reset panel state so all choices are visible again
+  if (feedbackSubmitted) {
+    feedbackSubmitted = false;
+    feedbackThanks.style.display = 'none';
+    document.querySelectorAll('.feedback-option').forEach(b => (b as HTMLElement).style.display = '');
+    if (feedbackOther) feedbackOther.style.display = 'block';
+    if (feedbackOtherInput) { feedbackOtherInput.style.display = 'none'; feedbackOtherInput.value = ''; }
+    if (feedbackTextLabel) feedbackTextLabel.style.display = 'none';
+    if (feedbackSubmit) feedbackSubmit.style.display = 'none';
+  }
   feedbackPanel.classList.toggle('visible');
 });
 feedbackPanel.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -2511,7 +2564,7 @@ if (feedbackOther && feedbackOtherInput && feedbackSubmit && feedbackTextLabel) 
   feedbackOther.addEventListener('click', () => {
     const current = feedbackOtherInput.value.trim();
     if (current) {
-      submitFeedback('other', current);
+      submitFeedback('bug', current);
       return;
     }
     feedbackOtherInput.style.display = 'block';
@@ -2526,7 +2579,7 @@ if (feedbackOther && feedbackOtherInput && feedbackSubmit && feedbackTextLabel) 
       feedbackOtherInput.focus();
       return;
     }
-    submitFeedback('other', custom);
+    submitFeedback('bug', custom);
   });
 }
 
@@ -2537,7 +2590,7 @@ document.querySelectorAll('.feedback-option').forEach(btn => {
     const choice = (btn as HTMLElement).dataset.feedback;
     if (!choice || feedbackSubmitted) return;
 
-    if (choice === 'other') {
+    if (choice === 'bug') {
       feedbackOtherInput?.focus();
       return;
     }
@@ -2678,7 +2731,12 @@ function openGlobalStatusPreview(): void {
     .gsp-repair { margin-top:6px; padding:4px 7px; background:rgba(20,80,60,.7); border:1px solid #4fffb0; color:#4fffb0; font:bold 9px monospace; cursor:pointer; }
     .gsp-repair:disabled { opacity:.6; cursor:wait; }
     .gsp-foot { color:#527d6c; font-size:9px; padding:0 16px 14px; }
-    @media (max-width:600px) { #global-status-preview { padding:8px; align-items:flex-start; } .gsp-shell { max-height:calc(100vh - 16px); } .gsp-grid { grid-template-columns:1fr; gap:4px; } .gsp-summary { padding:10px; } .gsp-grid, .gsp-head { padding-left:10px; padding-right:10px; } .gsp-foot { padding-left:10px; padding-right:10px; } }
+    .gsp-local { padding:10px 16px; border-bottom:1px solid rgba(79,255,176,.25); }
+    .gsp-local h3 { color:#ffcc66; font-size:10px; letter-spacing:1px; margin:0 0 6px; }
+    .gsp-local-grid { display:grid; grid-template-columns:1fr 1fr; gap:4px 16px; font-size:10px; }
+    .gsp-local-grid span { color:#6ab89a; }
+    .gsp-local-grid b { color:#4fffb0; }
+    @media (max-width:600px) { #global-status-preview { padding:8px; align-items:flex-start; } .gsp-shell { max-height:calc(100vh - 16px); } .gsp-grid { grid-template-columns:1fr; gap:4px; } .gsp-summary { padding:10px; } .gsp-grid, .gsp-head, .gsp-local { padding-left:10px; padding-right:10px; } .gsp-foot { padding-left:10px; padding-right:10px; } }
   `;
   document.head.appendChild(style);
 
@@ -2687,9 +2745,10 @@ function openGlobalStatusPreview(): void {
   overlay.innerHTML = `
     <div class="gsp-shell" role="dialog" aria-label="Global status preview">
       <header class="gsp-head">
-        <div><div class="gsp-title">GLOBAL STATUS</div><div class="gsp-subtitle">LIVE ADMIN DATA</div></div>
+        <div><div class="gsp-title">STATUS</div><div class="gsp-subtitle">LIVE DATA</div></div>
         <button class="gsp-close" type="button" aria-label="Close preview">X</button>
       </header>
+      <div class="gsp-local" id="gsp-local-section"></div>
       <div class="gsp-summary">
         <div class="gsp-metric"><b>3</b><span>OWNED STARS</span></div>
         <div class="gsp-metric"><b>18</b><span>SHIPS DEPLOYED</span></div>
@@ -2724,9 +2783,43 @@ function openGlobalStatusPreview(): void {
           <div class="gsp-event"><em>INFO</em><span>Checking daily events...</span></div>
         </section>
       </div>
-      <div class="gsp-foot">Preview only. Values are synthetic and do not reflect your fleet.</div>
+      <section class="gsp-section" style="padding:0 16px 8px"><h3>WHAT'S NEW</h3>
+        <div class="gsp-event"><em>NEW</em><span>Status tab now opens full overlay with local + global data</span></div>
+        <div class="gsp-event"><em>NEW</em><span>Fleet mode centers on your location with "YOU ARE HERE" indicator</span></div>
+        <div class="gsp-event"><em>NEW</em><span>12 dedicated air-purifier voice lines for the trade quest flow</span></div>
+        <div class="gsp-event"><em>FIX</em><span>Star names now always visible on galaxy map</span></div>
+        <div class="gsp-event"><em>FIX</em><span>Galaxy buttons no longer cut off at bottom of screen</span></div>
+        <div class="gsp-event"><em>FIX</em><span>Fuel/shield text no longer overlaps sector title</span></div>
+        <div class="gsp-event"><em>FIX</em><span>Feedback panel can be reopened after submitting</span></div>
+      </section>
+      <div class="gsp-foot">v${versionJson.version} — Live data. Report items are the current returning-player report.</div>
     </div>`;
   document.body.appendChild(overlay);
+  // Populate local star status
+  const gs = getGameState();
+  const localStarIndex = gs?.galaxy.currentStarIndex;
+  const localSection = document.getElementById('gsp-local-section');
+  if (localSection && localStarIndex != null) {
+    const localEcon = getLocalStatusData(localStarIndex);
+    const starName = gs?.galaxy.stars[localStarIndex]?.name ?? `STAR ${localStarIndex}`;
+    const docked = !!gs?.dock;
+    if (localEcon) {
+      const fl = Math.floor;
+      localSection.innerHTML = `<h3>LOCAL — ${escapeHtml(starName)}</h3><div class="gsp-local-grid">`
+        + `<span>ORBIT:</span><b>${docked ? 'DOCKED' : 'APPROACHING'}</b>`
+        + `<span>ORE:</span><b>${fl(localEcon.store.ore)}/${localEcon.cap} (+${localEcon.rates.ore}/m)</b>`
+        + `<span>FOOD:</span><b>${fl(localEcon.store.food)}/${localEcon.cap} (+${localEcon.rates.food}/m)</b>`
+        + `<span>ENERGY:</span><b>${fl(localEcon.store.energy)}/${localEcon.cap} (+${localEcon.rates.energy}/m)</b>`
+        + `<span>FUEL:</span><b>${fl(localEcon.store.fuel)}/${localEcon.cap} (+${localEcon.rates.fuel}/m)</b>`
+        + (localEcon.defenseScore.total > 0 ? `<span>DEFENSE:</span><b>${localEcon.defenseScore.total} (S:${localEcon.defenseScore.shield} C:${localEcon.defenseScore.cannon})</b><span>SHIELDS:</span><b>${localEcon.shieldRaised ? 'RAISED' : 'LOWERED'}</b>` : '')
+        + (localEcon.starCondition && localEcon.starCondition !== 'normal' ? `<span>CONDITION:</span><b style="color:#ffcc44">${localEcon.starCondition.toUpperCase().replace('_', ' ')} (${localEcon.capacityPercent ?? '?'}%)</b>` : '')
+        + '</div>';
+    } else {
+      localSection.innerHTML = `<h3>LOCAL — ${escapeHtml(starName)}</h3><span style="font-size:9px;color:#6ab89a">No economy data available</span>`;
+    }
+  } else if (localSection) {
+    localSection.innerHTML = '<h3>LOCAL STATUS</h3><span style="font-size:9px;color:#6ab89a">Not at a star</span>';
+  }
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
   let requestGeneration = 0;
   const nameForStar = (index: number): string => getGameState()?.galaxy.stars[index]?.name ?? `STAR ${index}`;
@@ -2809,7 +2902,7 @@ function openGlobalStatusPreview(): void {
         }
       });
       const foot = overlay.querySelector<HTMLElement>('.gsp-foot');
-      if (foot) foot.textContent = 'Live admin data. Report items are the current returning-player report.';
+      if (foot) foot.textContent = `v${versionJson.version} — Live data. Report items are the current returning-player report.`;
     } catch (error) {
       if (generation !== requestGeneration || !document.body.contains(overlay)) return;
       console.warn('[GLOBAL STATUS] live data unavailable:', error);

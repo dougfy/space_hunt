@@ -10,7 +10,7 @@ import {
 import { vec2, clamp } from './math';
 import { distanceToAsteroidSurface } from './asteroids';
 import { NavigationTier } from './galaxy';
-import { getSelectedStarIndex, getGalaxyMode } from './renderer';
+import { getSelectedStarIndex } from './renderer';
 
 // Trigger zoom when ship is within ZOOM_TRIGGER_PIXELS screen pixels of an
 // asteroid surface. Converted to world units at runtime using the actual canvas
@@ -76,7 +76,7 @@ export function updateCamera(state: GameState, dt: number): void {
       if (state.galaxyZoom >= GALAXY_CENTER_THRESHOLD) {
         state.galaxyCamPos.x += (mid - state.galaxyCamPos.x) * 0.1;
         state.galaxyCamPos.y += (mid - state.galaxyCamPos.y) * 0.1;
-      } else if (state.galaxyZoom >= GALAXY_ORTHO_DEFAULT && getGalaxyMode() !== 'fleet') {
+      } else if (state.galaxyZoom >= GALAXY_ORTHO_DEFAULT) {
         const targetX = clamp(state.ship.pos.x, minX, maxX);
         const targetY = clamp(state.ship.pos.y, minY, maxY);
         const followRate = 0.05;

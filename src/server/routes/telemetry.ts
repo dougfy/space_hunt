@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { telemetry } from '@devvit/analytics/server/reddit';
-import { reddit } from '@devvit/web/server';
+import { redis, reddit } from '@devvit/web/server';
+import { requireDev } from '../core/admin-auth';
 
 const api = new Hono();
 
@@ -95,6 +96,43 @@ api.post('/journey/app-ready', async (c) => {
     console.error('[TELEMETRY] app-ready error:', e);
     return c.json({ error: 'Failed to record app ready' }, 500);
   }
+});
+
+// ── Client error capture ────────────────────────────────────────────────────
+const ERROR_LOG_KEY = 'errors:client';
+const ERROR_LOG_CAP = 200;
+
+api.post('/error', async (c) => {
+  try {
+    const body = await c.req.json<{ username?: string; postId?: string; version?: string; errors: Array<{ message: string; stack?: string; source?: string; tier?: string }> }>();
+    const now = Date.now();
+    for (const err of (body.errors ?? []).slice(0, 20)) {
+      const entry = JSON.stringify({ ts: now, user: body.username, postId: body.postId, version: body.version, message: err.message?.slice(0, 500), stack: err.stack?.slice(0, 500), source: err.source, tier: err.tier });
+      await redis.zAdd(ERROR_LOG_KEY, { member: entry, score: now });
+    }
+    const count = await redis.zCard(ERROR_LOG_KEY);
+    if (count > ERROR_LOG_CAP) await redis.zRemRangeByRank(ERROR_LOG_KEY, 0, count - ERROR_LOG_CAP - 1);
+    return c.json({ ok: true });
+  } catch (e) {
+    console.error('[TELEMETRY] error capture failed:', e);
+    return c.json({ ok: false }, 500);
+  }
+});
+
+api.get('/errors', requireDev, async (c) => {
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10), 500);
+  const raw = await redis.zRange(ERROR_LOG_KEY, 0, -1).catch(() => [] as Array<string | { member: string; score: number }>);
+  const entries = raw
+    .map((entry) => { try { return JSON.parse(typeof entry === 'string' ? entry : entry?.member ?? ''); } catch { return null; } })
+    .filter(Boolean)
+    .slice(-limit)
+    .reverse();
+  return c.json({ count: entries.length, entries });
+});
+
+api.delete('/errors', requireDev, async (c) => {
+  await redis.del(ERROR_LOG_KEY);
+  return c.json({ ok: true, cleared: true });
 });
 
 export default api;

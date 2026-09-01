@@ -1539,6 +1539,136 @@ Replace generic exploration results with lore-flavored audio voice lines:
 
 ---
 
+## Future Consideration: Foreign Dock & Refuel
+
+Docking at another player's space dock is visually possible but gameplay rules are undefined.
+
+**Open questions:**
+- Does refueling at a foreign dock consume their fuel stores?
+- Should it cost a premium (e.g. 2× fuel rate) as an implicit trade?
+- Does the dock owner need to opt-in (alliance only, open-to-all toggle, or always allowed)?
+- Can a player access BUILD/SHIPS tabs at a foreign dock, or only REFUEL + TRADE?
+- Should the dock owner receive a notification or earn resources from the visit?
+
+**Options to evaluate:**
+1. **Free refuel** — simple, encourages exploration, but removes fuel logistics pressure.
+2. **Costs their fuel** — creates PvP tension; dock owner may not want visitors.
+3. **Trade-based** — visitor pays ore/food/energy in exchange for fuel at a rate set by the dock owner or a fixed formula.
+4. **Alliance-only** — refueling at allied docks is free or discounted; hostiles are blocked.
+5. **Disabled** — foreign docks are view-only; only your own docks allow refuel.
+
+**Implementation notes:**
+- `/api/refuel` already validates star ownership; relaxing that check is the minimum change.
+- If fuel is deducted from the owner, the server must load *their* economy profile.
+- A dock-access permission flag on the star claim would support opt-in models.
+
+---
+
+## Production Ready — First Reddit Exposure Checklist
+
+Everything needed before inviting the first real players from Reddit.
+
+### 1. Subreddit & Post Setup
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Dedicated subreddit created (r/valcordia_space or similar) | ❌ | Public subreddit with game description, rules, and flair. |
+| Subreddit banner and icon | ❌ | Use existing screenshots or generate from the game. |
+| Welcome/rules post pinned | ❌ | Explain the game, how to play, how to report bugs. |
+| First game post published | ❌ | The custom post that embeds the game. |
+| Cross-post strategy decided | ❌ | Where to announce: r/WebGames, r/IndieGaming, r/incremental_games, r/reddit (Devvit showcase). |
+| Devvit app review passed | ✅ | UGC reportability (#21) and admin security (#22) already resolved. |
+| App published (not just uploaded) | ❌ | `devvit publish` to make it installable on the public subreddit. |
+
+### 2. Analytics & Feedback Pipeline
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Devvit Journey analytics active | ✅ Done (#16) | Core funnel instrumented and firing in production. |
+| Feedback panel accessible | ✅ | In-game feedback button with comment/bug text input. |
+| Feedback data retrievable | ✅ | Admin can query `/api/admin/feedback` — verified with 4 entries. |
+| Reddit comments enabled on game post | ❌ | Players should be able to comment on the post itself. |
+| Modmail pipeline tested | ✅ | DM report button sends modmail (#21). |
+| Crash/error logging | ✅ | Client error capture (v1.4.147) — global errors, rejected promises, bracketed warnings posted to `/api/telemetry/error`. Admin query via `/api/telemetry/errors`. |
+| Session duration / drop-off visibility | ✅ | Devvit Journeys dashboard shows funnel; player logs provide per-session detail. |
+
+### 3. First 5 Minutes — Playability Gate
+
+These must work smoothly for a brand-new player with no context.
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Game loads within 5 seconds | ⚠️ | Splash instant; full game first-load ~39s (JS bundle). Loading screen now shows during download (v1.4.148). Subsequent loads fast (cached). **Code-splitting option investigated:** lazy-load game engine after splash would cut time-to-first-visual to ~3–5s but carries **high risk** — game.ts has ~20 top-level side effects, Devvit context must bridge across the split, and the refactor touches every init path. Estimated 4–5 hours with significant regression risk. **Deferred** until after first Reddit exposure; current loading screen is acceptable for launch. |
+| Onboarding tutorial completes without confusion | ✅ | 7-step coach shipped (#26). Undocking (#25) and refueling (#30) addressed in coach flow. |
+| Player can BUILD their first structure | ✅ | Coach step covers this. |
+| Player can UNDOCK and fly | ✅ | Coach step with callout (#25). |
+| Player can SCAN a planet | ✅ | Coach step covers this. |
+| Player can REFUEL | ⚠️ | Refuel at Space Dock works (#37) but not intuitive (#30). Needs coach callout or auto-refuel. |
+| Help panel is discoverable | ✅ | Coach points to `?` button. |
+| No dead-end states in first session | ⚠️ | Stuck-in-galaxy fixed (#29), but fuel-empty-at-foreign-star recovery needs testing. |
+| Voice/audio works on first interaction | ✅ | AudioContext resumed on first tap. |
+| Mobile (Reddit app) layout fits | ⚠️ | iPad sizing (#6) and pinch conflicts (#7) still open. |
+
+### 4. Colonization Flow — Must Be Clear
+
+The path from first star to second star is the core mid-game loop. Playtest feedback (#32, #42) confirms this is too opaque.
+
+| Step | Current State | Required for Launch |
+|------|--------------|-------------------|
+| Know you need a Colony Ship | ❌ Not taught | Add coach callout or status panel hint after station reaches LV2+. |
+| Build a Colony Ship | ✅ Works | Ships tab, requires shipyard. |
+| Send the Colony Ship (FLEET tab) | ⚠️ Works but confusing | Highlight eligible stars; explain why others are greyed out. |
+| Wait for arrival | ✅ Works | Transit timer visible in Fleet panel. |
+| Visit the destination star | ⚠️ No guidance | Player must know to fly there after arrival. Needs a notification or callout. |
+| Dock and press COLONIZE | ⚠️ Works but not prompted | Show COLONIZE action prominently when colony ship has arrived. |
+| **Interactive colonization tutorial** | ❌ Not started (#42) | Guided multi-step sequence with resumable checkpoints. |
+
+### 5. Known Bugs to Fix Before Launch
+
+| # | Bug | Severity | Ref |
+|---|-----|----------|-----|
+| 6 | iPad sizing | Medium | #6 |
+| 7 | Pinch gesture conflicts | Medium | #7 |
+| 27 | Buildings not visible on star visit | High | #27 |
+| 28 | Text contrast too dim | Medium | #28 |
+| 30 | Refueling not intuitive | High | #30 |
+| 41 | Galaxy/System return resets moving ship | High | #41 |
+
+### 6. Content & Polish
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Introductory lore crawl | ❌ (#20.5) | Sets tone on first load. Low effort, high impact. |
+| What's New section in STATUS overlay | ✅ | Shows recent changes to returning players. |
+| Splash screen tune-up | ❌ | First impression for new players. Needs: clear game title/tagline, polished layout, responsive sizing, "How to Play" or quick-start hint, smooth transition into game. Review asteroid mini-game speed/difficulty, leaderboard placement, button styling, and overall visual consistency with the in-game UI. |
+| Leaderboard visible on splash | ⚠️ (#43) | Shipped but tutorial entry pending. |
+| Bot players active for a living galaxy | ⚠️ (#13) | Bot exists but needs tuning for believable presence. |
+| Sound volume / mute easily accessible | ✅ | Settings panel has mute toggle. |
+| Screenshot-worthy moments | ❌ | Consider a screenshot/share button for social proof. |
+
+### 7. Deployment & Operations
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Production subreddit uses `devvit publish` (not `devvit upload`) | ❌ | Upload is dev-only; publish makes it installable. |
+| Redis data backup/export plan | ❌ | No built-in backup for Devvit Redis. Consider periodic export via admin endpoint. |
+| Rate limiting on public endpoints | ⚠️ | Devvit handles some; verify no abuse vectors on `/api/explore`, `/api/trade-station/trade`. |
+| Error handling for Redis outages | ⚠️ | Most endpoints catch errors; test graceful degradation. |
+| Version rollback plan | ❌ | Document how to revert if a deploy breaks production. |
+
+### 8. Launch Day Checklist
+
+1. Final playtest on production subreddit (not dev).
+2. Verify analytics events firing in Devvit dashboard.
+3. Pin a welcome post with instructions and known limitations.
+4. Cross-post announcement to 2–3 relevant subreddits.
+5. Monitor feedback panel submissions and modmail for first 24 hours.
+6. Have a hotfix deploy ready (keep a terminal with the repo open).
+7. Check leaderboard is populating correctly with real players.
+8. Respond to early Reddit comments within the first few hours.
+
+---
+
 ## Future Consideration: Moderator-Based Admin Commands
 
 Currently admin access is hardcoded in `src/server/core/admin-auth.ts`. A future improvement could tie admin commands to the subreddit's moderator list using `reddit.getModerators()`. This would allow adding/removing admins via Reddit's mod panel instead of redeploying.

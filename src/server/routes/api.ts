@@ -781,6 +781,25 @@ api.post('/refuel', async (c) => {
   return c.json(result);
 });
 
+/** Emergency abandon ship — reset player to home star with a scout. */
+api.post('/abandon-ship', async (c) => {
+  const { username, postId } = await c.req.json<{ username: string; postId: string }>();
+  if (!username || !postId) return c.json({ status: 'error', message: 'missing fields' }, 400);
+  try {
+    const claims = await getClaimedStars(redis, postId);
+    const homeClaim = claims.find((cl) => cl.username.toLowerCase() === username.toLowerCase());
+    if (!homeClaim) return c.json({ status: 'error', message: 'no home star' }, 400);
+    // Replace entire fleet with a single scout
+    const shipsKey = `ships:${postId}:${homeClaim.starIndex}:${username.toLowerCase()}`;
+    await redis.hSet(shipsKey, { ships: JSON.stringify([{ typeId: 1, count: 1 }]) });
+    console.log(`[ABANDON] user=${username} warped home to star=${homeClaim.starIndex}`);
+    return c.json({ ok: true, homeStarIndex: homeClaim.starIndex });
+  } catch (e) {
+    console.error('[ABANDON] error:', e);
+    return c.json({ status: 'error', message: 'abandon failed' }, 500);
+  }
+});
+
 /** Start a building purchase/upgrade for the given star. */
 api.post('/buildings/buy', async (c) => {
   const body = await c.req.json<BuildBuildingRequest>();

@@ -37,6 +37,7 @@ import {
   drawReportBadge, drawReportPanel, hitTestReportBadge, hitTestReportDismiss,
   openReportPanel, dismissReport, isReportPanelOpen,
   triggerBuildButtonByIndex, triggerShipButtonByIndex,
+  drawAbandonButton, hitTestAbandonButton, clearAbandonButton,
 } from './renderer';
 import type { GalaxyMode as _GalaxyMode } from './renderer';
 import type { DevvitCallbacks } from './bridge';
@@ -64,6 +65,8 @@ let lastTime = 0;
 let poseTimer = 0;
 let _savedDock: GameState['dock'] = null; // preserved across temporary galaxy jumps
 let _savedTierPos: GameState['ship']['pos'] | null = null; // ship pos before a temporary galaxy jump
+let _strandedTimer = 0; // seconds at fuel=0 and not docked
+const ABANDON_DELAY = 3; // seconds before abandon button appears
 
 /** Star closest to a galaxy-tier position, or -1 when no stars exist. */
 function findNearestStarIndex(pos: GameState['ship']['pos']): number {
@@ -324,6 +327,52 @@ export function relocateToHomeStar(starIndex: number): void {
   console.log(`[RELOCATE] moved to star ${starIndex} (${star.name})`);
 }
 
+/** Emergency warp to home star when stranded with no fuel. */
+export function abandonShip(): void {
+  if (!gameState) return;
+  const homeIdx = gameState.galaxy.homeStarIndex;
+  const home = gameState.galaxy.stars[homeIdx];
+  if (!home) return;
+
+  // Reset to home star planet tier, docked at station
+  gameState.galaxy.currentStarIndex = homeIdx;
+  gameState.galaxy.bodies = generateSystem(home, getPostId());
+  const stationBody = gameState.galaxy.bodies[0];
+  if (stationBody) {
+    gameState.galaxy.tier = NavigationTier.Planet;
+    gameState.galaxy.currentBodyIndex = 0;
+    const feat = stationBody.features.find(f => f.type === 'station');
+    if (feat) {
+      const sx = Math.cos(feat.angle) * feat.dist;
+      const sy = Math.sin(feat.angle) * feat.dist;
+      gameState.ship.pos = vec2(sx - Math.cos(feat.angle) * 0.3, sy - Math.sin(feat.angle) * 0.3);
+      gameState.ship.ang = feat.angle;
+      const fi = stationBody.features.indexOf(feat);
+      gameState.dock = { docked: true, targetType: 'feature', bodyIndex: 0, featureIndex: fi, targetName: feat.name, targetLabel: 'Station', approachTimer: 1 };
+    }
+  }
+  gameState.ship.vel = vec2(0, 0);
+  gameState.ship.thrust = false;
+  gameState.shipShape = 'scout';
+  gameState.fuelUnits = FUEL_CAPACITY_BY_SHAPE.scout;
+  gameState.worldOffset = vec2(0, 0);
+  _strandedTimer = 0;
+  _savedDock = null;
+  _savedTierPos = null;
+  clearAbandonButton();
+  closeAllPanels();
+  playSound('fuel_critical');
+  _pendingAbandon = true;
+  console.log('[ABANDON] warped to home star, reset to scout');
+}
+
+let _pendingAbandon = false;
+export function consumePendingAbandon(): boolean {
+  if (!_pendingAbandon) return false;
+  _pendingAbandon = false;
+  return true;
+}
+
 /**
  * Restore player to a saved position (star + tier + body).
  * Called on reload to resume where the player left off.
@@ -567,6 +616,7 @@ export function startGame(
     drawCoachCongratsTop(renderer!);
     drawReportBadge(renderer!, gameState!.elapsedTime);
     drawReportPanel(renderer!);
+    if (_strandedTimer >= ABANDON_DELAY) drawAbandonButton(renderer!);
 
     animFrame = requestAnimationFrame(loop);
   };
@@ -629,6 +679,14 @@ function update(dt: number): void {
   if (inputState.pointerDown && inputState.pointerPos) {
     if (hitTestCoachButtons(inputState.pointerPos.x, inputState.pointerPos.y)) {
       inputState.pointerDown = false;
+    }
+  }
+
+  // Abandon ship button — highest priority after coach
+  if (inputState.pointerDown && inputState.pointerPos && _strandedTimer >= ABANDON_DELAY) {
+    if (hitTestAbandonButton(inputState.pointerPos.x, inputState.pointerPos.y)) {
+      inputState.pointerDown = false;
+      abandonShip();
     }
   }
 
@@ -783,19 +841,32 @@ function update(dt: number): void {
     const panelIdx = hitTestPlanetPanels(screenW, screenH, inputState.pointerPos.x, inputState.pointerPos.y);
     if (panelIdx >= 0) {
       journeyAction();
-      const fleetAction = togglePlanetPanel(panelIdx);
-      // Fleet tab opened from non-galaxy tier → jump to galaxy map (scouts cannot use fleet)
-      if (fleetAction === 'fleet-opened' && gameState.galaxy.tier !== NavigationTier.Galaxy) {
-        _savedDock = gameState.dock; // preserve dock across temporary galaxy jump
-        _savedTierPos = { ...gameState.ship.pos };
-        const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet';
-        setGalaxyJumpReturnTier(returnTier);
-        gameState.galaxy.tier = NavigationTier.Galaxy;
-        gameState.ship.vel = { x: 0, y: 0 };
-        gameState.ship.thrust = false;
-        setGalaxyMode('fleet');
+      if (panelIdx === 0) {
+        // STATUS tab opens the full-screen overlay instead of the canvas panel
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (globalThis as any).__openGlobalStatus?.();
+        inputState.pointerDown = false;
+      } else {
+        const fleetAction = togglePlanetPanel(panelIdx);
+        // Fleet tab opened from non-galaxy tier → jump to galaxy map (scouts cannot use fleet)
+        if (fleetAction === 'fleet-opened' && gameState.galaxy.tier !== NavigationTier.Galaxy) {
+          _savedDock = gameState.dock; // preserve dock across temporary galaxy jump
+          _savedTierPos = { ...gameState.ship.pos };
+          const returnTier = gameState.galaxy.tier === NavigationTier.System ? 'system' : gameState.galaxy.tier === NavigationTier.Local ? 'local' : 'planet';
+          setGalaxyJumpReturnTier(returnTier);
+          gameState.galaxy.tier = NavigationTier.Galaxy;
+          gameState.ship.vel = { x: 0, y: 0 };
+          gameState.ship.thrust = false;
+          // Center camera and ship on current star when opening fleet
+          const curStar = gameState.galaxy.stars[gameState.galaxy.currentStarIndex];
+          if (curStar) {
+            gameState.galaxyCamPos = { x: curStar.pos.x, y: curStar.pos.y };
+            gameState.ship.pos = { x: curStar.pos.x, y: curStar.pos.y };
+          }
+          setGalaxyMode('fleet');
+        }
+        inputState.pointerDown = false;
       }
-      inputState.pointerDown = false;
     } else if (panelIdx === -2) {
       inputState.pointerDown = false;
     } else if (panelIdx === -1 && isAnyPanelOpen()) {
@@ -1157,6 +1228,15 @@ function update(dt: number): void {
     }
   }
 
+  // Stranded detection: fuel=0, not docked, not at home star
+  const isAtHome = gameState.galaxy.currentStarIndex === gameState.galaxy.homeStarIndex;
+  if (gameState.fuelUnits <= 0 && !gameState.dock?.docked && !isAtHome) {
+    _strandedTimer += dt;
+  } else {
+    _strandedTimer = 0;
+    clearAbandonButton();
+  }
+
   // Pod discovery
   updatePodDiscovery(gameState);
 
@@ -1373,7 +1453,7 @@ function render(): void {
   // ── Galaxy tier ──
   if (tier === NavigationTier.Galaxy) {
     const shipRenderSize = SHIP_SIZE * 3;
-    drawGalaxyView(renderer, camera, gameState.galaxy, gameState.ship.pos, true, _debugBounds);
+    drawGalaxyView(renderer, camera, gameState.galaxy, gameState.ship.pos, true, true);
 
     // Draw ghost ships in galaxy
     for (const g of gameState.ghosts) {
@@ -1522,7 +1602,9 @@ function render(): void {
           ? { x: Math.cos(stationFeat.angle) * stationFeat.dist, y: Math.sin(stationFeat.angle) * stationFeat.dist }
           : { x: 0, y: 1.5 }; // above planet center
         drawPlayerFleetAtStar(renderer, camera, gameState.galaxy.currentStarIndex, anchorPos);
-        drawForeignShipsAtStar(renderer, camera, gameState.galaxy.currentStarIndex, anchorPos);
+        if (gameState.galaxy.stars[gameState.galaxy.currentStarIndex]?.owner !== 'player') {
+          drawForeignShipsAtStar(renderer, camera, gameState.galaxy.currentStarIndex, anchorPos);
+        }
       }
     }
 

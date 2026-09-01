@@ -1,5 +1,6 @@
-import type { BuildStatus } from './api';
-import type { ResourceStore } from './api';
+// Duplicated to avoid circular import with api.ts
+type ResourceStore = { ore: number; food: number; energy: number; fuel: number };
+type BuildStatus = 'LOCKED' | 'READY' | 'UPGRADING' | 'ACTIVE';
 
 export type StarCondition = 'normal' | 'reduced_capacity' | 'critical_failure' | 'lost';
 export type AirPurifierQuestState = 'active' | 'resolved' | 'failed';

@@ -5,7 +5,7 @@ export { createDevvitBridge } from './bridge';
 export type { DevvitBridge, DevvitCallbacks } from './bridge';
 export type { RemotePoseItem } from './ghosts';
 export type { GameState, ShipShape, Ghost } from './types';
-export { getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, onColonizeSuccess, consumePendingRefuel } from './game-loop';
+export { getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, onColonizeSuccess, consumePendingRefuel, abandonShip, consumePendingAbandon } from './game-loop';
 export { skipJourney, startJourney, isJourneyDone } from './journey';
 export { startCoach, restoreCoach, resumeCoach, isCoachActive, canResumeCoach, getCoachStep, getCoachStepLabel, isCoachSkipped, coachAdvance, dismissCoach, startShipsTopic, startComsTopic, startColonizationTopic, colonizationTopicAction, getColonizationTopicStep, getColonizationTopicTarget } from './coach';
 export { getFontScaleName, setFontScaleByName } from './font';

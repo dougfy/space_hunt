@@ -565,6 +565,7 @@
       <div class="spinner"></div>
       <div class="sub">initializing systems...</div>
     </div>
+    <script>document.getElementById('loading-screen').style.display='flex';</script>
     <div id="icon-bar">
       <button id="feedback-btn" class="icon-btn" title="Feedback" style="background:rgba(60,50,10,0.8);border-color:#ffcc44;color:#ffcc44;font-size:9px">FB</button>
       <button id="settings-btn" class="icon-btn" title="Settings">&#x2699;</button>
@@ -576,8 +577,7 @@
       <button class="feedback-option" data-feedback="controls">Controls</button>
       <button class="feedback-option" data-feedback="too_slow">Too slow</button>
       <button class="feedback-option" data-feedback="didnt_know">Didn't know what to do</button>
-      <button class="feedback-option" data-feedback="bug">Bug</button>
-      <button id="feedback-other" class="feedback-option other" data-feedback="other">Other / not listed</button>
+      <button id="feedback-other" class="feedback-option other" data-feedback="bug">Comment / Bug</button>
       <button class="feedback-option" data-feedback="im_good">I'm good</button>
       <button class="feedback-option" data-feedback="really_good">It's really good</button>
       <label id="feedback-text-label" for="feedback-other-input">Add details</label>
