@@ -765,10 +765,17 @@ api.get('/buildings', async (c) => {
     return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
   }
 
-  if (context.postId) await ensureAirPurifierQuest(redis, context.postId, username);
+  try {
+    if (context.postId) await ensureAirPurifierQuest(redis, context.postId, username);
 
-  const response = await loadStarEconomy(redis, username, starIndex, Date.now(), skinId ?? undefined);
-  return c.json<StarEconomyResponse>(response);
+    const response = await loadStarEconomy(redis, username, starIndex, Date.now(), skinId ?? undefined);
+    return c.json<StarEconomyResponse>(response);
+  } catch (error) {
+    // Without this the client silently renders every building as LOCKED.
+    console.error(`[BUILDINGS] load failed user=${username} star=${starIndex}:`, error);
+    const message = error instanceof Error ? error.message : 'Unable to load buildings';
+    return c.json<ErrorResponse>({ status: 'error', message }, 500);
+  }
 });
 
 /** Debit fuel from a star when a ship refuels at dock. */

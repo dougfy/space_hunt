@@ -1696,7 +1696,12 @@ async function pollEconomy() {
     }
     const res = await fetch(buildingsUrl);
     console.log(`[PERF] /api/buildings fetch in ${(performance.now() - _tBldg).toFixed(0)}ms`);
-    if (!res.ok) return;
+    if (!res.ok) {
+      // Silent failure here leaves the BUILD panel showing every structure as LOCKED.
+      const errBody = await res.text().catch(() => '');
+      console.warn(`[ECON] buildings fetch failed star=${starIndex} status=${res.status} ${errBody.slice(0, 200)}`);
+      return;
+    }
     const data = await res.json() as StarEconomyResponse;
     setServerStarEconomy({
       starIndex: data.starIndex,

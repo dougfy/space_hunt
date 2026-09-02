@@ -4843,8 +4843,13 @@ function drawBuildPanelBody(
   ctx.font = f(7);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.fillStyle = G_MED;
-  ctx.fillText(`LV${toRoman(stationLevel)} O:${formatCompactNumber(oreNow)} F:${formatCompactNumber(foodNow)} E:${formatCompactNumber(energyNow)} Fu:${formatCompactNumber(fuelNow)}`, x + PANEL_PAD, y + 28);
+  ctx.fillStyle = serverEcon ? G_MED : '#ffb84d';
+  ctx.fillText(
+    serverEcon
+      ? `LV${toRoman(stationLevel)} O:${formatCompactNumber(oreNow)} F:${formatCompactNumber(foodNow)} E:${formatCompactNumber(energyNow)} Fu:${formatCompactNumber(fuelNow)}`
+      : 'STAR DATA UNAVAILABLE — RETRYING',
+    x + PANEL_PAD, y + 28,
+  );
 
   // COMPLETE button (if any build in progress)
   const hasActiveBuild = serverEcon
@@ -4997,7 +5002,8 @@ function drawBuildPanelBody(
           ? (level >= 1 ? 'UPGRADE' : 'BUILD')
           : isBusy
             ? (level >= 1 ? `LV ${toRoman(level)}` : 'BUSY')
-            : isLocked ? 'LOCKED' : 'NEED RES';
+            : !serverEcon ? 'NO DATA'
+              : isLocked ? 'LOCKED' : 'NEED RES';
       ctx.fillStyle = isFlashing ? '#ffb84d' : enabled ? G_BRIGHT : G_MED;
       ctx.font = isFlashing ? f(6) : f(7);
       ctx.fillText(statusLabel, bx + extBtnW / 2, by + 30);

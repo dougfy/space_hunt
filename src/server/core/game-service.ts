@@ -160,6 +160,17 @@ function hasEnoughResources(store: ResourceStore, cost: ResourceStore): boolean 
   return store.ore >= cost.ore && store.food >= cost.food && store.energy >= cost.energy && store.fuel >= (cost.fuel ?? 0);
 }
 
+/** Corrupt buff data must not take down economy, ship and refuel reads. */
+function parseBuffs(raw: string | undefined): ActiveBuff[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed as ActiveBuff[] : [];
+  } catch {
+    return [];
+  }
+}
+
 function subtractResources(store: ResourceStore, cost: ResourceStore): ResourceStore {
   return {
     ore: store.ore - cost.ore,
@@ -734,7 +745,7 @@ export async function loadStarEconomy(
 
   // Check for resonance buff (production multiplier)
   const buffsRaw = await store.get(`buffs:${username.toLowerCase()}`);
-  const buffs: ActiveBuff[] = buffsRaw ? JSON.parse(buffsRaw) : [];
+  const buffs: ActiveBuff[] = parseBuffs(buffsRaw);
   const activeBuffs = filterActiveBuffs(buffs, now);
   const rateMult = hasActiveBuff(activeBuffs, 'resonance', now) ? RESONANCE_MULTIPLIER : 1;
 
@@ -907,7 +918,7 @@ export async function startBuildingUpgrade(
 
   // Check for chrono buff (reduces build time)
   const buffsRaw = await store.get(`buffs:${body.username.toLowerCase()}`);
-  const playerBuffs: ActiveBuff[] = buffsRaw ? JSON.parse(buffsRaw) : [];
+  const playerBuffs: ActiveBuff[] = parseBuffs(buffsRaw);
   const chronoActive = hasActiveBuff(playerBuffs, 'chrono', now);
   const buildMult = chronoActive ? CHRONO_MULTIPLIER : 1;
 
@@ -1142,7 +1153,7 @@ export async function buyShip(
   let buildDurationMs = catalog.buildSeconds * 1000;
   if (!useBlueprint) {
     const buffsRaw = await store.get(`buffs:${username.toLowerCase()}`);
-    const playerBuffs: ActiveBuff[] = buffsRaw ? JSON.parse(buffsRaw) : [];
+    const playerBuffs: ActiveBuff[] = parseBuffs(buffsRaw);
     if (hasActiveBuff(playerBuffs, 'chrono', now)) {
       buildDurationMs = Math.round(buildDurationMs * CHRONO_MULTIPLIER);
     }
@@ -1525,7 +1536,7 @@ export async function transferShips(
 
   // Check for hyperdrive buff (faster transit)
   const buffsRaw = await store.get(`buffs:${username.toLowerCase()}`);
-  const playerBuffs: ActiveBuff[] = buffsRaw ? JSON.parse(buffsRaw) : [];
+  const playerBuffs: ActiveBuff[] = parseBuffs(buffsRaw);
   if (hasActiveBuff(playerBuffs, 'hyperdrive', now)) {
     transitMs = Math.round(transitMs * HYPERDRIVE_MULTIPLIER);
   }
