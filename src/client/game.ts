@@ -81,6 +81,16 @@ const overlay = document.getElementById('overlay') ?? document.createElement('di
 const isInline = !!(globalThis as any).__INLINE_MODE__ || overlay.classList.contains('visible');
 const _returningFromIdle = location.hash === '#idle';
 
+/** Devvit throws "web view is already expanded" if this runs outside inline mode. */
+function safeRequestExpandedMode(e: MouseEvent): void {
+  if (!isInline) return;
+  try {
+    requestExpandedMode(e, 'game');
+  } catch (err) {
+    console.warn('[INIT] requestExpandedMode skipped:', err);
+  }
+}
+
 // View mode: detect mobile/portrait vs desktop
 function detectViewMode(): { isMobile: boolean; isPortrait: boolean; screenW: number; screenH: number } {
   const w = window.innerWidth;
@@ -2235,7 +2245,7 @@ playFullBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   overlay.classList.remove('visible');
   void loadPlayerProfile().then(() => {
-    setTimeout(() => requestExpandedMode(e, 'game'), 100);
+    setTimeout(() => safeRequestExpandedMode(e), 100);
   });
 });
 
@@ -2251,7 +2261,7 @@ if (deferredMode && isInline) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const savedEvent = (globalThis as any).__DEFERRED_EVENT__ as MouseEvent | undefined;
     void loadPlayerProfile().then(() => {
-      requestExpandedMode(savedEvent ?? new PointerEvent('click'), 'game');
+      safeRequestExpandedMode(savedEvent ?? new PointerEvent('click'));
     });
   } else {
     enableFullGestures(canvas);

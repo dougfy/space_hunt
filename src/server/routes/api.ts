@@ -875,8 +875,15 @@ api.get('/ships', async (c) => {
     return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
   }
 
-  const response = await loadStarShips(redis, username, starIndex);
-  return c.json<StarShipsResponse>(response);
+  try {
+    const response = await loadStarShips(redis, username, starIndex);
+    return c.json<StarShipsResponse>(response);
+  } catch (error) {
+    // Surface the cause instead of an opaque 500; the client keeps its last known fleet.
+    console.error(`[SHIPS] load failed user=${username} star=${starIndex}:`, error);
+    const message = error instanceof Error ? error.message : 'Unable to load ships';
+    return c.json<ErrorResponse>({ status: 'error', message }, 500);
+  }
 });
 
 /** Buy ships at a star (requires dock). */

@@ -1018,9 +1018,18 @@ function normalizeStarShipData(
 ): { ships: StarShipsState; building: ShipBuildingState | null } {
   if (!entry || typeof entry !== 'object') return { ships: [], building: null };
   const e = entry as Record<string, unknown>;
+  // Malformed slots (null, missing counts) would throw on every ships[] read.
+  const ships: StarShipsState = (Array.isArray(e.ships) ? e.ships : []).filter((slot: unknown) => {
+    if (!slot || typeof slot !== 'object') return false;
+    const s = slot as Record<string, unknown>;
+    return Number.isFinite(s.typeId) && Number.isFinite(s.count);
+  });
+  const rawBuilding = e.building && typeof e.building === 'object' ? e.building as Record<string, unknown> : null;
   return {
-    ships: Array.isArray(e.ships) ? (e.ships as StarShipsState) : [],
-    building: e.building && typeof e.building === 'object' ? (e.building as ShipBuildingState) : null,
+    ships,
+    building: rawBuilding && Number.isFinite(rawBuilding.typeId) && Number.isFinite(rawBuilding.completeAt)
+      ? (e.building as ShipBuildingState)
+      : null,
   };
 }
 

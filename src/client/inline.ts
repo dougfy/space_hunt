@@ -48,5 +48,9 @@ playHereBtn.addEventListener('click', (e) => {
 playFullBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 playFullBtn.addEventListener('click', (e) => {
   e.stopPropagation();
-  requestExpandedMode(e, 'game');
+  try {
+    requestExpandedMode(e, 'game');
+  } catch (err) {
+    console.warn('[INLINE] requestExpandedMode skipped:', err);
+  }
 });

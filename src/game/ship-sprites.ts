@@ -11,8 +11,8 @@ const SHIPS_PATH = 'icons/ships/';
 const _shipSprites: Map<ShipShape, HTMLCanvasElement> = new Map();
 let _loaded = false;
 
-/** Which shapes have sprites available */
-const SPRITE_SHAPES: ShipShape[] = ['scout', 'destroyer', 'frigate', 'battleship', 'cruiser', 'dreadnought', 'colony'];
+/** Which shapes have sprites available (cruiser has no art yet — procedural fallback draws it). */
+const SPRITE_SHAPES: ShipShape[] = ['scout', 'destroyer', 'frigate', 'battleship', 'dreadnought', 'colony'];
 
 /** Preload ship sprites. Safe to call multiple times. */
 export function preloadShipSprites(): void {
@@ -26,6 +26,7 @@ export function preloadShipSprites(): void {
       const processed = removeWhiteBackground(img);
       _shipSprites.set(shape, processed);
     };
+    img.onerror = () => { /* fall back to procedural drawing */ };
   }
 }
 
