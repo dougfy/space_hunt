@@ -1258,8 +1258,11 @@ function update(dt: number): void {
     gameState.dock = null;
   }
 
-  // Galaxy tier transitions — skip in splash mode and when docked
-  if (!gameState.splashMode && !gameState.dock) {
+  // Galaxy tier transitions — skip in splash mode, when docked, and in fleet
+  // command mode (ship is a map cursor there; centering it on the current star
+  // would otherwise instantly re-enter that system).
+  if (!gameState.splashMode && !gameState.dock
+      && !(gameState.galaxy.tier === NavigationTier.Galaxy && getGalaxyMode() === 'fleet')) {
   const tier = gameState.galaxy.tier;
   // In ring model, Local tier uses system coords directly (no worldOffset)
   // Planet tier: static boundary — ship pos IS the world pos (no scrolling)

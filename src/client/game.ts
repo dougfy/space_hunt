@@ -3361,6 +3361,35 @@ document.getElementById('admin-feedback-log')?.addEventListener('click', async (
   } catch (e) { adminStatus!.textContent = `feedback error: ${e}`; }
 });
 
+document.getElementById('admin-error-log')?.addEventListener('click', async () => {
+  adminStatus!.textContent = 'Loading error log...';
+  try {
+    const res = await fetch('/api/telemetry/errors?limit=100');
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({})) as Record<string, unknown>;
+      adminStatus!.textContent = `error-log error: ${res.status} ${errBody.error ?? errBody.detail ?? ''}`;
+      return;
+    }
+    const data = await res.json() as { count: number; entries: Array<Record<string, unknown>> };
+    const tierName = (t: unknown) => ({ '0': 'galaxy', '1': 'system', '2': 'local', '3': 'planet' }[String(t)] ?? String(t ?? '?'));
+    const rows = (data.entries ?? []).map((entry) => {
+      const ts = new Date(Number(entry.ts) || Date.now()).toLocaleString();
+      const user = String(entry.user ?? '?');
+      const version = String(entry.version ?? '?');
+      const tier = tierName(entry.tier);
+      const source = String(entry.source ?? '?');
+      const message = String(entry.message ?? '');
+      const stack = String(entry.stack ?? '');
+      return { ts, user, version, tier, source, message, stack };
+    });
+    const text = `Client Errors (${data.count})\n${'─'.repeat(60)}\n` + (rows.map(r => `${r.ts} | v${r.version} | ${r.user} | tier=${r.tier} | ${r.source}\n${r.message}${r.stack ? '\n' + r.stack : ''}`).join('\n\n') || 'No errors captured');
+    const html = rows.map(r =>
+      `<div class="admin-result-row"><span style="color:#666">${r.ts}</span> <span style="color:#ff6644">v${r.version}</span> <b>${r.user}</b> tier=${r.tier} · ${r.source}<br/>${r.message}${r.stack ? `<br/><span style="color:#888">${r.stack}</span>` : ''}</div>`
+    ).join('') || '<div class="admin-result-row">No errors captured</div>';
+    adminOutput(`Client Errors (${data.count})`, text, html);
+  } catch (e) { adminStatus!.textContent = `error-log error: ${e}`; }
+});
+
 // Video player — preload so it's instant on click
 const videoOverlay = document.getElementById('video-overlay');
 const videoPlayer = document.getElementById('video-player') as HTMLVideoElement | null;
