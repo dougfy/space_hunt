@@ -179,6 +179,28 @@ export function playSound(id: SoundId): void {
   }
 }
 
+/** Sounds likely to fire in the first moments of play — warmed during splash. */
+export const CRITICAL_SOUND_IDS: SoundId[] = [
+  'docked',
+  'undocking',
+  'low_fuel',
+  'arrive',
+  'begin_scan',
+  'colonize',
+];
+
+/**
+ * Warm only the handful of sounds needed for immediate interaction. Runs during
+ * splash so it stays off the critical path that gates the loading screen (the
+ * profile fetch). The full library is loaded later via preloadSounds().
+ */
+export function warmCriticalSounds(): void {
+  for (const id of CRITICAL_SOUND_IDS) {
+    const url = SOUND_FILES[id];
+    if (url) void loadBuffer(url);
+  }
+}
+
 /** Preload sound files so first play is instant. */
 export function preloadSounds(): void {
   for (const url of Object.values(SOUND_FILES)) {

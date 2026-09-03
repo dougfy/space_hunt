@@ -7,7 +7,7 @@ console.log(`[STARTUP] game.ts module executing, t=${(performance.now() - ((glob
 import { context, requestExpandedMode } from '@devvit/web/client';
 import { telemetry } from '@devvit/analytics/client/reddit';
 import versionJson from '../../version.json';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, isJourneyDone, startCoach, restoreCoach, isCoachSkipped, getCoachStep, coachAdvance, isCoachActive, startShipsTopic, startComsTopic, startColonizationTopic, colonizationTopicAction, getColonizationTopicStep, getColonizationTopicTarget, openComsPanelForTutorial, getFontScaleName, setFontScaleByName, setTextAuditEnabled, getOverflowReport, playSound, preloadSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, setAllianceItemOffers, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, consumePendingAirPurifierRepair, setSpecialInventory, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getReturningReportItems, getTestState, confirmSkinPicker, getSoundHistory, consumePendingAbandon, showBuildError, setBuildCooldown } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, isJourneyDone, startCoach, restoreCoach, isCoachSkipped, getCoachStep, coachAdvance, isCoachActive, startShipsTopic, startComsTopic, startColonizationTopic, colonizationTopicAction, getColonizationTopicStep, getColonizationTopicTarget, openComsPanelForTutorial, getFontScaleName, setFontScaleByName, setTextAuditEnabled, getOverflowReport, playSound, preloadSounds, warmCriticalSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, setAllianceItemOffers, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, consumePendingAirPurifierRepair, setSpecialInventory, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getReturningReportItems, getTestState, confirmSkinPicker, getSoundHistory, consumePendingAbandon, showBuildError, setBuildCooldown } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
 import { getFleetShape } from '../shared/ships';
@@ -376,14 +376,31 @@ const _loadingScreen = document.getElementById('loading-screen');
 if (_loadingScreen && isInline) _loadingScreen.style.display = 'none';
 // In expanded mode (game.html), loading screen stays until startMultiplayer hides it
 
-// Defer heavy asset preloads until after splash is visible (non-blocking)
+// Warm only the few sounds needed for immediate interaction. The full sound
+// library and sprite sheets are heavy and would otherwise compete with the
+// /api/profile fetch that gates the loading screen — they load after play starts.
 requestAnimationFrame(() => {
-  preloadSounds();
-  preloadRasterSprites();
-  preloadScifiSprites();
-  preloadShipSprites();
-  console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — deferred preloads queued`);
+  warmCriticalSounds();
+  console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — critical sounds warmed`);
 });
+
+// Heavy preloads run once, after the game is interactive (see scheduleHeavyPreloads).
+let _heavyPreloadsDone = false;
+function scheduleHeavyPreloads(): void {
+  if (_heavyPreloadsDone) return;
+  _heavyPreloadsDone = true;
+  const run = () => {
+    preloadSounds();
+    preloadRasterSprites();
+    preloadScifiSprites();
+    preloadShipSprites();
+    console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — heavy preloads queued`);
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ric = (globalThis as any).requestIdleCallback as ((cb: () => void, opts?: { timeout: number }) => void) | undefined;
+  if (ric) ric(run, { timeout: 3000 });
+  else setTimeout(run, 1500);
+}
 
 // ── Load user profile from server (deferred until play) ────────────────────
 let profileReady: Promise<void> | null = null;
@@ -2067,6 +2084,7 @@ function startMultiplayer() {
   bridge.beginPlay(); // Activate networking callbacks on existing game
   console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — beginPlay done, game is READY`);
   _isPlaying = true;
+  scheduleHeavyPreloads(); // game is interactive — now warm the full asset library off the critical path
   startIdleWatch(); // start the 30-min idle countdown
   journeyAppReady();
   ghostPollInterval = setInterval(pollGhosts, 1000);
