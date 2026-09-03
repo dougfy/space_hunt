@@ -2368,6 +2368,10 @@ export function drawSystemView(
   ctx.fillText(`STAR CLASS: ${starClass}`, 14, 50);
   ctx.fillText(`SYSTEM ID: ${sysId}`, 14, 62);
   ctx.fillText(`BODIES: ${bodies.length}`, 14, 74);
+  if (star?.owner === 'foreign' && star.claimedBy) {
+    ctx.fillStyle = '#ff6666';
+    ctx.fillText(`OWNER: ${star.claimedBy}`, 14, 86);
+  }
   ctx.restore();
 
   // ── 5. Legend panel (bottom-left) ──
@@ -2886,7 +2890,7 @@ export function drawPlanetView(
   const isHome = galaxy.currentStarIndex === galaxy.homeStarIndex;
   const ownerLabel = isHome ? '\u2302 HOME STAR'
     : star?.owner === 'player' ? '\u2605 CLAIMED'
-    : star?.owner === 'foreign' ? '\u2716 FOREIGN'
+    : star?.owner === 'foreign' ? (star.claimedBy ? `\u2716 FOREIGN: ${star.claimedBy}` : '\u2716 FOREIGN')
     : '\u25CB UNCLAIMED';
   const ownerColor = isHome ? '#ffd700'
     : star?.owner === 'player' ? G_BRIGHT
