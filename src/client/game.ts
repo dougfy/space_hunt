@@ -83,7 +83,10 @@ const _returningFromIdle = location.hash === '#idle';
 
 /** Devvit throws "web view is already expanded" if this runs outside inline mode. */
 function safeRequestExpandedMode(e: MouseEvent): void {
-  if (!isInline) return;
+  if (!isInline) {
+    console.warn('[INIT] already expanded — skipping requestExpandedMode');
+    return;
+  }
   try {
     requestExpandedMode(e, 'game');
   } catch (err) {
@@ -2077,6 +2080,7 @@ function sendStatsHeartbeat() {
 
 // ── Activate multiplayer networking ─────────────────────────────────────────
 function startMultiplayer() {
+  if (_isPlaying) return; // load timeout and profile promise can both reach here
   console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — startMultiplayer() entered`);
   // Hide loading screen
   const ls = document.getElementById('loading-screen');
@@ -2267,9 +2271,20 @@ playFullBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 playFullBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   overlay.classList.remove('visible');
-  void loadPlayerProfile().then(() => {
-    setTimeout(() => safeRequestExpandedMode(e), 100);
-  });
+  const ls = document.getElementById('loading-screen');
+  if (ls) ls.style.display = 'flex';
+  const lt = setTimeout(() => { console.warn('[INIT] full load timeout'); if (!isInline) startMultiplayer(); }, 8000);
+  void loadPlayerProfile()
+    .then(() => {
+      clearTimeout(lt);
+      if (isInline) {
+        setTimeout(() => safeRequestExpandedMode(e), 100);
+      } else {
+        // Idle rejoin: already expanded, so expanding again would leave the game unstarted.
+        startMultiplayer();
+      }
+    })
+    .catch(() => { clearTimeout(lt); if (!isInline) startMultiplayer(); });
 });
 
 // ── Deferred play: if module was loaded via splash play button ──────────────
