@@ -1848,6 +1848,7 @@ async function pollEconomy() {
 let _lastSavedPosition = '';
 let _lastSavedDiscovered = '';
 let _lastSavedVisited = '';
+let _lastSavedScannedBodies = '';
 let _lastSavedJourneyDone = false;
 let _lastSavedCoachStep = '';
 let _lastSavedCoachSkipped = false;
@@ -1867,6 +1868,7 @@ function savePositionIfChanged() {
   });
   const discovered = getDiscoveredStars();
   const visited = getVisitedStars();
+  const scannedBodiesKey = Array.from(_scannedBodies).sort().join(',');
   const discoveredKey = discovered.join(',');
   const visitedKey = visited.join(',');
   const journeyDone = isJourneyDone();
@@ -1875,9 +1877,10 @@ function savePositionIfChanged() {
   const posChanged = pos !== _lastSavedPosition;
   const discoveredChanged = discoveredKey !== _lastSavedDiscovered;
   const visitedChanged = visitedKey !== _lastSavedVisited;
+  const scannedBodiesChanged = scannedBodiesKey !== _lastSavedScannedBodies;
   const journeyChanged = journeyDone && !_lastSavedJourneyDone;
   const coachChanged = coachStep !== _lastSavedCoachStep || coachSkipped !== _lastSavedCoachSkipped;
-  if (!posChanged && !discoveredChanged && !visitedChanged && !journeyChanged && !coachChanged) return;
+  if (!posChanged && !discoveredChanged && !visitedChanged && !scannedBodiesChanged && !journeyChanged && !coachChanged) return;
   // Track star discovery milestone
   if (discoveredChanged && discovered.length >= 2) {
     journeyProgress(0.75, 'star_discovered');
@@ -1886,6 +1889,7 @@ function savePositionIfChanged() {
   _lastSavedPosition = pos;
   _lastSavedDiscovered = discoveredKey;
   _lastSavedVisited = visitedKey;
+  _lastSavedScannedBodies = scannedBodiesKey;
   _lastSavedCoachStep = coachStep;
   _lastSavedCoachSkipped = coachSkipped;
   if (journeyDone) _lastSavedJourneyDone = true;
