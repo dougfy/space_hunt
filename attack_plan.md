@@ -59,6 +59,8 @@
 | 42 | **Colony expansion sequence and guided tutorial** | ❌ Open | Treat expansion as a deliberate multi-step journey rather than a single `COLONIZE` action. **Recommended gates:** (1) Colony Ship construction requires either a Basic Probe in stock or at least one previously visited non-home star; this teaches scouting while preserving a direct-flight path for players who explore manually. (2) Sending a Colony Ship requires the destination to be an unowned star with discovery level `probed` or `visited`; the target picker should explain why other stars are unavailable. (3) On arrival, the colony ship remains staged at the destination and the player must travel there personally. (4) In the destination system, show the colony-ship marker beside its assigned planet; optionally require a planet scan to reveal/confirm that marker. (5) When the player enters the planet's local orbit, expose the `COLONIZE` action. (6) Server validates the ship, star, body, ownership, and arrival state before consuming the ship and claiming the star. **Tutorial lead-through:** `BUILD PROBE` → `SEND PROBE` or `VISIT A STAR` → `BUILD COLONY SHIP` → `OPEN FLEET / SEND` → select highlighted discovered star → wait for arrival → `VISIT DESTINATION` → identify/scan marked planet → orbit it → press `COLONIZE` → show confirmation and new-star setup. Use resumable checkpoints and contextual callouts; do not unlock the final button early. Add explicit transit/arrival states and recovery text for an occupied, invalidated, or already claimed target. |
 | 43 | **Splash command center** | ⚠️ Leaderboard shipped; tutorial pending | Put the public leaderboard and a clear tutorial/help entry on the first splash screen before gameplay. The leaderboard should be read-only, compact, and responsive, with loading, empty, and unavailable states. Reuse the existing scoring endpoint rather than creating a second ranking system. Later add a tutorial entry that opens the existing Help documentation without auto-starting any guided sequence. |
 | 44 | **Player achievement badges** | ❌ Open | Expose the existing Redis-backed achievement milestones as a player-facing earned/locked badge list. Add a `Badges` view to the Help/general information UI, with compact icon, title, unlock condition, and earned state for each achievement. Read the existing `achievements:{username}` records through a player-safe API; preserve the current server-side milestone triggers and Reddit achievement comments. Consider a future compact HUD badge counter only after the list is useful and tested. |
+| 45 | **Radar array and progressive sensor discovery** | ❌ Open | Add a radar array that detects incoming probes and ships, identifies the sender when the signal is attributable, and creates in-game notifications. Radar should also control how much transit and foreign-location detail is visible rather than granting unrestricted map knowledge. Detailed design is in **Feature 21** below. |
+| 46 | **Probe-level solar detail** | ❌ Open | Basic and enhanced probe levels should reveal progressively more detail about planets and their features. A probe or personal visit should unlock solar-system detail on the galaxy map; planet scans remain a separate action for one-time exploration rewards, not the only way to see foreign buildings. |
 
 Detailed quest-item and air-purifier event design: [quest-items.md](quest-items.md).
 
@@ -1522,6 +1524,65 @@ Replace generic exploration results with lore-flavored audio voice lines:
 - Record new WAV files with narrative context
 - Map exploration outcome kinds to specific voice lines
 - Use existing audio system (SoundId + SOUND_FILES)
+
+## Feature 21 — Radar, Progressive Probes & Foreign-System Intelligence ❌ PLANNED
+
+**What:** Build a sensor network that makes movement observable and makes discovery depth depend on the quality of the probe or visit. Radar detects incoming probes and ships, while the galaxy map exposes the appropriate level of solar detail without turning every scan into complete intelligence.
+
+**Why:** Players need a meaningful warning window when other players or NPCs approach their systems. Probe progression should also create a clear information ladder: unexplored, detected, probed, and visited should each answer more questions without requiring repetitive planet scans.
+
+### Discovery and visibility rules
+
+| Situation | Galaxy-map result | Solar-system / foreign-location result |
+|---|---|---|
+| Unexplored star | Star location and minimal identity only | No bodies, buildings, or resource detail |
+| Basic Probe arrives | Star becomes **Probed**; basic solar layout is shown | Planet/body list and coarse planet data; no complete building intelligence |
+| Enhanced Probe arrives | Star becomes **Probed+** (or equivalent higher discovery tier); richer solar detail is shown | More planet detail, feature categories, and selected building information |
+| Player personally visits | Star becomes **Visited** and receives the highest normal map detail | Full solar layout and visible foreign buildings/features at the visited location; a planet scan is not required merely to render buildings |
+| Planet SCAN | Adds the existing one-time exploration result and any scan-specific knowledge | Does not gate ordinary building visibility at a foreign location |
+
+The exact names for the higher probe tier can follow the existing Basic Probe / Enhanced Probe catalog, but the information contract must be explicit and server-authoritative. “Foreign location” means a visited or otherwise revealed system/body owned by another player or faction; showing its buildings must not require claiming the star or completing a planet scan.
+
+### Radar array
+
+- Add a radar/sensor building or equivalent star capability with upgrade levels.
+- Detect inbound probes, colony ships, raiders, freighters, and other ship transits before arrival when the route enters the radar coverage window.
+- Report the target star, ship/probe type, estimated arrival window, and direction/source where available.
+- Apply radar coverage and sensor quality to attribution: identify the sending player or faction when the signal is resolvable; otherwise report an unidentified contact rather than inventing an owner.
+- Keep detection server-side and idempotent. Do not reveal hidden targets merely because the client requests a map or polls repeatedly.
+
+### Notifications
+
+Notifications should appear in the returning report, a compact radar/status indicator, and the existing sensor-alert delivery path where appropriate:
+
+| Event | Notification content |
+|---|---|
+| Incoming probe detected | “Probe detected inbound to [star]. Type: Basic/Enhanced. Source: [player/faction]” |
+| Incoming ship detected | “Incoming [ship type] to [star]. ETA: [window]. Source: [player/faction]” |
+| Unattributed contact | “Unidentified contact detected near [star].” |
+| Probe arrival | “A [probe level] from [player/faction] reached [star]; [detail tier] intelligence is now available.” |
+
+Notifications must deduplicate the same transit, survive a page reload until acknowledged or expired, and avoid exposing the sender when radar confidence is insufficient. The owner of a probed star should be notified when radar can identify who launched the probe; the probe sender should receive an arrival/result report as well.
+
+### Implementation slices
+
+| Slice | Scope | Status |
+|---|---|---|
+| 21.1 | Sensor/radar building schema, levels, coverage and upgrade rules | ❌ |
+| 21.2 | Transit detection for probes and ships, including pre-arrival alert timing | ❌ |
+| 21.3 | Server-authoritative discovery detail tiers and galaxy-map solar summaries | ❌ |
+| 21.4 | Foreign-location building visibility without mandatory planet scan | ❌ |
+| 21.5 | Probe-level detail: Basic vs Enhanced (and future tiers) | ❌ |
+| 21.6 | Attributed/unidentified sensor notifications and deduplication | ❌ |
+| 21.7 | Tests for visibility permissions, radar coverage, attribution, reload persistence, and duplicate alerts | ❌ |
+
+### Design constraints
+
+- Radar detects movement; it does not automatically grant full system discovery.
+- A probe reveals information according to its level, while a personal visit remains the strongest ordinary discovery action.
+- Buildings at foreign locations are map/system intelligence and must be distinct from planet SCAN rewards.
+- The server owns transit identity, discovery tier, attribution confidence, and notification state; the client only renders the returned contract.
+- Alliance-shared discovery must not silently become alliance-shared live radar unless that capability is explicitly designed and permissioned.
 
 ### Priority Order (Suggested)
 

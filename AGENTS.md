@@ -38,6 +38,12 @@ You are writing a Devvit web application that will be executed on Reddit.com.
 - `npm run lint`: Check the linter
 - `npm run test -- my-file-name`: Run tests isolated to a file
 
+## Source Control
+
+- This project is maintained in the GitHub repository `https://github.com/dougfy/space_hunt.git`.
+- Use Git with the `origin` remote on the `main` branch for status, commits, and pushes.
+- Do not use Unity Version Control / Plastic SCM for this repository.
+
 ## Code Style
 
 - Prefer type aliases over interfaces when writing typescript
