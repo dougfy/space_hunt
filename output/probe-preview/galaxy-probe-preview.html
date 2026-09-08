@@ -1,0 +1,109 @@
+<div id="probe-gui" aria-label="Galaxy survey card concept">
+  <style>
+    #probe-gui { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #b4f9dd; font-size: 12px; }
+    #probe-gui * { box-sizing: border-box; }
+    #probe-gui .space { position: relative; min-height: 490px; background: #020a08; border: 1px solid #285242; border-radius: 5px; overflow: hidden; }
+    #probe-gui .sky { position: absolute; inset: 0; background-image: radial-gradient(circle at 11% 33%, #377960 1px, transparent 1.5px), radial-gradient(circle at 44% 78%, #377960 1px, transparent 1.5px), radial-gradient(circle at 69% 22%, #377960 1px, transparent 1.5px); background-size: 111px 97px, 179px 133px, 233px 181px; opacity: .5; pointer-events: none; }
+    #probe-gui .chrome { position: relative; z-index: 1; padding: 18px; display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+    #probe-gui .sector { color: #4fffb0; font-size: 14px; letter-spacing: 1px; }
+    #probe-gui .sub { color: #88ac9e; margin-top: 6px; font-size: 11px; }
+    #probe-gui .mode { border: 1px solid #39765c; color: #4fffb0; padding: 7px 10px; font-size: 11px; background: #0a1f16; }
+    #probe-gui .galaxy { position: relative; height: 355px; width: 55%; }
+    #probe-gui .routes { position: absolute; width: 100%; height: 100%; inset: 0; }
+    #probe-gui .star { position: absolute; transform: translate(-50%,-50%); background: transparent; border: 0; color: #a4e6d6; display: grid; justify-items: center; gap: 6px; padding: 8px; min-width: 70px; min-height: 56px; font: inherit; cursor: pointer; }
+    #probe-gui .star .dot { width: 8px; height: 8px; background: currentColor; border-radius: 50%; }
+    #probe-gui .star[aria-pressed="true"] .dot { outline: 1px solid #4fffb0; outline-offset: 8px; }
+    #probe-gui .star[aria-pressed="true"] { color: #4fffb0; }
+    #probe-gui .star small { color: #86a99b; font-size: 11px; white-space: nowrap; }
+    #probe-gui .ship { position: absolute; left: 18%; top: 81%; color: #83c8ff; font-size: 11px; }
+    #probe-gui .ship span { display: block; margin-top: 6px; }
+    #probe-gui .survey { position: absolute; right: 18px; top: 89px; width: 268px; padding: 14px; background: #061910; border: 1px solid #3b8964; border-radius: 4px; z-index: 2; }
+    #probe-gui .survey[hidden] { display: none; }
+    #probe-gui .heading { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+    #probe-gui .name { color: #4fffb0; font-size: 16px; margin-bottom: 6px; }
+    #probe-gui .level { color: #94dcbd; font-size: 11px; }
+    #probe-gui .close { color: #b4f9dd; background: transparent; border: 1px solid #39765c; width: 30px; height: 30px; cursor: pointer; font: inherit; }
+    #probe-gui .facts { display: flex; gap: 8px; flex-wrap: wrap; margin: 13px 0; color: #9dcab5; font-size: 11px; }
+    #probe-gui .system { background: #031009; border: 1px solid #244b38; padding: 7px; }
+    #probe-gui .system svg { display: block; width: 100%; height: 174px; }
+    #probe-gui .legend { color: #9dcab5; font-size: 11px; display: flex; justify-content: center; gap: 16px; padding: 5px 0; }
+    #probe-gui .locked { padding: 25px 10px; color: #9dcab5; text-align: center; line-height: 1.7; border: 1px solid #244b38; }
+    #probe-gui .locked strong { font-weight: 500; color: #c3edd9; display: block; margin-bottom: 8px; }
+    #probe-gui .visit { display: block; width: 100%; margin-top: 14px; padding: 10px; background: #0a2c1c; border: 1px solid #4fffb0; color: #4fffb0; cursor: pointer; font: inherit; }
+    #probe-gui .status { position: relative; padding: 13px 18px; color: #91b9a7; border-top: 1px solid #1c392d; min-height: 42px; font-size: 11px; }
+    #probe-gui [hidden] { display: none !important; }
+    #probe-gui .space.bottom .galaxy { width: 100%; height: 260px; }
+    #probe-gui .space.bottom .survey { position: relative; top: auto; right: auto; width: auto; margin: 0 14px 14px; }
+    #probe-gui .space.bottom .detail { display: grid; grid-template-columns: 1fr 1.2fr; gap: 16px; }
+    #probe-gui .space.bottom .system svg { height: 155px; }
+    @media(max-width: 540px) {
+      #probe-gui .galaxy { width: 100%; height: 235px; }
+      #probe-gui .survey { position: relative; top: auto; right: auto; width: auto; margin: 0 12px 12px; }
+      #probe-gui .system svg { height: 168px; }
+      #probe-gui .chrome { padding: 14px; }
+      #probe-gui .space.bottom .detail { display: block; }
+      #probe-gui .space.bottom .galaxy { height: 235px; }
+      #probe-gui .close { width: 44px; height: 44px; }
+    }
+  </style>
+  <div class="space">
+    <div class="sky"></div>
+    <div class="chrome"><div><div class="sector">KORVUS SECTOR</div><div class="sub">GALAXY · HOME: SOL</div></div><span class="mode">NAV</span></div>
+    <div class="galaxy" aria-label="Select Deneb, Vega or Altair to compare survey detail">
+      <svg class="routes" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M20 70 L28 25 L67 38 L72 76 M20 70 L67 38 M28 25 L72 76" stroke="#1e4936" stroke-width=".3" fill="none"/><path class="course" d="M18 81 L67 38" stroke="#83c8ff" stroke-width=".5" stroke-dasharray="2 2" fill="none" hidden/></svg>
+      <button class="star" type="button" data-star="vega" style="left:28%;top:25%" aria-pressed="false"><span class="dot"></span><span>VEGA</span><small>Basic survey</small></button>
+      <button class="star" type="button" data-star="deneb" style="left:67%;top:38%" aria-pressed="true"><span class="dot"></span><span>DENEB</span><small>Enhanced survey</small></button>
+      <button class="star" type="button" data-star="altair" style="left:72%;top:76%;color:#dfd27c" aria-pressed="false"><span class="dot"></span><span>ALTAIR</span><small>Unexplored</small></button>
+      <div class="ship">△<span>YOUR SHIP · SOL</span></div>
+    </div>
+    <div class="survey" aria-label="Selected star survey">
+      <div class="heading"><div><div class="name">DENEB</div><div class="level">DETAILED SURVEY</div></div><button class="close" type="button" aria-label="Dismiss star card">✕</button></div>
+      <div class="detail">
+        <div class="facts"><span class="distance">DIST: 24.6 ly</span><span class="count">3 planets · 1 belt</span></div>
+        <div class="system" role="img" aria-label="Miniature Deneb system: central star, three planets and one asteroid belt">
+          <svg viewBox="-100 -100 200 200" aria-hidden="true">
+            <g fill="none" stroke="#2a5540" stroke-width="1"><circle r="29"/><circle r="50"/><circle r="83"/></g>
+            <circle r="65" fill="none" stroke="#85967f" stroke-width="5" stroke-dasharray="1 4"/>
+            <circle r="7" fill="#ffe099"/><circle r="11" fill="none" stroke="#5b5431"/>
+            <circle cx="20" cy="-21" r="4" fill="#83d7c1"/><circle cx="-43" cy="25" r="5" fill="#b3e9c7"/><circle cx="57" cy="60" r="6" fill="#78b9cc"/>
+          </svg>
+          <div class="legend"><span>● Planet</span><span>◌ Asteroid belt</span></div>
+        </div>
+        <div class="locked" hidden></div>
+      </div>
+      <button class="visit" type="button">→ VISIT SYSTEM</button>
+    </div>
+    <div class="status" aria-live="polite">DENEB selected · Ship remains at Sol</div>
+  </div>
+  <script>
+    (() => {
+      const root = document.getElementById('probe-gui');
+      const space = root.querySelector('.space');
+      const survey = root.querySelector('.survey');
+      const state = { selected: 'deneb', placement: 'Beside star', showOrbits: true };
+      const stars = {deneb:{name:'DENEB', level:'DETAILED SURVEY', distance:'24.6', count:'3 planets · 1 belt'},vega:{name:'VEGA',level:'BASIC SURVEY',distance:'18.2',count:'2 planets · 1 belt'},altair:{name:'ALTAIR',level:'UNEXPLORED',distance:'31.8',count:'System data unknown'}};
+      function render() {
+        const star = stars[state.selected];
+        space.classList.toggle('bottom',state.placement === 'Below map');
+        survey.hidden = false;
+        root.querySelector('.name').textContent = star.name;
+        root.querySelector('.level').textContent = star.level;
+        root.querySelector('.distance').textContent = `DIST: ${star.distance} ly`;
+        root.querySelector('.count').textContent = star.count;
+        root.querySelector('.system').hidden = state.selected !== 'deneb';
+        root.querySelector('.system svg g').style.display = state.showOrbits ? '' : 'none';
+        const locked = root.querySelector('.locked');
+        locked.hidden = state.selected === 'deneb';
+        locked.innerHTML = state.selected === 'vega' ? '<strong>SYSTEM MAP UNAVAILABLE</strong>Enhanced Probe reveals<br>the system map.' : '<strong>NO SURVEY DATA</strong>Send a probe to learn more.';
+        root.querySelectorAll('[data-star]').forEach(b => b.setAttribute('aria-pressed',String(b.dataset.star === state.selected)));
+        root.querySelector('.course').setAttribute('hidden','');
+        root.querySelector('.status').textContent = `${star.name} selected · Ship remains at Sol`;
+      }
+      root.querySelectorAll('[data-star]').forEach(b => b.addEventListener('click',()=>{state.selected=b.dataset.star;render();}));
+      root.querySelector('.close').addEventListener('click',()=>{survey.hidden=true;root.querySelectorAll('[data-star]').forEach(b=>b.setAttribute('aria-pressed','false'));root.querySelector('.status').textContent='Ship remains at Sol';});
+      root.querySelector('.visit').addEventListener('click',()=>{const positions={deneb:'67 38',vega:'28 25',altair:'72 76'};const course=root.querySelector('.course');course.setAttribute('d',`M18 81 L${positions[state.selected]}`);course.removeAttribute('hidden');root.querySelector('.status').textContent=`Course set to ${stars[state.selected].name}`;});
+      render();
+      if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:render});tweak.addSelect(state,'placement',{label:'Card placement',options:['Beside star','Below map']});tweak.addToggle(state,'showOrbits',{label:'Orbit rings'});}
+    })();
+  </script>
+</div>

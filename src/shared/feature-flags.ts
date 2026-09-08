@@ -4,6 +4,9 @@
 /** Enable video coms from Fleet Command (tutorial/milestone videos in DM channel). */
 export const ENABLE_VIDEO_COMS = true;
 
+/** Temporary galaxy-card mock for ISS-046.1 visual review, before probe gating. */
+export const ENABLE_PROBE_MAP_MOCK = true;
+
 /**
  * Legacy journey hints (tab pulse, UNDOCK pulse, idle voice prompts).
  * Now scoped to players who have already seen the coach-mark tutorial and have

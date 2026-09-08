@@ -21,7 +21,7 @@ import { getFontScale } from './font';
 import { installTextAudit, setAuditRegion } from './text-audit';
 import { getJourneyPulseAlpha } from './journey';
 import { isCoachActive, getCoachStep, coachAdvance, dismissCoach, completeCoach, getCoachPulse, ackCoachStep, isCoachAcked, isShipsTopicActive, getShipsTopicStep, shipsTopicNext, shipsTopicShipsOpened, shipsTopicProbeClicked, dismissShipsTopic, isColonizationTopicActive, getColonizationTopicStep, getColonizationTopicTarget, colonizationTopicNext, colonizationTopicAction, dismissColonizationTopic, isComsTopicActive, getComsTopicIdx, getComsTopicPhase, comsTopicNext, comsTopicTabClicked, comsTopicBranchToAlliance, dismissComsTopic } from './coach';
-import { FLEET_COMMAND_SENDER } from '../shared/feature-flags';
+import { FLEET_COMMAND_SENDER, ENABLE_PROBE_MAP_MOCK } from '../shared/feature-flags';
 
 // ── View mode helper ────────────────────────────────────────────────────────
 function isMobileView(): boolean {
@@ -1362,6 +1362,12 @@ export function hitTestTransferCancel(sx: number, sy: number): boolean {
 let _selectedStarIndex: number = -1;
 let _starInfoDismissBtn: { x: number; y: number; w: number; h: number } | null = null;
 let _starInfoVisitBtn: { x: number; y: number; w: number; h: number } | null = null;
+let _starInfoCardRect: { x: number; y: number; w: number; h: number } | null = null;
+
+export function hitTestStarInfoCard(sx: number, sy: number): boolean {
+  const rect = _starInfoCardRect;
+  return rect !== null && sx >= rect.x && sx <= rect.x + rect.w && sy >= rect.y && sy <= rect.y + rect.h;
+}
 
 // ── Galaxy Mode (NAV vs FLEET COMMAND) ──────────────────────────────────────
 export type GalaxyMode = 'nav' | 'fleet';
@@ -1899,14 +1905,16 @@ export function drawGalaxyView(
       ctx.restore();
 
       // Info card dimensions
-      const cardW = 180;
-      const cardH = 126;
+      const cardW = ENABLE_PROBE_MAP_MOCK ? Math.min(260, screenW - 20) : 180;
+      const cardH = ENABLE_PROBE_MAP_MOCK ? Math.min(330, screenH - 20) : 126;
       // Position card to the right of star, or left if too close to edge
       let cardX = starSx + 24;
       let cardY = starSy - cardH / 2;
       if (cardX + cardW > screenW - 10) cardX = starSx - cardW - 24;
+      cardX = Math.max(10, Math.min(cardX, screenW - cardW - 10));
       if (cardY < 10) cardY = 10;
       if (cardY + cardH > screenH - 10) cardY = screenH - cardH - 10;
+      _starInfoCardRect = { x: cardX, y: cardY, w: cardW, h: cardH };
 
       // Card background
       ctx.save();
@@ -1934,7 +1942,7 @@ export function drawGalaxyView(
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillStyle = G_BRIGHT;
-      ctx.fillText(star.name, cardX + 8, cardY + 8);
+      ctx.fillText(star.name, cardX + 8, cardY + 8, cardW - 42);
 
       // Discovery status
       let statusText = 'UNEXPLORED';
@@ -1957,7 +1965,7 @@ export function drawGalaxyView(
       }
       ctx.font = f(9);
       ctx.fillStyle = statusColor;
-      ctx.fillText(statusText, cardX + 8, cardY + 24);
+      ctx.fillText(statusText, cardX + 8, cardY + 24, cardW - 16);
 
       // Distance from ship
       const dx = star.pos.x - shipPos.x;
@@ -2002,6 +2010,57 @@ export function drawGalaxyView(
         ctx.fillStyle = economyInfo.starCondition === 'lost' ? '#ff6666' : '#ffcc44';
         ctx.font = f(7, 'bold');
         ctx.fillText(conditionLabel, cardX + 8, cardY + 80);
+      }
+
+      if (ENABLE_PROBE_MAP_MOCK) {
+        // Deliberately illustrative: every selected star shows the same sample
+        // survey. No discovery state, server data or navigation is changed.
+        ctx.font = f(9, 'bold');
+        ctx.fillStyle = '#9de7c7';
+        ctx.textAlign = 'left';
+        ctx.fillText('ENHANCED PROBE · MOCK', cardX + 8, cardY + 98, cardW - 16);
+        const mapTop = cardY + 115;
+        const mapH = Math.max(24, cardH - 163);
+        const mapW = cardW - 16;
+        const cx = cardX + cardW / 2;
+        const cy = mapTop + mapH / 2;
+        const radius = Math.max(4, Math.min(mapW, mapH) / 2 - 10);
+        ctx.fillStyle = '#031009';
+        ctx.fillRect(cardX + 8, mapTop, mapW, mapH);
+        ctx.strokeStyle = '#285540';
+        ctx.lineWidth = 1;
+        for (const orbit of [0.32, 0.58, 1]) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius * orbit, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.save();
+        ctx.strokeStyle = '#889c83';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([1, 4]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 0.77, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        ctx.fillStyle = '#ffe099';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+        ctx.fill();
+        for (const planet of [
+          { orbit: 0.32, angle: -0.8, size: 3, color: '#83d7c1' },
+          { orbit: 0.58, angle: 2.6, size: 4, color: '#b3e9c7' },
+          { orbit: 1, angle: 0.8, size: 5, color: '#78b9cc' },
+        ]) {
+          ctx.fillStyle = planet.color;
+          ctx.beginPath();
+          ctx.arc(cx + Math.cos(planet.angle) * radius * planet.orbit,
+            cy + Math.sin(planet.angle) * radius * planet.orbit, planet.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.font = f(8);
+        ctx.fillStyle = '#b3d9c5';
+        ctx.textAlign = 'center';
+        ctx.fillText('SAMPLE: 3 PLANETS · 1 BELT', cx, mapTop + mapH + 5, mapW);
       }
 
       // VISIT button
@@ -8668,4 +8727,3 @@ export function hitTestAbandonButton(sx: number, sy: number): boolean {
 export function clearAbandonButton(): void {
   _abandonBtn = null;
 }
-

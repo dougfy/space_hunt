@@ -29,7 +29,7 @@ import {
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
   drawGalaxyZoomButtons, hitTestGalaxyZoomButtons, setHomeStarIndex,
 
-  selectGalaxyStar, deselectGalaxyStar, getSelectedStarIndex, hitTestStarInfoDismiss, hitTestStarInfoVisit,
+  selectGalaxyStar, deselectGalaxyStar, getSelectedStarIndex, hitTestStarInfoDismiss, hitTestStarInfoVisit, hitTestStarInfoCard,
   drawGalaxyModeToggle, drawGalaxyModeBanner, hitTestGalaxyModeBtn, hitTestGalaxyExitBtn, toggleGalaxyMode, setGalaxyMode, getGalaxyMode,
   setGalaxyJumpReturnTier, isFleetPanelOpen, closeFleetPanel,
   getPostId, triggerExplore,
@@ -979,6 +979,9 @@ function update(dt: number): void {
         gameState.tgtActive = true;
         deselectGalaxyStar();
       }
+      inputState.pointerDown = false;
+    } else if (getSelectedStarIndex() >= 0 && hitTestStarInfoCard(px, py)) {
+      // Inspecting the survey card must not select stars underneath it.
       inputState.pointerDown = false;
     } else {
       // Check if tapping a star (toggle if same star)
