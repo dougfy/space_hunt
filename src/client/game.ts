@@ -414,7 +414,7 @@ function loadPlayerProfile(): Promise<void> {
   console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — loadPlayerProfile() starting fetch`);
   profileReady = fetch(`/api/profile?username=${encodeURIComponent(username)}&postId=${encodeURIComponent(postId)}`)
     .then(r => { console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — /api/profile response received (${(performance.now() - _tProfile).toFixed(0)}ms)`); return r.json(); })
-    .then((profile: PlayerProfileResponse) => {
+    .then(async (profile: PlayerProfileResponse) => {
       console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — profile JSON parsed, processing`);
       console.log('[PROFILE] full response:', JSON.stringify({ homeStar: profile.homeStar, lastPosition: profile.lastPosition, discoveredStars: profile.discoveredStars, claimedCount: profile.claimed?.length }));
       if (profile.name) {
@@ -428,20 +428,24 @@ function loadPlayerProfile(): Promise<void> {
         playerHomeStarIndex = profile.homeStar;
         relocateToHomeStar(profile.homeStar);
         journeyProgress(0.10, 'home_star_claimed');
-        // Immediately fetch ship shape from home star fleet
-        fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${profile.homeStar}`)
-          .then(r => r.ok ? r.json() : null)
-          .then((data: { ships: Array<{ typeId: number; count: number }> } | null) => {
-            if (data) {
-              const fleetShape = getFleetShape(data.ships);
-              if (fleetShape !== currentShape) {
-                currentShape = fleetShape;
-                bridge.setShipShape(fleetShape);
-                console.log(`[PROFILE] restored ship shape: ${fleetShape}`);
-              }
-            }
-          })
-          .catch(() => {});
+        // Resolve the deployed shape before startMultiplayer can enter the game.
+        // Otherwise the transition gate can observe the startup Scout while the
+        // Ships panel is already showing the real home-star fleet.
+        const shapeStartedAt = performance.now();
+        try {
+          const shipsRes = await fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${profile.homeStar}`);
+          if (!shipsRes.ok) {
+            console.warn(`[PROFILE] home fleet request failed: HTTP ${shipsRes.status}`);
+          } else {
+            const data = await shipsRes.json() as { ships: Array<{ typeId: number; count: number }> };
+            const fleetShape = getFleetShape(data.ships);
+            currentShape = fleetShape;
+            bridge.setShipShape(fleetShape);
+            console.log(`[PROFILE] restored ship shape: ${fleetShape} from home fleet (${data.ships.map((ship) => `${ship.typeId}x${ship.count}`).join(', ') || 'empty'}) in ${(performance.now() - shapeStartedAt).toFixed(0)}ms`);
+          }
+        } catch (error) {
+          console.warn('[PROFILE] home fleet request failed:', error);
+        }
       }
       // Restore discovered stars BEFORE claims (claims check discoveryLevel)
       if (profile.discoveredStars && profile.discoveredStars.length > 0) {
