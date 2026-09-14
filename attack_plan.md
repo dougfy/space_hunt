@@ -599,6 +599,22 @@ Treat expansion as a deliberate multi-step journey rather than a single `COLONIZ
 
 Put the public leaderboard and a clear tutorial/help entry on the first splash screen before gameplay. The leaderboard should be read-only, compact, and responsive, with loading, empty, and unavailable states. Reuse the existing scoring endpoint rather than creating a second ranking system. Later add a tutorial entry that opens the existing Help documentation without auto-starting any guided sequence.
 
+#### Visual reference — supplied splash-screen example
+
+The supplied **Make Trade Scale / Season 2 — The Space Race** screenshot is a useful reference for the Valcordia Space splash direction. Treat it as design inspiration, not a branding or asset to copy. Its strongest qualities are:
+
+- **Immediate identity:** a clear title and short supporting tagline establish the game before the player interacts.
+- **Single primary action:** one large, high-contrast launch button gives the screen an obvious next step.
+- **Three-part value preview:** compact BUILD / TRADE / LAUNCH icons communicate the gameplay loop before entry without requiring explanatory paragraphs.
+- **Player acknowledgement:** a small welcome pill makes the screen feel personalized while keeping the primary action dominant.
+- **Atmospheric framing:** a dark star field, restrained horizon/planet arc, and one centered ship create depth without competing with the controls.
+- **Clear hierarchy:** title, subtitle, gameplay pillars, player state, launch CTA, and a quiet “tap to join” hint are vertically staged for quick scanning on mobile.
+- **Palette discipline:** deep navy/black background with cyan-blue structure, warm yellow/orange emphasis, and white text gives actions distinct meaning without matching the current green canvas HUD one-for-one.
+
+For Valcordia Space, adapt the pattern as follows: use **VALCORDIA SPACE** as the title, preserve the existing lore/retro identity where appropriate, keep the launch action as the dominant control, and use the gameplay pillars to preview **BUILD / EXPLORE / COMMAND** or another agreed loop. The splash must remain fast, responsive, keyboard/touch accessible, and must not auto-start a coach sequence. The leaderboard and Help/tutorial entry remain secondary surfaces, not competitors with the launch CTA.
+
+**Reference capture:** user-supplied screenshot in the 2026-09-13 design discussion. A local asset is not currently stored in the repository; if this reference becomes part of a formal visual review, save an approved, attribution-safe copy under `assets/reference/` and link it here.
+
 <a id="iss-044-notes"></a>
 
 ### ISS-044 — Player achievement badges
