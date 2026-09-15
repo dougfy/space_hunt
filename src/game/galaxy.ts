@@ -1,7 +1,7 @@
 // ── Galaxy Generation & Navigation ──────────────────────────────────────────
 
 import type { Vec2 } from './types';
-import type { StarOwner } from './ownership-contracts';
+import type { StarOwner, VisitMode } from './ownership-contracts';
 import { vec2, createRng, stableHash, magnitude, sub } from './math';
 import { reduceStarOwnership } from './ownership';
 import { isTradingStation } from '../shared/trading';
@@ -32,6 +32,7 @@ export interface GalaxyStar {
   owner: StarOwner;
   discovered: boolean;
   discoveryLevel: 'none' | 'probed' | 'visited';
+  visitMode?: VisitMode;
   claimedBy?: string;  // username of foreign owner (revealed by enhanced probe or visit)
   stationBodyIndex?: number;  // body where station was placed during colonization (default 0)
 }
@@ -145,6 +146,7 @@ export function generateGalaxy(worldSeed: string): GalaxyStar[] {
       owner: 'none',
       discovered: false,
       discoveryLevel: 'none',
+      visitMode: 'unvisited',
     });
   }
 
@@ -245,7 +247,13 @@ export function createGalaxyState(worldSeed: string): GalaxyState {
   const ownedStars = stars.map((star) => {
     const ownedStar = ownership.stars.find((candidate) => candidate.index === star.index);
     return ownedStar
-      ? { ...star, owner: ownedStar.owner, discovered: ownedStar.discovered, discoveryLevel: ownedStar.discoveryLevel }
+      ? {
+        ...star,
+        owner: ownedStar.owner,
+        discovered: ownedStar.discovered,
+        discoveryLevel: ownedStar.discoveryLevel,
+        visitMode: ownedStar.visitMode ?? (ownedStar.discoveryLevel === 'none' ? 'unvisited' : ownedStar.discoveryLevel === 'probed' ? 'basic_probe' : 'ship_visit'),
+      }
       : star;
   });
   const homeStar = ownedStars[homeIdx];

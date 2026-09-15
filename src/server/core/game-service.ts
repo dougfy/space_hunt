@@ -54,7 +54,7 @@ import {
   normalizeStarBuildings,
   reconcileStarBuildings,
 } from '../../shared/buildings';
-import { SHIP_CATALOG, canBuildShip, getUpgradeTarget, canUpgradeShip } from '../../shared/ships';
+import { SHIP_CATALOG, canBuildShip, getUpgradeTarget, canUpgradeShip, TUTORIAL_PROBE_BUILD_SECONDS } from '../../shared/ships';
 import { getStarName } from '../../shared/star-names';
 import { ITEM_CATALOG, normalizeInventory } from '../../shared/items';
 import type { ItemId, PlayerInventory } from '../../shared/items';
@@ -237,6 +237,20 @@ function parseAirPurifierQuest(raw: string | undefined): AirPurifierQuest | null
   }
 }
 
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+export function evaluateDailyAirPurifierRoll(postId: string, username: string, dayKey: string): boolean {
+  const signature = `${postId}|${username.toLowerCase()}|${dayKey}`;
+  return (hashString(signature) % 100) < 10;
+}
+
 /** Start at most one air-purifier incident per player and UTC day. */
 export async function ensureAirPurifierQuest(
   store: RedisGameStore,
@@ -244,6 +258,7 @@ export async function ensureAirPurifierQuest(
   username: string,
   now = Date.now(),
 ): Promise<AirPurifierQuest | null> {
+  console.log(`[DEBUG] ensureAirPurifierQuest called user=${username} postId=${postId} at=${new Date(now).toISOString()}`);
   const profileKey = `profile:${username}`;
   const economy = await loadEconomyProfile(store, username);
   const claims = await getClaimedStars(store, postId);
@@ -268,6 +283,16 @@ export async function ensureAirPurifierQuest(
   const dailyKey = `daily:${postId}:${dayKey}:air-purifier:${username.toLowerCase()}`;
   const generated = await store.get(dailyKey);
   if (generated) return parseAirPurifierQuest(generated);
+
+  const rollKey = `daily:${postId}:${dayKey}:air-purifier-roll:${username.toLowerCase()}`;
+  const rollStatus = await store.get(rollKey);
+  if (rollStatus === 'skipped') return null;
+  const shouldCreate = rollStatus === 'triggered' ? true : evaluateDailyAirPurifierRoll(postId, username, dayKey);
+  if (!shouldCreate) {
+    await store.set(rollKey, 'skipped');
+    return null;
+  }
+  await store.set(rollKey, 'triggered');
 
   const homeStar = economy.homeStar ?? owned[0]!.starIndex;
   const affected = owned.filter((claim) => claim.starIndex !== homeStar).at(-1) ?? owned[0]!;
@@ -1151,6 +1176,11 @@ export async function buyShip(
 
   // Start building (instant if blueprint, chrono buff halves time)
   let buildDurationMs = catalog.buildSeconds * 1000;
+  // Colonize tutorial shortens the Basic Probe build so onboarding isn't a dead wait.
+  const tutorialQuick = !!(body as { tutorialQuick?: boolean }).tutorialQuick;
+  if (tutorialQuick && shipTypeId === 11) {
+    buildDurationMs = TUTORIAL_PROBE_BUILD_SECONDS * 1000;
+  }
   if (!useBlueprint) {
     const buffsRaw = await store.get(`buffs:${username.toLowerCase()}`);
     const playerBuffs: ActiveBuff[] = parseBuffs(buffsRaw);
@@ -1482,6 +1512,7 @@ export async function transferShips(
   shipTypeId: ShipTypeId,
   count: number,
   now = Date.now(),
+  tutorialFuelBypass = false,
 ): Promise<FleetTransferResponse> {
   if (count < 1) throw new Error('count must be >= 1');
   if (fromStarIndex === toStarIndex) throw new Error('Cannot transfer to same star');
@@ -1502,11 +1533,15 @@ export async function transferShips(
       rates: computeResourceRatesFromBuildings(reconciledBuildings, base.shieldRaised, rich),
       cap: computeResourceCapFromBuildings(reconciledBuildings),
     }, now);
-    if (ticked.store.fuel < PROBE_FUEL_COST) {
+    if (!tutorialFuelBypass && ticked.store.fuel < PROBE_FUEL_COST) {
       throw new Error(`Not enough fuel (need ${PROBE_FUEL_COST}, have ${Math.floor(ticked.store.fuel)})`);
     }
-    ticked.store.fuel -= PROBE_FUEL_COST;
-    fuelCost = PROBE_FUEL_COST;
+    if (tutorialFuelBypass) {
+      console.log('[PROBE-TUTORIAL-BYPASS] server accepted tutorial fuel bypass', { username, fromStarIndex, shipTypeId, count });
+    } else {
+      ticked.store.fuel -= PROBE_FUEL_COST;
+      fuelCost = PROBE_FUEL_COST;
+    }
     economy.stars[econKey] = ticked;
     await saveEconomyProfile(store, username, economy);
   }

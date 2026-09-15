@@ -168,6 +168,40 @@ export function getUnlockedBuildTypes(buildings: StarBuildingsState): BuildType[
   return BUILDING_ORDER.filter((type) => isBuildUnlocked(buildings, type));
 }
 
+function toRomanLevel(level: number): string {
+  const table = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'];
+  return table[level - 1] ?? `${level}`;
+}
+
+type BuildingSummaryEntry = {
+  level: number;
+  status?: string | null;
+  completeAt?: number | null;
+  skinId?: string;
+};
+
+export function summarizeActiveBuildings(buildings: Record<string, BuildingSummaryEntry>): string {
+  const parts: string[] = [];
+
+  for (const type of BUILDING_ORDER) {
+    const building = buildings[type];
+    if (!building || building.level <= 0 || building.status === 'LOCKED') continue;
+    const label =
+      type === 'station' ? 'Station' :
+      type === 'mine' ? 'Mine' :
+      type === 'solar' ? 'Solar' :
+      type === 'hab' ? 'Hab' :
+      type === 'warehouse' ? 'Warehouse' :
+      type === 'dock' ? 'Dock' :
+      type === 'shield' ? 'Shield' :
+      type === 'cannon' ? 'Cannon' :
+      'Refinery';
+    parts.push(`${label} ${toRomanLevel(building.level)}`);
+  }
+
+  return parts.join(', ');
+}
+
 export function getBuildingCost(type: BuildType, targetLevel: number): ResourceStore {
   const level = Math.max(1, Math.floor(targetLevel));
   if (type === 'station') {

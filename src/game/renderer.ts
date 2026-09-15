@@ -20,8 +20,8 @@ import { f } from './font';
 import { getFontScale } from './font';
 import { installTextAudit, setAuditRegion } from './text-audit';
 import { getJourneyPulseAlpha } from './journey';
-import { isCoachActive, getCoachStep, coachAdvance, dismissCoach, completeCoach, getCoachPulse, ackCoachStep, isCoachAcked, isShipsTopicActive, getShipsTopicStep, shipsTopicNext, shipsTopicShipsOpened, shipsTopicProbeClicked, dismissShipsTopic, isColonizationTopicActive, getColonizationTopicStep, getColonizationTopicTarget, colonizationTopicNext, colonizationTopicAction, dismissColonizationTopic, isComsTopicActive, getComsTopicIdx, getComsTopicPhase, comsTopicNext, comsTopicTabClicked, comsTopicBranchToAlliance, dismissComsTopic } from './coach';
-import { FLEET_COMMAND_SENDER } from '../shared/feature-flags';
+import { isCoachActive, getCoachStep, coachAdvance, dismissCoach, completeCoach, getCoachPulse, ackCoachStep, isCoachAcked, isShipsTopicActive, getShipsTopicStep, shipsTopicNext, shipsTopicShipsOpened, shipsTopicProbeClicked, dismissShipsTopic, isColonizationTopicActive, getColonizationTopicStep, getColonizationTopicTarget, colonizationTopicNext, colonizationTopicAction, dismissColonizationTopic, getProbeBuildCompleteAt, canUseTutorialProbeFuelBypass, isColonizationWaitNoticeDismissed, dismissColonizationWaitNotice, isComsTopicActive, getComsTopicIdx, getComsTopicPhase, comsTopicNext, comsTopicTabClicked, comsTopicBranchToAlliance, dismissComsTopic } from './coach';
+import { FLEET_COMMAND_SENDER, ENABLE_PROBE_MAP_MOCK } from '../shared/feature-flags';
 
 // ── View mode helper ────────────────────────────────────────────────────────
 function isMobileView(): boolean {
@@ -1061,7 +1061,7 @@ import { getEnabledResources, getFeatureResourceIds as _getFeatureResourceIds, g
 import { BODY_ENTER_RADIUS, SYSTEM_EXIT_RADIUS, SYSTEM_SIZE, FEATURE_LABELS, STAR_NAMES, PROBE_BASIC_RANGE, PROBE_ENHANCED_RANGE, PROBE_MIN_FUEL_COST } from './constants';
 // ComsMessage type removed — DM system replaces old reddit-comment-based coms
 import { isTradingStation } from '../shared/trading';
-import { BUILDING_CATALOG } from '../shared/buildings';
+import { BUILDING_CATALOG, summarizeActiveBuildings } from '../shared/buildings';
 import { getActiveSkinId, setActiveSkin, setSkinVariant, registerSkinDrawFn, getDrawFeatureIconForSkinId, getWireframePref } from './skin';
 import { proceduralSkin } from './skins/procedural';
 import { rasterSkin, preloadRasterSprites, getPlanetSprite, getCartoonStationSprite } from './skins/raster';
@@ -1280,15 +1280,66 @@ const _validTransferTargets: Set<number> = new Set();
 let _pendingTransfer: { fromStarIndex: number; toStarIndex: number; shipTypeId: number; count: number } | null = null;
 let _transferCancelButton: { x: number; y: number; w: number; h: number } | null = null;
 
+export function isValidTransferTargetForShip(
+  galaxy: { stars: Array<{ index: number; owner?: string; discoveryLevel?: string; pos: { x: number; y: number } }>; homeStarIndex: number },
+  fromStarIndex: number,
+  shipTypeId: number,
+  star: { index: number; owner?: string; discoveryLevel?: string; pos: { x: number; y: number } },
+  isTutorialStep = false,
+): boolean {
+  if (star.index === fromStarIndex || star.index === galaxy.homeStarIndex) return false;
+
+  const owner = star.owner ?? 'none';
+  const discoveryLevel = star.discoveryLevel ?? 'none';
+
+  if (shipTypeId === 2) {
+    return owner === 'player' || owner !== 'player';
+  }
+
+  if (shipTypeId === 8) {
+    return owner !== 'player' && discoveryLevel === 'visited';
+  }
+
+  if (shipTypeId === 11 || shipTypeId === 12) {
+    const srcStar = galaxy.stars.find((candidate) => candidate.index === fromStarIndex);
+    const dist = srcStar ? Math.hypot(star.pos.x - srcStar.pos.x, star.pos.y - srcStar.pos.y) : Infinity;
+    const maxRange = shipTypeId === 12 ? PROBE_ENHANCED_RANGE : PROBE_BASIC_RANGE;
+    const valid = dist <= maxRange && owner !== 'player' && (isTutorialStep || discoveryLevel === 'none' || owner === 'foreign');
+    if (isTutorialStep) {
+      console.log('[PROBE-TUTORIAL-TARGET]', {
+        fromStarIndex,
+        targetStarIndex: star.index,
+        targetOwner: owner,
+        discoveryLevel,
+        distance: dist,
+        maxRange,
+        valid,
+        tutorialStep: getColonizationTopicStep(),
+      });
+    }
+    return valid;
+  }
+
+  if (shipTypeId === 15) {
+    return owner === 'foreign';
+  }
+
+  return false;
+}
+
 /** Enter transfer mode (called from fleet panel SEND button). */
 export function enterTransferMode(fromStarIndex: number, shipTypeId: number): void {
   // Probes require base fuel
   if (shipTypeId === 11 || shipTypeId === 12) {
     const available = getBaseFuel(fromStarIndex);
-    if (available < PROBE_MIN_FUEL_COST) {
+    const tutorialFuelBypassAvailable = canUseTutorialProbeFuelBypass() && available < PROBE_MIN_FUEL_COST;
+    if (available < PROBE_MIN_FUEL_COST && !tutorialFuelBypassAvailable) {
       _lockFlash = { action: `NEED ${PROBE_MIN_FUEL_COST} FUEL (HAVE ${Math.floor(available)})`, expireMs: Date.now() + 3000 };
       playSound('click');
       return;
+    }
+    if (tutorialFuelBypassAvailable) {
+      console.log('[PROBE-TUTORIAL-BYPASS] allowing first tutorial send without fuel', { fromStarIndex, available });
     }
   }
   _transferMode = { fromStarIndex, shipTypeId };
@@ -1340,6 +1391,9 @@ export function completeTransferSelection(toStarIndex: number): void {
     shipTypeId: _transferMode.shipTypeId,
     count: 1,
   };
+  if (_transferMode.shipTypeId === 11 || _transferMode.shipTypeId === 12) {
+    colonizationTopicAction('probe_sent', toStarIndex);
+  }
   if (_transferMode.shipTypeId === 8) colonizationTopicAction('colony_sent', toStarIndex);
   _transferMode = null;
 }
@@ -1362,6 +1416,12 @@ export function hitTestTransferCancel(sx: number, sy: number): boolean {
 let _selectedStarIndex: number = -1;
 let _starInfoDismissBtn: { x: number; y: number; w: number; h: number } | null = null;
 let _starInfoVisitBtn: { x: number; y: number; w: number; h: number } | null = null;
+let _starInfoCardRect: { x: number; y: number; w: number; h: number } | null = null;
+
+export function hitTestStarInfoCard(sx: number, sy: number): boolean {
+  const rect = _starInfoCardRect;
+  return rect !== null && sx >= rect.x && sx <= rect.x + rect.w && sy >= rect.y && sy <= rect.y + rect.h;
+}
 
 // ── Galaxy Mode (NAV vs FLEET COMMAND) ──────────────────────────────────────
 export type GalaxyMode = 'nav' | 'fleet';
@@ -1387,6 +1447,7 @@ export function deselectGalaxyStar(): void {
   _selectedStarIndex = -1;
   _starInfoDismissBtn = null;
   _starInfoVisitBtn = null;
+  _starInfoCardRect = null;
 }
 
 /** Get currently selected star index (-1 if none). */
@@ -1758,32 +1819,9 @@ export function drawGalaxyView(
     const pulse = 0.5 + 0.5 * Math.sin(t);
     _validTransferTargets.clear();
     for (const s of screenStars) {
-      if (s.star.index === _transferMode.fromStarIndex) continue;
-      // Freighter (2): player-owned stars OR trading stations (if discovered)
-      if (_transferMode.shipTypeId === 2) {
-        const isTradeTarget = _postId && isTradingStation(_postId, s.star.index) && s.star.discoveryLevel !== 'none';
-        if (s.star.owner !== 'player' && !isTradeTarget) continue;
-      }
-      // Colony Ship (8): only probed/visited + not player-owned
-      if (_transferMode.shipTypeId === 8) {
-        if (s.star.discoveryLevel === 'none' || s.star.owner === 'player') continue;
-      }
-      // Probes (11, 12): only unvisited or foreign-owned, within range
-      if (_transferMode.shipTypeId === 11 || _transferMode.shipTypeId === 12) {
-        if (s.star.discoveryLevel !== 'none' && s.star.owner !== 'foreign') continue;
-        // Range check
-        const srcStar2 = galaxy.stars[_transferMode.fromStarIndex];
-        if (srcStar2) {
-          const dx2 = s.star.pos.x - srcStar2.pos.x;
-          const dy2 = s.star.pos.y - srcStar2.pos.y;
-          const dist = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-          const maxRange = _transferMode.shipTypeId === 12 ? PROBE_ENHANCED_RANGE : PROBE_BASIC_RANGE;
-          if (dist > maxRange) continue;
-        }
-      }
-      // Raider (15): only foreign-owned stars (claimed by other players)
-      if (_transferMode.shipTypeId === 15) {
-        if (s.star.owner !== 'foreign') continue;
+      const isTutorialProbeStep = isColonizationTopicActive() && getColonizationTopicStep() === 'send_probe';
+      if (!isValidTransferTargetForShip(galaxy, _transferMode.fromStarIndex, _transferMode.shipTypeId, s.star, isTutorialProbeStep)) {
+        continue;
       }
       _validTransferTargets.add(s.star.index);
       ctx.save();
@@ -1861,20 +1899,37 @@ export function drawGalaxyView(
     // Keep the colonization guide visible over the Galaxy map while the player
     // chooses a highlighted destination. The Fleet panel is redrawn separately
     // and cannot reliably host this instruction during transfer mode.
-    if (_transferMode.shipTypeId === 8 && isColonizationTopicActive()) {
+    if (isColonizationTopicActive()) {
       const tutorialTarget = screenStars.find((s) => _validTransferTargets.has(s.star.index));
-      if (tutorialTarget) {
-        drawTopicPointer(ctx, screenW, screenH,
-          { x: tutorialTarget.sx, y: tutorialTarget.sy, w: 2, h: 2 },
-          'above', 'SELECT COLONY TARGET', [
-            'Tap a green COLONY TARGET ring.',
-            'The star must be probed or visited.',
-          ]);
-      } else {
-        drawTopicInfoCard(ctx, screenW, screenH, 'NO VALID TARGETS', [
-          'Probe or visit an unowned star first.',
-          'Then return to FLEET and press SEND.',
-        ], 'OK');
+      if (_transferMode.shipTypeId === 8 && getColonizationTopicStep() === 'send_colony') {
+        if (tutorialTarget) {
+          drawTopicPointer(ctx, screenW, screenH,
+            { x: tutorialTarget.sx, y: tutorialTarget.sy, w: 2, h: 2 },
+            'above', 'SELECT COLONY TARGET', [
+              'Tap a green COLONY TARGET ring.',
+              'The star must be probed or visited.',
+            ]);
+        } else {
+          drawTopicInfoCard(ctx, screenW, screenH, 'NO VALID TARGETS', [
+            'Probe or visit an unowned star first.',
+            'Then return to FLEET and press SEND.',
+          ], 'OK');
+        }
+      }
+      if ((_transferMode.shipTypeId === 11 || _transferMode.shipTypeId === 12) && getColonizationTopicStep() === 'send_probe') {
+        if (tutorialTarget) {
+          drawTopicPointer(ctx, screenW, screenH,
+            { x: tutorialTarget.sx, y: tutorialTarget.sy, w: 2, h: 2 },
+            'above', 'SELECT PROBE TARGET', [
+              'Tap a green PROBE DESTINATION ring.',
+              'Choose a nearby unowned star within range.',
+            ]);
+        } else {
+          drawTopicInfoCard(ctx, screenW, screenH, 'NO VALID PROBE TARGETS', [
+            'Scout a nearby unowned star first.',
+            'Then press SEND on the probe.',
+          ], 'OK');
+        }
       }
     }
   } else {
@@ -1898,15 +1953,19 @@ export function drawGalaxyView(
       ctx.stroke();
       ctx.restore();
 
+      const isExpandedVisitCard = star.visitMode === 'enhanced_probe' || star.visitMode === 'ship_visit' || (star.visitMode == null && star.discoveryLevel === 'visited');
+
       // Info card dimensions
-      const cardW = 180;
-      const cardH = 126;
+      const cardW = ENABLE_PROBE_MAP_MOCK && isExpandedVisitCard ? Math.min(260, screenW - 20) : 180;
+      const cardH = ENABLE_PROBE_MAP_MOCK && isExpandedVisitCard ? Math.min(330, screenH - 20) : 126;
       // Position card to the right of star, or left if too close to edge
       let cardX = starSx + 24;
       let cardY = starSy - cardH / 2;
       if (cardX + cardW > screenW - 10) cardX = starSx - cardW - 24;
+      cardX = Math.max(10, Math.min(cardX, screenW - cardW - 10));
       if (cardY < 10) cardY = 10;
       if (cardY + cardH > screenH - 10) cardY = screenH - cardH - 10;
+      _starInfoCardRect = { x: cardX, y: cardY, w: cardW, h: cardH };
 
       // Card background
       ctx.save();
@@ -1934,7 +1993,7 @@ export function drawGalaxyView(
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillStyle = G_BRIGHT;
-      ctx.fillText(star.name, cardX + 8, cardY + 8);
+      ctx.fillText(star.name, cardX + 8, cardY + 8, cardW - 42);
 
       // Discovery status
       let statusText = 'UNEXPLORED';
@@ -1957,7 +2016,7 @@ export function drawGalaxyView(
       }
       ctx.font = f(9);
       ctx.fillStyle = statusColor;
-      ctx.fillText(statusText, cardX + 8, cardY + 24);
+      ctx.fillText(statusText, cardX + 8, cardY + 24, cardW - 16);
 
       // Distance from ship
       const dx = star.pos.x - shipPos.x;
@@ -1993,6 +2052,12 @@ export function drawGalaxyView(
       }
 
       const economyInfo = _serverEconomyByStarIndex.get(star.index);
+      const foreignBuildingSummary = star.owner === 'foreign' && economyInfo ? summarizeActiveBuildings(economyInfo.buildings) : '';
+      if (foreignBuildingSummary) {
+        ctx.fillStyle = '#ffd876';
+        ctx.font = f(7, 'bold');
+        ctx.fillText(`BUILDINGS: ${foreignBuildingSummary}`, cardX + 8, cardY + 80, cardW - 16);
+      }
       if (economyInfo?.starCondition && economyInfo.starCondition !== 'normal') {
         const conditionLabel = economyInfo.starCondition === 'lost'
           ? 'AIR PURIFIER: LOST'
@@ -2001,7 +2066,74 @@ export function drawGalaxyView(
             : `AIR PURIFIER: DEGRADED (${economyInfo.capacityPercent ?? 75}%)`;
         ctx.fillStyle = economyInfo.starCondition === 'lost' ? '#ff6666' : '#ffcc44';
         ctx.font = f(7, 'bold');
-        ctx.fillText(conditionLabel, cardX + 8, cardY + 80);
+        ctx.fillText(conditionLabel, cardX + 8, foreignBuildingSummary ? cardY + 92 : cardY + 80);
+      }
+
+      if (ENABLE_PROBE_MAP_MOCK && isExpandedVisitCard) {
+        const survey = getEnhancedProbeSurveyData(star, _postId);
+        const planetCount = survey.planetCount;
+        const beltCount = survey.beltCount;
+
+        ctx.font = f(9, 'bold');
+        ctx.fillStyle = '#9de7c7';
+        ctx.textAlign = 'left';
+        ctx.fillText('ENHANCED PROBE · LIVE DATA', cardX + 8, cardY + 98, cardW - 16);
+        const mapTop = cardY + 115;
+        const mapH = Math.max(24, cardH - 163);
+        const mapW = cardW - 16;
+        const cx = cardX + cardW / 2;
+        const cy = mapTop + mapH / 2;
+        const radius = Math.max(24, Math.min(mapW, mapH) / 2 - 8);
+        const maxOrbit = Math.max(1, ...survey.bodies.map((body) => body.orbitDist));
+
+        ctx.fillStyle = '#031009';
+        ctx.fillRect(cardX + 8, mapTop, mapW, mapH);
+        ctx.strokeStyle = '#285540';
+        ctx.lineWidth = 1;
+
+        for (const body of survey.bodies) {
+          const orbitRatio = body.orbitDist / maxOrbit;
+          const orbitRadius = radius * (0.18 + orbitRatio * 0.78);
+          ctx.beginPath();
+          ctx.arc(cx, cy, orbitRadius, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        const beltBodies = survey.bodies.filter((body) => body.type === 'belt');
+        ctx.save();
+        ctx.strokeStyle = '#889c83';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([1, 4]);
+        for (const body of beltBodies) {
+          const orbitRatio = body.orbitDist / maxOrbit;
+          const orbitRadius = radius * (0.18 + orbitRatio * 0.78);
+          ctx.beginPath();
+          ctx.arc(cx, cy, orbitRadius, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.restore();
+
+        ctx.fillStyle = '#ffe099';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        for (const body of survey.bodies) {
+          const orbitRatio = body.orbitDist / maxOrbit;
+          const orbitRadius = radius * (0.18 + orbitRatio * 0.78);
+          const angle = (body.index / Math.max(1, survey.bodies.length)) * Math.PI * 2 + 0.7;
+          const x = cx + Math.cos(angle) * orbitRadius;
+          const y = cy + Math.sin(angle) * orbitRadius;
+          ctx.fillStyle = body.type === 'belt' ? '#d9f3ff' : '#83d7c1';
+          ctx.beginPath();
+          ctx.arc(x, y, body.type === 'belt' ? 2.4 : 4.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.font = f(8);
+        ctx.fillStyle = '#b3d9c5';
+        ctx.textAlign = 'center';
+        ctx.fillText(`SYSTEM: ${planetCount} PLANETS · ${beltCount} BELTS`, cx, mapTop + mapH + 5, mapW);
       }
 
       // VISIT button
@@ -2030,10 +2162,12 @@ export function drawGalaxyView(
       _selectedStarIndex = -1;
       _starInfoDismissBtn = null;
       _starInfoVisitBtn = null;
+      _starInfoCardRect = null;
     }
   } else if (_selectedStarIndex < 0) {
     _starInfoDismissBtn = null;
     _starInfoVisitBtn = null;
+    _starInfoCardRect = null;
   }
 }
 
@@ -2079,6 +2213,22 @@ function roundedRect(
   ctx.lineTo(x, y + r);
   ctx.arcTo(x, y, x + r, y, r);
   ctx.closePath();
+}
+
+export function getEnhancedProbeSurveyData(
+  star: { seed: number; bodyCount: number; stationBodyIndex?: number; owner: string; index: number },
+  postId?: string,
+) {
+  const bodies = generateSystem(star as Parameters<typeof generateSystem>[0], postId);
+  const planets = bodies.filter((body) => body.type === 'planet');
+  const belts = bodies.filter((body) => body.type === 'belt');
+  return {
+    bodies,
+    planets,
+    belts,
+    planetCount: planets.length,
+    beltCount: belts.length,
+  };
 }
 
 /** Draw a small icon for a planet feature */
@@ -3584,9 +3734,16 @@ function hitTestBuildPanel(sx: number, sy: number): void {
 function hitTestShipsPanel(sx: number, sy: number): void {
   for (const btn of _lastShipButtons) {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      // During the build-probe tutorial step only the Basic Probe may be built, so a stray
+      // tap on another ship can't occupy the single build slot and stall the guide.
+      if (isColonizationTopicActive() && getColonizationTopicStep() === 'build_probe' && btn.shipTypeId !== 11) {
+        playSound('click');
+        return;
+      }
       if (btn.shipTypeId === 11) shipsTopicProbeClicked(); // Ships guide only cares that the tap landed
-      if (btn.shipTypeId === 11 && btn.enabled) colonizationTopicAction('probe_built');
-      if (btn.shipTypeId === 8 && btn.enabled) colonizationTopicAction('colony_built');
+      if (btn.shipTypeId === 8 && btn.enabled && isColonizationTopicActive() && getColonizationTopicStep() === 'build_colony') {
+        colonizationTopicAction('colony_build_started');
+      }
       if (btn.enabled) {
         if (btn.isUpgrade && btn.upgradeFromTypeId != null) {
           _pendingUpgradeShipRequest = { fromTypeId: btn.upgradeFromTypeId, ...(btn.useBlueprint ? { useBlueprint: true } : {}) };
@@ -3623,6 +3780,14 @@ function hitTestFleetPanel(sx: number, sy: number): void {
   // SEND buttons (enter transfer mode)
   for (const btn of _fleetSendButtons) {
     if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) {
+      if (isColonizationTopicActive() && getColonizationTopicStep() === 'send_colony' && btn.starIndex !== _panelsStarIndex) {
+        console.log('[COLONIZATION-TOPIC] rejected colony send from non-current star', {
+          sourceStarIndex: btn.starIndex,
+          currentStarIndex: _panelsStarIndex,
+        });
+        playSound('click');
+        return;
+      }
       enterTransferMode(btn.starIndex, btn.shipTypeId);
       // Transfer mode owns the Galaxy map now; hide the panel without queueing
       // a tier revert so the player can choose a destination.
@@ -3692,6 +3857,17 @@ export function drawPlanetPanels(
     if (i === 1 && !isDisabled) _coachBuildTabRect = { x: tabX - 4, y: ty, w: TAB_W + 4, h: TAB_H };
     if (i === 2 && !isDisabled) _coachShipsTabRect = { x: tabX - 4, y: ty, w: TAB_W + 4, h: TAB_H };
     if (i === 3 && !isDisabled) _coachFleetTabRect = { x: tabX - 4, y: ty, w: TAB_W + 4, h: TAB_H };
+    if (isColonizationTopicActive() && i === 2) {
+      console.debug('[COLONIZE-DBG] SHIPS tab state', {
+        step: getColonizationTopicStep(),
+        openPanel: _openPanel,
+        docked: _panelsDocked,
+        owned: _panelsOwned,
+        disabled: isDisabled,
+        rectCreated: !!_coachShipsTabRect,
+        tabTitle: tab.title,
+      });
+    }
 
     // Journey pulse: brighten non-disabled tabs
     const pulseAlpha = getJourneyPulseAlpha();
@@ -3837,7 +4013,7 @@ const COACH_COPY: Record<string, { step: string; title: string[]; lines: string[
   upgrade_station: { step: '2/7', title: ['UPGRADE THE STATION'], lines: ['Tap STATION to upgrade your', 'base. Higher levels unlock', 'more buildings and ships.'], nudge: 'NOW PRESS STATION' },
   pick_skin: { step: '3/7', title: ['SELECT YOUR LOOK'], lines: ['Other players see your style.', 'Pick a station skin to start', 'the upgrade.'], nudge: 'NOW PICK A STYLE' },
   undock: { step: '4/7', title: ['LEAVE THE STATION'], lines: ['Tap UNDOCK to release your', 'ship and fly free.'], nudge: 'NOW PRESS UNDOCK' },
-  navigate_dock: { step: '5/7', title: ['FLY TO THE PLANET'], lines: ['Tap where you want to go,', 'or steer with WASD. You dock', 'on reaching the orbit ring.'], nudge: 'FLY INTO THE ORBIT RING' },
+  navigate_dock: { step: '5/7', title: ['ORBIT THE PLANET'], lines: ['Fly to the marked planet and', 'enter its orbit ring. Then press', 'COLONIZE to claim the star.'], nudge: 'FLY INTO THE ORBIT RING' },
   scan: { step: '6/7', title: ['SCAN THE SURFACE'], lines: ['Tap SCAN to survey the planet', 'for resources, blueprints', 'and anomalies.'], nudge: 'NOW PRESS SCAN' },
   help: { step: '7/7', title: ['THE MANUAL'], lines: ['Your scan is running. Tap ?', 'any time to re-read the', 'controls and guides.'], nudge: 'NOW PRESS ?' },
 };
@@ -4071,6 +4247,92 @@ function drawTopicInfoCard(
   ctx.restore();
 }
 
+/** Waiting card with a live status pill instead of a proceed button — progression is auto-advanced by state. */
+function drawTopicWaitCard(
+  ctx: CanvasRenderingContext2D,
+  screenW: number, screenH: number,
+  title: string,
+  lines: string[],
+  statusLabel: string,
+): void {
+  const AMBER = '#ffb84d';
+  const pulse = getCoachPulse();
+  const boxW = Math.min(220, screenW - 24);
+  const lineH = 11;
+
+  const topPad = 10;
+  const titleH = 16;
+  const bodyH = lines.length * lineH;
+  const contentBottom = topPad + titleH + bodyH;
+  const buttonRowY = contentBottom + 10;
+  const buttonRowH = 16;
+  const bottomPad = 10;
+  const boxH = buttonRowY + buttonRowH + bottomPad;
+
+  const boxX = (screenW - boxW) / 2;
+  const boxY = Math.max(8, Math.min((screenH - boxH) / 2, screenH - boxH - 8));
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+  ctx.fillRect(0, 0, screenW, screenH);
+
+  ctx.fillStyle = '#0a0600';
+  roundedRect(ctx, boxX, boxY, boxW, boxH, 6);
+  ctx.fill();
+  ctx.strokeStyle = AMBER;
+  ctx.lineWidth = 2;
+  roundedRect(ctx, boxX, boxY, boxW, boxH, 6);
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = f(9, 'bold');
+  ctx.fillStyle = AMBER;
+  ctx.fillText(title, boxX + 12, boxY + topPad);
+
+  ctx.font = f(7);
+  ctx.fillStyle = G_BRIGHT;
+  for (const [i, line] of lines.entries()) {
+    ctx.fillText(line, boxX + 12, boxY + topPad + titleH + i * lineH);
+  }
+
+  // Non-interactive status pill (pulsing) — the wait auto-advances when the build finishes.
+  const pw = 96;
+  const ph = buttonRowH;
+  const px = boxX + boxW - pw - 10;
+  const py = boxY + buttonRowY;
+  roundedRect(ctx, px, py, pw, ph, 3);
+  ctx.fillStyle = `rgba(80, 45, 0, ${0.35 + pulse * 0.35})`;
+  ctx.fill();
+  roundedRect(ctx, px, py, pw, ph, 3);
+  ctx.strokeStyle = `rgba(255, 184, 77, ${0.5 + pulse * 0.4})`;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.font = f(8, 'bold');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = AMBER;
+  ctx.fillText(statusLabel, px + pw / 2, py + ph / 2);
+
+  // SKIP escape hatch stays available.
+  const sw = 40;
+  const sh = buttonRowH;
+  const sx = boxX + 10;
+  const sy = boxY + buttonRowY;
+  _topicSkipButton = { x: sx, y: sy, w: sw, h: sh };
+  roundedRect(ctx, sx, sy, sw, sh, 3);
+  ctx.strokeStyle = 'rgba(255, 184, 77, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.font = f(7, 'bold');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(255, 184, 77, 0.7)';
+  ctx.fillText('SKIP', sx + sw / 2, sy + sh / 2);
+
+  ctx.restore();
+}
+
 /** Ring + callout pointing at a real UI target for the topic guides, with a SKIP escape hatch. */
 function drawTopicPointer(
   ctx: CanvasRenderingContext2D,
@@ -4196,7 +4458,15 @@ function drawColonizationTopicOverlay(ctx: CanvasRenderingContext2D, screenW: nu
     ]);
     return;
   }
-  if (step === 'build_probe' && _openPanel === 2) {
+  if (step === 'build_probe') {
+    if (_openPanel !== 2) {
+      drawTopicInfoCard(ctx, screenW, screenH, 'OPEN SHIPS', [
+        'Open SHIPS to build the',
+        'Basic Probe and reveal',
+        'your next colonization target.',
+      ], 'OK');
+      return;
+    }
     const btn = _lastShipButtons.find((candidate) => candidate.shipTypeId === 11);
     if (btn) drawTopicPointer(ctx, screenW, screenH, btn, 'above', 'BUILD A PROBE', [
       'A probe reveals an unowned star',
@@ -4204,15 +4474,53 @@ function drawColonizationTopicOverlay(ctx: CanvasRenderingContext2D, screenW: nu
     ]);
     return;
   }
+  if (step === 'probe_building') {
+    const completeAt = getProbeBuildCompleteAt();
+    const total = TUTORIAL_PROBE_BUILD_SECONDS;
+    const remainingSec = completeAt != null ? Math.max(0, Math.min(total, Math.ceil((completeAt - Date.now()) / 1000))) : total;
+    const status = `${String(remainingSec).padStart(2, '0')} / ${String(total).padStart(2, '0')}`;
+    drawTopicWaitCard(ctx, screenW, screenH, 'PROBE UNDER CONSTRUCTION', [
+      'Your probe is being built.',
+      'This continues automatically',
+      'the moment it is ready.',
+    ], status);
+    return;
+  }
+  if (step === 'send_probe') {
+    const probeButtons = _fleetSendButtons.filter((button) => button.shipTypeId === 11 || button.shipTypeId === 12);
+    const target = probeButtons.find((button) => _panelsStarIndex != null && button.starIndex === _panelsStarIndex) ?? probeButtons[0];
+    if (target) {
+      drawTopicPointer(ctx, screenW, screenH, target, 'above', 'SEND PROBE', [
+        'Send the probe before building',
+        'or sending the Colony Ship.',
+      ]);
+    } else {
+      drawTopicInfoCard(ctx, screenW, screenH, 'SEND YOUR PROBE', [
+        'Use FLEET to send the Basic Probe',
+        'to a highlighted star before',
+        'you begin the colony launch.',
+      ], 'OK');
+    }
+    return;
+  }
   if (step === 'colony_building') {
+    if (isColonizationWaitNoticeDismissed()) return;
     drawTopicInfoCard(ctx, screenW, screenH, 'COLONY SHIP BUILDING', [
       'Your Colony Ship is being built.',
-      'When construction completes, open',
-      'FLEET to send it to a discovered star.',
+      'This takes a little while, so',
+      'the tutorial will resume when it is ready.',
     ], 'OK');
     return;
   }
-  if (step === 'build_colony' && _openPanel === 2) {
+  if (step === 'build_colony') {
+    if (_openPanel !== 2) {
+      drawTopicInfoCard(ctx, screenW, screenH, 'OPEN SHIPS', [
+        'Open SHIPS and build a',
+        'Colony Ship to claim a',
+        'discovered unowned star.',
+      ], 'OK');
+      return;
+    }
     const btn = _lastShipButtons.find((candidate) => candidate.shipTypeId === 8);
     if (btn) drawTopicPointer(ctx, screenW, screenH, btn, 'above', 'BUILD A COLONY SHIP', [
       'This ship claims a discovered',
@@ -4235,7 +4543,9 @@ function drawColonizationTopicOverlay(ctx: CanvasRenderingContext2D, screenW: nu
     return;
   }
   if (step === 'send_colony') {
-    const target = _fleetSendButtons.find((button) => button.shipTypeId === 8);
+    const target = _fleetSendButtons.find((button) =>
+      button.shipTypeId === 8 && _panelsStarIndex != null && button.starIndex === _panelsStarIndex,
+    );
     if (target) {
       drawTopicPointer(ctx, screenW, screenH, target, 'above', 'SEND COLONY SHIP', [
         'Press SEND, then choose a highlighted',
@@ -4609,14 +4919,34 @@ export function hitTestCoachButtons(sx: number, sy: number): boolean {
     }
     const primary = _topicPrimaryButton;
     if (primary && sx >= primary.x && sx <= primary.x + primary.w && sy >= primary.y && sy <= primary.y + primary.h) {
+      console.debug('[COLONIZE-DBG] tutorial primary click', {
+        step: getColonizationTopicStep(),
+        active: isColonizationTopicActive(),
+        primaryRect: primary,
+        panelOpen: _openPanel,
+      });
       if (isShipsTopicActive()) shipsTopicNext();
-      else if (isColonizationTopicActive()) colonizationTopicNext();
-      else comsTopicNext();
+      else if (isColonizationTopicActive()) {
+        const step = getColonizationTopicStep();
+        if (step === 'colony_building') {
+          dismissColonizationWaitNotice();
+          playSound('click');
+          return true;
+        }
+        if ((step === 'build_probe' || step === 'build_colony') && _openPanel !== 2) {
+          togglePlanetPanel(2);
+          playSound('click');
+          return true;
+        }
+        colonizationTopicNext();
+      } else comsTopicNext();
       playSound('click');
       return true;
     }
     // Pointer-only steps have no button here — let the tap fall through to the real
     // UI element (SHIPS tab, Probe button, COMS tab) so the click actually registers.
+    // The probe-building wait is modal: swallow stray taps so they don't reach the world.
+    if (isColonizationTopicActive() && getColonizationTopicStep() === 'probe_building') return true;
     return false;
   }
 
@@ -7219,7 +7549,7 @@ export function hitTestComsPanel(sx: number, sy: number): boolean {
 import type { DockState } from './types';
 import type { DockAction } from './dock';
 import type { ShipTypeId } from '../shared/api';
-import { SHIP_CATALOG, UPGRADE_PATH, canBuildShip, canUpgradeShip } from '../shared/ships';
+import { SHIP_CATALOG, UPGRADE_PATH, canBuildShip, canUpgradeShip, TUTORIAL_PROBE_BUILD_SECONDS } from '../shared/ships';
 
 // ── Ship Icon Cache ─────────────────────────────────────────────────────────
 const _shipIconCache = new Map<string, HTMLImageElement>();

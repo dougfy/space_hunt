@@ -746,7 +746,12 @@ api.get('/economy', async (c) => {
     return c.json<ErrorResponse>({ status: 'error', message: 'starIndex must be >= 0' }, 400);
   }
 
-  if (context.postId) await ensureAirPurifierQuest(redis, context.postId, username);
+  if (context.postId) {
+    const debugEvent = { user: username, starIndex, source: 'economy', trigger: 'air_purifier_check' };
+    auditLog(context.postId, 'debug_air_purifier_check', debugEvent);
+    console.log(`[DEBUG] economy route triggered air-purifier check user=${username} starIndex=${starIndex} postId=${context.postId}`);
+    await ensureAirPurifierQuest(redis, context.postId, username);
+  }
 
   const response = await loadStarEconomy(redis, username, starIndex);
   return c.json<StarEconomyResponse>(response);
@@ -766,7 +771,12 @@ api.get('/buildings', async (c) => {
   }
 
   try {
-    if (context.postId) await ensureAirPurifierQuest(redis, context.postId, username);
+    if (context.postId) {
+      const debugEvent = { user: username, starIndex, source: 'buildings', trigger: 'air_purifier_check' };
+      auditLog(context.postId, 'debug_air_purifier_check', debugEvent);
+      console.log(`[DEBUG] buildings route triggered air-purifier check user=${username} starIndex=${starIndex} postId=${context.postId}`);
+      await ensureAirPurifierQuest(redis, context.postId, username);
+    }
 
     const response = await loadStarEconomy(redis, username, starIndex, Date.now(), skinId ?? undefined);
     return c.json<StarEconomyResponse>(response);
@@ -1129,7 +1139,14 @@ api.post('/fleet/transfer', async (c) => {
 
   try {
     const response = await transferShips(
-      redis, body.username, body.fromStarIndex, body.toStarIndex, body.shipTypeId, body.count,
+      redis,
+      body.username,
+      body.fromStarIndex,
+      body.toStarIndex,
+      body.shipTypeId,
+      body.count,
+      Date.now(),
+      body.tutorialFuelBypass ?? false,
     );
     // Fire-and-forget: first transfer achievement
     const { postId } = context;

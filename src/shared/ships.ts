@@ -2,6 +2,9 @@ import type { ShipTypeId, ResourceStore, SharedShipShape } from './api';
 
 export type DockTier = 1 | 2 | 3;
 
+/** Shortened Basic Probe build time used only inside the colonize tutorial to avoid dead waiting. */
+export const TUTORIAL_PROBE_BUILD_SECONDS = 8;
+
 export type ShipCatalogEntry = {
   id: ShipTypeId;
   name: string;
@@ -251,6 +254,89 @@ export function getFleetShape(fleet: Array<{ typeId: number; count: number }>): 
     if (owned && owned.count > 0) return getShipTypeShape(typeId);
   }
   return 'scout';
+}
+
+/**
+ * Determine the player's main ship shape from every fleet they own across all
+ * stars plus any ships currently in transit. The main ship shape must reflect
+ * the best upgrade-path ship anywhere — otherwise flying a destroyer away from
+ * the home star (leaving only probes behind) reverts the icon to scout.
+ */
+export function getFleetShapeFromAllFleets(
+  fleets: Array<Array<{ typeId: number; count: number }>>,
+): SharedShipShape {
+  const combined: Array<{ typeId: number; count: number }> = [];
+  for (const fleet of fleets) {
+    for (const ship of fleet) combined.push(ship);
+  }
+  return getFleetShape(combined);
+}
+
+/**
+ * Guard against stale async home-fleet responses overwriting the latest
+ * authoritative ship shape. Older requests are ignored while newer ones can
+ * still win.
+ */
+export function shouldApplyFleetShape(
+  currentVersion: number,
+  incomingVersion: number,
+  currentShape: SharedShipShape,
+  incomingShape: SharedShipShape,
+): { accepted: boolean; shape: SharedShipShape } {
+  const hasAuthority = currentVersion >= 0;
+
+  if (!hasAuthority) {
+    console.debug('[SHIP-DEBUG] accepting initial home-fleet shape', {
+      currentVersion,
+      incomingVersion,
+      currentShape,
+      incomingShape,
+      reason: 'initial_version',
+    });
+    return { accepted: true, shape: incomingShape };
+  }
+
+  if (incomingVersion < currentVersion) {
+    console.debug('[SHIP-DEBUG] ignoring stale home-fleet shape', {
+      currentVersion,
+      incomingVersion,
+      currentShape,
+      incomingShape,
+      reason: 'older_version',
+    });
+    return { accepted: false, shape: currentShape };
+  }
+
+  if (incomingVersion === currentVersion) {
+    if (incomingShape === currentShape) {
+      console.debug('[SHIP-DEBUG] skipping duplicate home-fleet shape', {
+        currentVersion,
+        incomingVersion,
+        currentShape,
+        incomingShape,
+        reason: 'same_version_same_shape',
+      });
+      return { accepted: false, shape: currentShape };
+    }
+
+    console.debug('[SHIP-DEBUG] ignoring conflicting same-version home-fleet shape', {
+      currentVersion,
+      incomingVersion,
+      currentShape,
+      incomingShape,
+      reason: 'same_version_conflict',
+    });
+    return { accepted: false, shape: currentShape };
+  }
+
+  console.debug('[SHIP-DEBUG] accepting home-fleet shape', {
+    currentVersion,
+    incomingVersion,
+    currentShape,
+    incomingShape,
+    reason: incomingVersion > currentVersion ? 'newer_version' : 'shape_changed',
+  });
+  return { accepted: true, shape: incomingShape };
 }
 
 /** Get the next ship type in the upgrade path, or null if maxed. */

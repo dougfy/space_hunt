@@ -7,11 +7,13 @@ console.log(`[STARTUP] game.ts module executing, t=${(performance.now() - ((glob
 import { context, requestExpandedMode } from '@devvit/web/client';
 import { telemetry } from '@devvit/analytics/client/reddit';
 import versionJson from '../../version.json';
-import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, isJourneyDone, startCoach, restoreCoach, isCoachSkipped, getCoachStep, coachAdvance, isCoachActive, startShipsTopic, startComsTopic, startColonizationTopic, colonizationTopicAction, getColonizationTopicStep, getColonizationTopicTarget, openComsPanelForTutorial, getFontScaleName, setFontScaleByName, setTextAuditEnabled, getOverflowReport, playSound, preloadSounds, warmCriticalSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, setAllianceItemOffers, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, consumePendingAirPurifierRepair, setSpecialInventory, deductBaseFuel, consumePendingVideoPlay, setReturningReport, getReturningReportItems, getTestState, confirmSkinPicker, getSoundHistory, consumePendingAbandon, showBuildError, setBuildCooldown } from '../game';
+import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, isJourneyDone, startCoach, restoreCoach, isCoachSkipped, getCoachStep, coachAdvance, isCoachActive, startShipsTopic, startComsTopic, startColonizationTopic, dismissColonizationTopic, isColonizationTopicActive, colonizationTopicAction, getColonizationTopicStep, getColonizationTopicTarget, setProbeBuildCompleteAt, openComsPanelForTutorial, getFontScaleName, setFontScaleByName, setTextAuditEnabled, getOverflowReport, playSound, preloadSounds, warmCriticalSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, setAllianceItemOffers, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, consumePendingAirPurifierRepair, setSpecialInventory, deductBaseFuel, canUseTutorialProbeFuelBypass, consumeTutorialProbeFuelBypass, consumePendingVideoPlay, setReturningReport, getReturningReportItems, getTestState, confirmSkinPicker, getSoundHistory, consumePendingAbandon, showBuildError, setBuildCooldown } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
-import { getFleetShape } from '../shared/ships';
+import { getFleetShapeFromAllFleets, shouldApplyFleetShape } from '../shared/ships';
 import { generateSystem } from '../game/galaxy';
+import { applyStarDiscoveryState } from '../game/game-loop';
+import { getSelectedStarIndex } from '../game';
 
 type CoachUiBridge = typeof globalThis & { __helpPanelOpen?: boolean };
 import { initSkins, getActiveSkinId, setActiveSkin, getWireframePref, setWireframePref } from '../game/skin';
@@ -21,6 +23,7 @@ import { rasterSkin, preloadRasterSprites } from '../game/skins/raster';
 import { scifiSkin, preloadScifiSprites } from '../game/skins/scifi';
 import { preloadShipSprites } from '../game/ship-sprites';
 import { PROBE_MIN_FUEL_COST } from '../game/constants';
+import type { ColonizationTopicStep } from '../game/coach';
 import type {
   BuildBuildingRequest,
   ClaimPodResponse,
@@ -258,6 +261,20 @@ const sessionId = `${username}:${Math.random().toString(36).slice(2, 8)}`;
 let currentShape: ShipShape = 'scout';
 let currentName = username;
 let playerHomeStarIndex: number | null = null;
+let homeFleetShapeVersion = 0;
+let lastAppliedHomeFleetShapeVersion = -1;
+
+function applyHomeFleetShape(shape: ShipShape, source: string, requestVersion: number): void {
+  const outcome = shouldApplyFleetShape(lastAppliedHomeFleetShapeVersion, requestVersion, currentShape, shape);
+  if (!outcome.accepted) {
+    console.log(`[SHIP-DEBUG] ignoring stale home-fleet shape from ${source}: shape=${shape} v${requestVersion} currentVersion=${lastAppliedHomeFleetShapeVersion} currentShape=${currentShape}`);
+    return;
+  }
+  currentShape = outcome.shape;
+  bridge.setShipShape(outcome.shape);
+  lastAppliedHomeFleetShapeVersion = requestVersion;
+  console.log(`[SHIP-DEBUG] applied home-fleet shape from ${source}: ${outcome.shape} (v${requestVersion}) current=${currentShape}`);
+}
 
 // ── Scanned bodies tracking (wireframe → raster on scan) ────────────────────
 const _scannedBodies = new Set<string>(); // keys: "starIndex:bodyIndex" (legacy), "starIndex:bodyIndex:f", "starIndex:bodyIndex:p"
@@ -414,7 +431,7 @@ function loadPlayerProfile(): Promise<void> {
   console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — loadPlayerProfile() starting fetch`);
   profileReady = fetch(`/api/profile?username=${encodeURIComponent(username)}&postId=${encodeURIComponent(postId)}`)
     .then(r => { console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — /api/profile response received (${(performance.now() - _tProfile).toFixed(0)}ms)`); return r.json(); })
-    .then((profile: PlayerProfileResponse) => {
+    .then(async (profile: PlayerProfileResponse) => {
       console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — profile JSON parsed, processing`);
       console.log('[PROFILE] full response:', JSON.stringify({ homeStar: profile.homeStar, lastPosition: profile.lastPosition, discoveredStars: profile.discoveredStars, claimedCount: profile.claimed?.length }));
       if (profile.name) {
@@ -428,20 +445,28 @@ function loadPlayerProfile(): Promise<void> {
         playerHomeStarIndex = profile.homeStar;
         relocateToHomeStar(profile.homeStar);
         journeyProgress(0.10, 'home_star_claimed');
-        // Immediately fetch ship shape from home star fleet
-        fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${profile.homeStar}`)
-          .then(r => r.ok ? r.json() : null)
-          .then((data: { ships: Array<{ typeId: number; count: number }> } | null) => {
-            if (data) {
-              const fleetShape = getFleetShape(data.ships);
-              if (fleetShape !== currentShape) {
-                currentShape = fleetShape;
-                bridge.setShipShape(fleetShape);
-                console.log(`[PROFILE] restored ship shape: ${fleetShape}`);
-              }
-            }
-          })
-          .catch(() => {});
+        // Resolve the deployed shape before startMultiplayer can enter the game.
+        // Otherwise the transition gate can observe the startup Scout while the
+        // Ships panel is already showing the real fleet. Use the full fleet (all
+        // owned stars + transits) so a main ship away from home still counts.
+        const shapeStartedAt = performance.now();
+        try {
+          const requestVersion = ++homeFleetShapeVersion;
+          const fleetRes = await fetch(`/api/fleet/all?username=${encodeURIComponent(username)}`);
+          if (!fleetRes.ok) {
+            console.warn(`[PROFILE] fleet request failed: HTTP ${fleetRes.status}`);
+          } else {
+            const data = await fleetRes.json() as FleetAllResponse;
+            const allFleets = Object.values(data.stars).map((s) => s.ships);
+            const transitShips = (data.transits ?? []).map((t) => ({ typeId: t.shipTypeId, count: t.count }));
+            const fleetShape = getFleetShapeFromAllFleets([...allFleets, transitShips]);
+            console.log('[SHIP-DEBUG] profile fleet-wide payload', { requestVersion, source: 'profile', fleetCount: allFleets.length, transits: transitShips.length, fleetShape });
+            applyHomeFleetShape(fleetShape, 'profile', requestVersion);
+            console.log(`[PROFILE] restored ship shape: ${fleetShape} from full fleet (${allFleets.length} stars, ${transitShips.length} transits) in ${(performance.now() - shapeStartedAt).toFixed(0)}ms`);
+          }
+        } catch (error) {
+          console.warn('[PROFILE] fleet request failed:', error);
+        }
       }
       // Restore discovered stars BEFORE claims (claims check discoveryLevel)
       if (profile.discoveredStars && profile.discoveredStars.length > 0) {
@@ -1142,6 +1167,7 @@ function processBotCopy() {
 
 let _pollEconomyRunning = false;
 let _lastPolledStarIndex: number | null = null;
+let _selectedCardEconomyStar = -1;
 
 /**
  * Buildings/station only render once a server economy snapshot exists for the
@@ -1182,6 +1208,9 @@ function advanceColonizationTopicFromState(fleetData?: FleetAllResponse): void {
 }
 
 async function startColonizationTopicFromCurrentState(): Promise<void> {
+  // Don't clobber a session already in progress (e.g. an admin-forced reset to
+  // the very start) with a state-derived resume step.
+  if (isColonizationTopicActive()) return;
   const gs = getGameState();
   const homeStar = gs?.galaxy.homeStarIndex ?? -1;
   const hasVisitedStar = getVisitedStars().some((starIndex) => starIndex !== homeStar);
@@ -1191,11 +1220,53 @@ async function startColonizationTopicFromCurrentState(): Promise<void> {
     return;
   }
   try {
+    const allFleetResponse = await fetch(`/api/fleet/all?username=${encodeURIComponent(username)}`);
+    const allFleet = allFleetResponse.ok ? await allFleetResponse.json() as FleetAllResponse : null;
+    const allStarFleets = allFleet ? Object.values(allFleet.stars) : [];
+    const colonyTransit = allFleet?.transits.find((transit) => transit.shipTypeId === 8);
+    if (colonyTransit) {
+      startColonizationTopic(hasVisitedStar, 'arrival', colonyTransit.toStarIndex);
+      return;
+    }
+    const colonyDestination = allFleet
+      ? Object.entries(allFleet.stars).find(([key, fleet]) => {
+        const destination = Number(key.replace(/^s:/, ''));
+        const star = gs?.galaxy.stars[destination];
+        return destination !== homeStar
+          && star?.owner !== 'player'
+          && star?.discoveryLevel === 'visited'
+          && fleet.ships.some((ship) => ship.typeId === 8 && ship.count > 0);
+      })
+      : undefined;
+    if (colonyDestination) {
+      const destinationStar = Number(colonyDestination[0].replace(/^s:/, ''));
+      startColonizationTopic(hasVisitedStar, 'arrival', destinationStar);
+      advanceColonizationTopicFromState(allFleet ?? undefined);
+      return;
+    }
+    const colonyReadyAnywhere = allStarFleets.some((fleet) => fleet.ships.some((ship) => ship.typeId === 8 && ship.count > 0));
+    const colonyBuildingAnywhere = allStarFleets.some((fleet) => fleet.building?.typeId === 8);
+    if (colonyReadyAnywhere) {
+      startColonizationTopic(hasVisitedStar, 'open_fleet');
+      return;
+    }
+    if (colonyBuildingAnywhere) {
+      startColonizationTopic(hasVisitedStar, 'colony_building');
+      return;
+    }
     const response = await fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${starIndex}`);
     const fleet = response.ok ? await response.json() as { ships: Array<{ typeId: number; count: number }>; building: { typeId: number; completeAt: number } | null } : null;
+    const probeReady = fleet?.ships.some((ship) => ship.typeId === 11 && ship.count > 0) ?? false;
     const colonyReady = fleet?.ships.some((ship) => ship.typeId === 8 && ship.count > 0) ?? false;
+    const probeBuilding = fleet?.building?.typeId === 11;
     const colonyBuilding = fleet?.building?.typeId === 8;
-    const initialStep = colonyReady ? 'send_colony' : colonyBuilding ? 'colony_building' : 'info';
+
+    let initialStep: ColonizationTopicStep = 'info';
+    if (probeBuilding) { initialStep = 'probe_building'; setProbeBuildCompleteAt(fleet?.building?.completeAt ?? null); }
+    else if (probeReady) initialStep = 'send_probe';
+    else if (colonyBuilding) initialStep = 'colony_building';
+    else if (colonyReady) initialStep = 'open_fleet';
+
     startColonizationTopic(hasVisitedStar, initialStep);
   } catch {
     startColonizationTopic(hasVisitedStar);
@@ -1262,9 +1333,13 @@ async function pollEconomy() {
           }
         } else {
           // Optimistic base-fuel deduction for probes (server enforces the real cost)
+          const tutorialFuelBypass = transfer.shipTypeId === 11 && canUseTutorialProbeFuelBypass();
           if (transfer.shipTypeId === 11 || transfer.shipTypeId === 12) {
-            deductBaseFuel(transfer.fromStarIndex, PROBE_MIN_FUEL_COST);
-            console.log(`[PROBE] optimistic base fuel deduct: ${PROBE_MIN_FUEL_COST} from star ${transfer.fromStarIndex}`);
+            const fuelCost = tutorialFuelBypass ? 0 : PROBE_MIN_FUEL_COST;
+            if (fuelCost > 0) {
+              deductBaseFuel(transfer.fromStarIndex, fuelCost);
+              console.log(`[PROBE] optimistic base fuel deduct: ${fuelCost} from star ${transfer.fromStarIndex}`);
+            }
           }
           try {
             const transferRes = await fetch('/api/fleet/transfer', {
@@ -1276,12 +1351,14 @@ async function pollEconomy() {
                 toStarIndex: transfer.toStarIndex,
                 shipTypeId: transfer.shipTypeId,
                 count: transfer.count,
+                ...(tutorialFuelBypass ? { tutorialFuelBypass: true } : {}),
               }),
             });
             if (!transferRes.ok) {
               const err = await transferRes.json().catch(() => ({ message: 'unknown' }));
               console.warn('[FLEET] transfer failed:', err);
             } else {
+              if (tutorialFuelBypass) consumeTutorialProbeFuelBypass();
               playSound('send');
               journeyAction('transfer');
               journeyProgress(0.35, 'first_transfer');
@@ -1325,26 +1402,30 @@ async function pollEconomy() {
               let newDiscovery = false;
               for (const si of fleetData.discoveredStars) {
                 const star = gs2.galaxy.stars[si];
-                if (star && star.discoveryLevel === 'none') {
-                  star.discoveryLevel = enhancedSet.has(si) ? 'visited' : 'probed';
-                  star.discovered = true;
-                  newDiscovery = true;
+                if (star) {
+                  const wasDiscovered = star.discovered;
+                  const wasLevel = star.discoveryLevel;
+                  const wasMode = star.visitMode;
+                  const isEnhanced = enhancedSet.has(si);
+                  applyStarDiscoveryState(star, isEnhanced);
+                  if (!wasDiscovered || star.discoveryLevel !== wasLevel || star.visitMode !== wasMode) {
+                    newDiscovery = true;
+                  }
                 }
               }
               if (newDiscovery) playSound('arrive');
             }
           }
-          // Update ship shape from home star fleet
+          // Update ship shape from the player's entire fleet (all owned stars +
+          // in-transit ships), not just the home star — otherwise flying the main
+          // ship away from home leaves only probes behind and reverts it to scout.
           if (playerHomeStarIndex != null) {
-            const homeKey = `s:${playerHomeStarIndex}`;
-            const homeFleet = fleetData.stars[homeKey];
-            if (homeFleet) {
-              const fleetShape = getFleetShape(homeFleet.ships);
-              if (fleetShape !== currentShape) {
-                currentShape = fleetShape;
-                bridge.setShipShape(fleetShape);
-              }
-            }
+            const allFleets = Object.values(fleetData.stars).map((s) => s.ships);
+            const transitShips = (fleetData.transits ?? []).map((t) => ({ typeId: t.shipTypeId, count: t.count }));
+            const fleetShape = getFleetShapeFromAllFleets([...allFleets, transitShips]);
+            const requestVersion = ++homeFleetShapeVersion;
+            console.log('[SHIP-DEBUG] fleet-all fleet-wide payload', { requestVersion, source: 'fleet-all', fleetCount: allFleets.length, transits: transitShips.length, fleetShape });
+            applyHomeFleetShape(fleetShape, 'fleet-all', requestVersion);
           }
         }
       } catch (_e) { /* ignore */ }
@@ -1377,6 +1458,42 @@ async function pollEconomy() {
           }
         }
       } catch (_e) { /* ignore */ }
+
+      // Load economy (buildings) for the star whose info card is open so the
+      // galaxy card can show the owner's expansion without traveling there.
+      // Own/home stars use our username; foreign stars use the claimant's.
+      const selIdx = getSelectedStarIndex();
+      if (selIdx >= 0 && selIdx !== _selectedCardEconomyStar) {
+        const selStar = gs.galaxy.stars[selIdx];
+        const discovered = !!selStar && (selIdx === gs.galaxy.homeStarIndex || selStar.discoveryLevel === 'probed' || selStar.discoveryLevel === 'visited');
+        const cardOwner = selStar && (selStar.owner === 'player' || selIdx === gs.galaxy.homeStarIndex)
+          ? username
+          : (selStar?.claimedBy ?? null);
+        if (discovered && cardOwner) {
+          _selectedCardEconomyStar = selIdx;
+          try {
+            const cardRes = await fetch(`/api/buildings?username=${encodeURIComponent(cardOwner)}&starIndex=${selIdx}`);
+            if (cardRes.ok) {
+              const cardData = await cardRes.json() as StarEconomyResponse;
+              setServerStarEconomy({
+                starIndex: cardData.starIndex,
+                store: cardData.store,
+                rates: cardData.rates,
+                cap: cardData.cap,
+                shieldRaised: cardData.shieldRaised ?? false,
+                defenseScore: cardData.defenseScore ?? { shield: 0, cannon: 0, total: 0 },
+                buildings: cardData.buildings,
+                completeCharges: cardData.completeCharges ?? 0,
+                ...(cardData.richness ? { richness: cardData.richness } : {}),
+                ...(cardData.starCondition ? { starCondition: cardData.starCondition } : {}),
+                ...(cardData.capacityPercent != null ? { capacityPercent: cardData.capacityPercent } : {}),
+              }, cardOwner === username);
+            }
+          } catch (_e) { /* ignore */ }
+        }
+      } else if (selIdx < 0) {
+        _selectedCardEconomyStar = -1;
+      }
       return;
     }
 
@@ -1626,6 +1743,7 @@ async function pollEconomy() {
     if (pendingShip) {
       console.log('[SHIPS] sending buy request, starIndex=', starIndex, 'shipTypeId=', pendingShip.shipTypeId, 'useBlueprint=', pendingShip.useBlueprint);
       try {
+        const tutorialQuickProbe = pendingShip.shipTypeId === 11 && isColonizationTopicActive();
         const shipRes = await fetch('/api/ships/buy', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1635,11 +1753,16 @@ async function pollEconomy() {
             shipTypeId: pendingShip.shipTypeId,
             quantity: pendingShip.quantity,
             ...(pendingShip.useBlueprint ? { useBlueprint: true } : {}),
+            ...(tutorialQuickProbe ? { tutorialQuick: true } : {}),
           }),
         });
         if (shipRes.ok) {
           console.log('[SHIPS] buy success');
-          if (pendingShip.shipTypeId === 11) colonizationTopicAction('probe_built');
+          if (pendingShip.shipTypeId === 11) {
+            const buyData = await shipRes.json().catch(() => null) as { building?: { completeAt?: number } | null } | null;
+            setProbeBuildCompleteAt(buyData?.building?.completeAt ?? null);
+            colonizationTopicAction('probe_built');
+          }
           playSound('begin_building_ship');
           journeyAction('buy_ship');
           journeyProgress(0.20, 'first_ship_built');
@@ -1769,40 +1892,34 @@ async function pollEconomy() {
     if (shipsRes.ok) {
       const shipsData = await shipsRes.json() as StarShipsResponse;
       setServerShipState(starIndex, shipsData.ships, shipsData.building, econUsername === username);
+      if (econUsername === username && getColonizationTopicStep() === 'probe_building') {
+        const probeReady = shipsData.ships.some((ship) => ship.typeId === 11 && ship.count > 0);
+        if (probeReady && !shipsData.building) colonizationTopicAction('probe_ready');
+      }
       if (econUsername === username && getColonizationTopicStep() === 'colony_building') {
         const colonyReady = shipsData.ships.some((ship) => ship.typeId === 8 && ship.count > 0);
         if (colonyReady && !shipsData.building) colonizationTopicAction('colony_built');
       }
-      // Update ship shape based on HOME star fleet only
-      if (starIndex === playerHomeStarIndex) {
-        const fleetShape = getFleetShape(shipsData.ships);
-        if (fleetShape !== currentShape) {
-          currentShape = fleetShape;
-          bridge.setShipShape(fleetShape);
-        }
-      }
+      // Ship shape is derived fleet-wide by the galaxy-tier fleet/all poll and at
+      // profile load. A single-star economy poll (even the home star) must not set
+      // the shape: when the main ship is flown away from home, the home fleet holds
+      // only probes and would otherwise revert a destroyer/battleship icon to scout.
     }
-    // If at a different star, also poll home star for ship shape
-    if (playerHomeStarIndex != null && starIndex !== playerHomeStarIndex) {
-      try {
-        const homeShipsRes = await fetch(`/api/ships?username=${encodeURIComponent(username)}&starIndex=${playerHomeStarIndex}`);
-        if (homeShipsRes.ok) {
-          const homeShipsData = await homeShipsRes.json() as StarShipsResponse;
-          setServerShipState(playerHomeStarIndex, homeShipsData.ships, homeShipsData.building, true);
-          const fleetShape = getFleetShape(homeShipsData.ships);
-          if (fleetShape !== currentShape) {
-            currentShape = fleetShape;
-            bridge.setShipShape(fleetShape);
-          }
-        }
-      } catch (_e) { /* ignore */ }
-    }
+    // Only the actual home star can decide the player's main ship shape.
+    // Polling a different star's player fleet (for example, a probe-only outpost)
+    // can overwrite a valid battleship/frigate icon with a stale scout fallback.
+    // The full fleet state is still fetched below for the fleet panel; this block
+    // intentionally does not re-apply ship-shape based on a non-home star.
     // Also fetch full fleet state so fleet panel shows all stars
     try {
       const fleetRes = await fetch(`/api/fleet/all?username=${encodeURIComponent(username)}`);
       if (fleetRes.ok) {
         const fleetData = await fleetRes.json() as FleetAllResponse;
         setServerFleetAll(fleetData.stars, fleetData.transits, fleetData.freighterRoutes, fleetData.raidRoutes);
+        if (econUsername === username && getColonizationTopicStep() === 'colony_building') {
+          const colonyReady = Object.values(fleetData.stars).some((fleet) => fleet.ships.some((ship) => ship.typeId === 8 && ship.count > 0));
+          if (colonyReady) colonizationTopicAction('colony_built');
+        }
         // Mark discovered stars from server
         if (fleetData.discoveredStars && fleetData.discoveredStars.length > 0) {
           const gs2 = getGameState();
@@ -1810,9 +1927,8 @@ async function pollEconomy() {
             const enhancedSet = new Set(fleetData.enhancedProbeStars ?? []);
             for (const si of fleetData.discoveredStars) {
               const star = gs2.galaxy.stars[si];
-              if (star && star.discoveryLevel === 'none') {
-                star.discoveryLevel = enhancedSet.has(si) ? 'visited' : 'probed';
-                star.discovered = true;
+              if (star) {
+                applyStarDiscoveryState(star, enhancedSet.has(si));
               }
             }
           }
@@ -2323,6 +2439,8 @@ window.addEventListener('pagehide', () => {
 });
 
 // ── Settings panel ──────────────────────────────────────────────────────────
+// Reveal the top-right icon bar now that the game has started (hidden during splash).
+document.getElementById('icon-bar')?.style.setProperty('display', 'flex');
 const settingsBtn = document.getElementById('settings-btn')!;
 const settingsPanel = document.getElementById('settings-panel')!;
 const feedbackPanel = document.getElementById('feedback-panel')!;
@@ -2742,7 +2860,7 @@ function saveProfile() {
 // ── Admin Panel (only for authorized user) ──────────────────────────────────
 try {
 const ADMIN_USERS = ['WeirdAd4511', 'Fred', 'weirdad4511', 'fred'];
-const adminBtn = document.getElementById('admin-btn')!;
+const adminBtn = document.getElementById('admin-btn');
 const adminPanel = document.getElementById('admin-panel')!;
 const adminStatus = document.getElementById('admin-status')!;
 const adminPanelMode = document.getElementById('admin-panel-mode') as HTMLInputElement | null;
@@ -2975,8 +3093,8 @@ function openGlobalStatusPreview(): void {
 (globalThis as unknown as { __openGlobalStatus?: () => void }).__openGlobalStatus = openGlobalStatusPreview;
 
 console.log('[ADMIN] elements:', !!adminBtn, !!adminPanel, !!adminStatus, 'username=', username);
-if (adminBtn && adminPanel && ADMIN_USERS.some(u => u.toLowerCase() === username.toLowerCase())) {
-  adminBtn.style.display = 'inline-flex';
+if (adminPanel && ADMIN_USERS.some(u => u.toLowerCase() === username.toLowerCase())) {
+  if (adminBtn) adminBtn.style.display = 'inline-flex';
   setIsAdmin(true);
   const adminGrid = adminPanel.querySelector('.admin-grid');
   if (adminGrid && !document.getElementById('admin-global-status-preview')) {
@@ -2987,6 +3105,20 @@ if (adminBtn && adminPanel && ADMIN_USERS.some(u => u.toLowerCase() === username
     previewBtn.style.cssText = 'background:rgba(20,60,80,0.6);border-color:#66ccff;color:#66ccff';
     previewBtn.addEventListener('click', openGlobalStatusPreview);
     adminGrid.appendChild(previewBtn);
+  }
+  if (!document.getElementById('admin-reset-colony-tutorial')) {
+    const resetColonizeBtn = document.createElement('button');
+    resetColonizeBtn.id = 'admin-reset-colony-tutorial';
+    resetColonizeBtn.className = 'admin-btn danger';
+    resetColonizeBtn.textContent = 'Reset Colony Tutorial';
+    resetColonizeBtn.addEventListener('click', () => {
+      dismissColonizationTopic();
+      startColonizationTopic(false, 'info');
+      adminPanel.classList.remove('visible');
+      adminStatus.textContent = 'colony tutorial reset to start';
+      console.log('[ADMIN] colony tutorial reset to start');
+    });
+    if (adminGrid) adminGrid.appendChild(resetColonizeBtn);
   }
   console.log('[ADMIN] button shown');
 }
@@ -3002,8 +3134,8 @@ const wireframePrefToggle = document.getElementById('wireframe-pref-toggle') as 
   });
 }
 
-adminBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-adminBtn.addEventListener('click', (e) => {
+adminBtn?.addEventListener('pointerdown', (e) => e.stopPropagation());
+adminBtn?.addEventListener('click', (e) => {
   e.stopPropagation();
   settingsPanel.classList.remove('visible');
   helpPanel.classList.remove('visible');

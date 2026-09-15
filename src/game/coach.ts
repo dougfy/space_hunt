@@ -172,19 +172,33 @@ export function dismissShipsTopic(): void {
 // Separate from onboarding and the Ships topic so expansion can be resumed
 // across a long ship build/transit without changing the first-session flow.
 
-export type ColonizationTopicStep = 'info' | 'open_ships' | 'build_probe' | 'colony_building' | 'build_colony' | 'open_fleet' | 'send_colony' | 'arrival' | 'visit' | 'locate_planet' | 'orbit' | 'done';
+export type ColonizationTopicStep = 'info' | 'open_ships' | 'build_probe' | 'probe_building' | 'send_probe' | 'colony_building' | 'build_colony' | 'open_fleet' | 'send_colony' | 'arrival' | 'visit' | 'locate_planet' | 'orbit' | 'done';
 
 let _colonizationTopicActive = false;
 let _colonizationTopicStep: ColonizationTopicStep = 'done';
 let _colonizationTargetStar = -1;
 let _colonizationHasDirectPath = false;
+let _probeBuildCompleteAt: number | null = null;
+let _tutorialProbeFuelBypassUsed = false;
+let _colonizationWaitNoticeDismissed = false;
 
-export function startColonizationTopic(hasDirectPath = false, initialStep: ColonizationTopicStep = 'info'): void {
+/** Server-reported completion time for the tutorial probe build, used to render a live countdown. */
+export function setProbeBuildCompleteAt(ts: number | null): void {
+  _probeBuildCompleteAt = ts;
+}
+
+export function getProbeBuildCompleteAt(): number | null {
+  return _probeBuildCompleteAt;
+}
+
+export function startColonizationTopic(hasDirectPath = false, initialStep: ColonizationTopicStep = 'info', targetStar = -1): void {
   _colonizationTopicActive = true;
   _colonizationTopicStep = initialStep;
-  _colonizationTargetStar = -1;
+  _colonizationTargetStar = targetStar;
   _colonizationHasDirectPath = hasDirectPath;
-  console.log('[COLONIZATION-TOPIC] started');
+  _tutorialProbeFuelBypassUsed = false;
+  _colonizationWaitNoticeDismissed = false;
+  console.log('[COLONIZATION-TOPIC] started', { hasDirectPath, initialStep });
 }
 
 export function isColonizationTopicActive(): boolean {
@@ -199,27 +213,48 @@ export function getColonizationTopicTarget(): number {
   return _colonizationTargetStar;
 }
 
+export function isColonizationWaitNoticeDismissed(): boolean {
+  return _colonizationWaitNoticeDismissed;
+}
+
+export function dismissColonizationWaitNotice(): void {
+  if (_colonizationTopicStep !== 'colony_building') return;
+  _colonizationWaitNoticeDismissed = true;
+}
+
 export function colonizationTopicNext(): void {
   if (!_colonizationTopicActive) return;
   const next: Partial<Record<ColonizationTopicStep, ColonizationTopicStep>> = {
-    info: _colonizationHasDirectPath ? 'build_colony' : 'open_ships',
+    info: 'open_ships',
+    build_probe: 'build_colony',
+    send_probe: 'build_colony',
+    build_colony: 'colony_building',
+    open_fleet: 'send_colony',
     send_colony: 'arrival',
     arrival: 'visit',
     visit: 'locate_planet',
     locate_planet: 'open_fleet',
   };
   const following = next[_colonizationTopicStep];
+  console.log('[COLONIZATION-TOPIC] next-click', {
+    currentStep: _colonizationTopicStep,
+    hasDirectPath: _colonizationHasDirectPath,
+    targetStep: following,
+    active: _colonizationTopicActive,
+  });
   if (following) _colonizationTopicStep = following;
 }
 
 /** Advance only when the player performs the requested action. */
-export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' | 'colony_built' | 'fleet_opened' | 'colony_sent' | 'arrived' | 'visited' | 'planet_found' | 'orbit_reached' | 'colonized', targetStar = -1): void {
+export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' | 'probe_ready' | 'probe_sent' | 'colony_build_started' | 'colony_built' | 'fleet_opened' | 'colony_sent' | 'arrived' | 'visited' | 'planet_found' | 'orbit_reached' | 'colonized', targetStar = -1): void {
   if (!_colonizationTopicActive) return;
   const next: Partial<Record<ColonizationTopicStep, ColonizationTopicStep>> = {
     open_ships: 'build_probe',
-    build_probe: 'build_colony',
+    build_probe: 'probe_building',
+    probe_building: 'build_colony',
+    send_probe: 'build_colony',
     colony_building: 'open_fleet',
-    build_colony: 'open_fleet',
+    build_colony: 'colony_building',
     open_fleet: 'send_colony',
     send_colony: 'arrival',
     arrival: 'visit',
@@ -228,12 +263,21 @@ export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' |
     orbit: 'orbit',
   };
   const expected: Record<ColonizationTopicStep, string> = {
-    info: '', open_ships: 'ships_opened', build_probe: 'probe_built', colony_building: 'colony_built', build_colony: 'colony_built', open_fleet: 'fleet_opened',
+    info: '', open_ships: 'ships_opened', build_probe: 'probe_built', probe_building: 'probe_ready', build_colony: 'colony_build_started', send_probe: 'probe_sent', colony_building: 'colony_built', open_fleet: 'fleet_opened',
     send_colony: 'colony_sent', arrival: 'arrived', visit: 'visited', locate_planet: 'planet_found',
     orbit: 'colonized', done: 'colonized',
   };
+  console.log('[COLONIZATION-TOPIC] action-check', {
+    currentStep: _colonizationTopicStep,
+    expected: expected[_colonizationTopicStep],
+    received: action,
+    matches: expected[_colonizationTopicStep] === action,
+    targetStar,
+  });
   if (expected[_colonizationTopicStep] !== action) return;
   if (action === 'colony_sent' && targetStar >= 0) _colonizationTargetStar = targetStar;
+  if (action === 'probe_ready') _probeBuildCompleteAt = null;
+  if (action === 'colony_built') _colonizationWaitNoticeDismissed = false;
   _colonizationTopicStep = next[_colonizationTopicStep] ?? 'done';
   if (_colonizationTopicStep === 'done') {
     _colonizationTopicActive = false;
@@ -241,10 +285,24 @@ export function colonizationTopicAction(action: 'ships_opened' | 'probe_built' |
   }
 }
 
+export function canUseTutorialProbeFuelBypass(): boolean {
+  return _colonizationTopicActive && _colonizationTopicStep === 'send_probe' && !_tutorialProbeFuelBypassUsed;
+}
+
+export function consumeTutorialProbeFuelBypass(): boolean {
+  if (!canUseTutorialProbeFuelBypass()) return false;
+  _tutorialProbeFuelBypassUsed = true;
+  console.log('[COLONIZATION-TOPIC] tutorial probe fuel bypass consumed');
+  return true;
+}
+
 export function dismissColonizationTopic(): void {
   _colonizationTopicActive = false;
   _colonizationTopicStep = 'done';
   _colonizationTargetStar = -1;
+  _probeBuildCompleteAt = null;
+  _tutorialProbeFuelBypassUsed = false;
+  _colonizationWaitNoticeDismissed = false;
 }
 
 // ── Comms Topic (post-onboarding guide) ──────────────────────────────────────

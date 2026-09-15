@@ -41,7 +41,7 @@
         right: 12px;
         z-index: 100;
         pointer-events: auto;
-        display: flex;
+        display: none;
         gap: 6px;
       }
       .icon-btn {
@@ -197,27 +197,25 @@
         font-family: monospace;
         font-size: 15px;
         font-weight: bold;
-        letter-spacing: 1px;
-        padding: 12px 24px;
+        letter-spacing: 0.4px;
+        padding: 13px 26px;
         cursor: pointer;
-        text-transform: uppercase;
-        border: 2px solid;
+        border: 1.5px solid #58d7e6;
+        border-radius: 12px;
+        background: rgba(8, 22, 32, 0.66);
+        color: #dff6ff;
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.45), 0 0 16px rgba(88,215,230,0.22), inset 0 0 12px rgba(88,215,230,0.07);
+        transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
       }
-      #play-here {
-        background: transparent;
-        border-color: #4fffb0;
-        color: #4fffb0;
+      .play-btn:hover {
+        background: rgba(22, 52, 66, 0.82);
+        border-color: #8af2ff;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.5), 0 0 22px rgba(88,215,230,0.45), inset 0 0 14px rgba(88,215,230,0.12);
       }
-      #play-here:hover { background: rgba(79, 255, 176, 0.15); }
-      #play-full {
-        background: rgba(40, 80, 100, 0.8);
-        border-color: #5ba8c8;
-        color: #c8e8f8;
-      }
-      #play-full:hover { background: rgba(60, 110, 140, 0.9); }
+      .play-btn:active { transform: translateY(1px); }
 
       /* Settings panel */
       #settings-panel {
@@ -510,7 +508,6 @@
       <button id="feedback-btn" class="icon-btn" title="Feedback" style="background:rgba(60,50,10,0.8);border-color:#ffcc44;color:#ffcc44;font-size:9px">FB</button>
       <button id="settings-btn" class="icon-btn" title="Settings">&#x2699;</button>
       <button id="help-btn" class="icon-btn" title="Help">?</button>
-      <button id="admin-btn" class="icon-btn" title="Admin" style="background:rgba(80,20,10,0.8);border-color:#ff6644;color:#ff6644">&#x2691;</button>
     </div>
     <div id="feedback-panel">
       <h3>What confused you?</h3>
@@ -722,8 +719,8 @@
     </div>
     <div id="overlay" class="visible">
       <div id="btn-row">
-        <button id="play-here" class="play-btn">&#9654; Join Inline</button>
-        <button id="play-full" class="play-btn">&#x29C9; Join Full Size</button>
+        <button id="play-here" class="play-btn"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true" style="flex:none"><path d="M8 5v14l11-7z"/></svg>Play Inline</button>
+        <button id="play-full" class="play-btn"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Enter Full Galaxy</button>
       </div>
     </div>
     <script type="module" src="inline-loader.ts"></script>

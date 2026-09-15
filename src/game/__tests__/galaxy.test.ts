@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { checkTierTransition, applyTransition, createGalaxyState, NavigationTier } from '../galaxy';
+import { shouldConsumeGalaxyNavTap } from '../game-loop';
 import { vec2 } from '../math';
 import { SYSTEM_SIZE, SYSTEM_EXIT_RADIUS, STAR_ENTER_RADIUS } from '../constants';
 import {
@@ -8,6 +9,34 @@ import {
 } from './test-utils';
 
 const center = SYSTEM_SIZE / 2; // 20
+
+describe('galaxy nav tap handling', () => {
+  it('does not consume empty-space taps in nav mode', () => {
+    expect(shouldConsumeGalaxyNavTap(
+      NavigationTier.Galaxy,
+      'nav',
+      -1,
+      -1,
+      false,
+      false,
+      false,
+      true,
+    )).toBe(false);
+  });
+
+  it('consumes star taps in nav mode', () => {
+    expect(shouldConsumeGalaxyNavTap(
+      NavigationTier.Galaxy,
+      'nav',
+      -1,
+      7,
+      false,
+      false,
+      false,
+      false,
+    )).toBe(true);
+  });
+});
 
 describe('checkTierTransition', () => {
   describe('System tier → Local (belt entry)', () => {

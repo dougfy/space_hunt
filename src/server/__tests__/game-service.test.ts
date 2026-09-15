@@ -3,6 +3,7 @@ import {
   claimPod,
   consumeItem,
   ensureAirPurifierQuest,
+  evaluateDailyAirPurifierRoll,
   getClaimedPods,
   getInventory,
   grantItem,
@@ -64,11 +65,11 @@ function createFakeStore(seed?: Record<string, Record<string, string>>): RedisGa
 }
 
 describe('game service backend routines', () => {
-  it('creates one air-purifier event for a player with two owned stars', async () => {
-    const store = createFakeStore({ 'stars:post-1': { 's:4': 'pilot', 's:9': 'pilot' } });
+  it('creates one air-purifier event for a player with two owned stars when the daily roll triggers', async () => {
+    const store = createFakeStore({ 'stars:post-1': { 's:4': 'pilot2', 's:9': 'pilot2' } });
     const startedAt = Date.UTC(2026, 7, 26, 8);
-    const first = await ensureAirPurifierQuest(store, 'post-1', 'pilot', startedAt);
-    const second = await ensureAirPurifierQuest(store, 'post-1', 'pilot', startedAt + 60_000);
+    const first = await ensureAirPurifierQuest(store, 'post-1', 'pilot2', startedAt);
+    const second = await ensureAirPurifierQuest(store, 'post-1', 'pilot2', startedAt + 60_000);
 
     expect(first?.state).toBe('active');
     expect(first?.starIndex).toBe(9);
@@ -81,19 +82,37 @@ describe('game service backend routines', () => {
     expect(await ensureAirPurifierQuest(store, 'post-1', 'pilot', Date.now())).toBeNull();
   });
 
-  it('repairs the affected starbase with one replacement unit', async () => {
-    const store = createFakeStore({ 'stars:post-1': { 's:4': 'pilot', 's:9': 'pilot' } });
+  it('rolls a deterministic 10% chance once per UTC day per qualifying user', () => {
+    const dayKey = '2026-08-26';
+    expect(evaluateDailyAirPurifierRoll('post-1', 'pilot2', dayKey)).toBe(true);
+    expect(evaluateDailyAirPurifierRoll('post-1', 'pilot2', dayKey)).toBe(true);
+    expect(evaluateDailyAirPurifierRoll('post-1', 'pilot2', '2026-08-27')).toBe(false);
+    expect(evaluateDailyAirPurifierRoll('post-1', 'other', '2026-08-27')).toBe(true);
+  });
+
+  it('does not re-roll or re-create the incident more than once per day for a qualifying user', async () => {
+    const store = createFakeStore({ 'stars:post-1': { 's:4': 'pilot2', 's:9': 'pilot2' } });
     const startedAt = Date.UTC(2026, 7, 26, 8);
-    const incident = await ensureAirPurifierQuest(store, 'post-1', 'pilot', startedAt);
+    const first = await ensureAirPurifierQuest(store, 'post-1', 'pilot2', startedAt);
+    const second = await ensureAirPurifierQuest(store, 'post-1', 'pilot2', startedAt + 60_000);
+
+    expect(first?.state).toBe('active');
+    expect(second?.eventId).toBe(first?.eventId);
+  });
+
+  it('repairs the affected starbase with one replacement unit', async () => {
+    const store = createFakeStore({ 'stars:post-1': { 's:4': 'pilot2', 's:9': 'pilot2' } });
+    const startedAt = Date.UTC(2026, 7, 26, 8);
+    const incident = await ensureAirPurifierQuest(store, 'post-1', 'pilot2', startedAt);
     if (!incident) throw new Error('Expected incident');
 
-    await grantItem(store, 'pilot', 'air_purifier_unit');
-    const repaired = await repairAirPurifierQuest(store, 'post-1', 'pilot', incident.starIndex, startedAt + 1_000);
+    await grantItem(store, 'pilot2', 'air_purifier_unit');
+    const repaired = await repairAirPurifierQuest(store, 'post-1', 'pilot2', incident.starIndex, startedAt + 1_000);
 
     expect(repaired.state).toBe('resolved');
     expect(repaired.repairMethod).toBe('found_unit');
-    expect(await getInventory(store, 'pilot')).toEqual({});
-    await expect(repairAirPurifierQuest(store, 'post-1', 'pilot', incident.starIndex, startedAt + 2_000)).rejects.toThrow('No active');
+    expect(await getInventory(store, 'pilot2')).toEqual({});
+    await expect(repairAirPurifierQuest(store, 'post-1', 'pilot2', incident.starIndex, startedAt + 2_000)).rejects.toThrow('No active');
   });
 
   it('carries item cargo through a freighter route and returns it on arrival', async () => {
@@ -132,23 +151,23 @@ describe('game service backend routines', () => {
   });
 
   it('funds the purifier trade order in stages and grants the replacement unit', async () => {
-    const now = 4_000_000;
+    const now = Date.UTC(2026, 7, 26, 8);
     const store = createFakeStore({
-      'stars:post-1': { 's:1': 'pilot', 's:2': 'pilot' },
-      'profile:pilot': {
+      'stars:post-1': { 's:1': 'pilot2', 's:2': 'pilot2' },
+      'profile:pilot2': {
         economy: JSON.stringify({ homeStar: 1, stars: { 's:1': { store: { ore: 2400, food: 1800, energy: 2200, fuel: 600 }, buildings: { warehouse: { level: 2, status: 'ACTIVE', completeAt: null } } } } }),
       },
     });
     let stationStarIndex = 0;
     while (stationStarIndex < 100 && (stationStarIndex === 1 || stationStarIndex === 2 || !isTradingStation('post-1', stationStarIndex))) stationStarIndex++;
-    const order = await createAirPurifierOrder(store, 'post-1', 'pilot', stationStarIndex, now);
+    const order = await createAirPurifierOrder(store, 'post-1', 'pilot2', stationStarIndex, now);
     expect(order.status).toBe('open');
-    const partial = await payAirPurifierOrder(store, 'post-1', 'pilot', 1, { ore: 1200, food: 900, energy: 1100, fuel: 300 }, now + 1);
+    const partial = await payAirPurifierOrder(store, 'post-1', 'pilot2', 1, { ore: 1200, food: 900, energy: 1100, fuel: 300 }, now + 1);
     expect(partial.status).toBe('open');
-    const complete = await payAirPurifierOrder(store, 'post-1', 'pilot', 1, { ore: 1200, food: 900, energy: 1100, fuel: 300 }, now + 2);
+    const complete = await payAirPurifierOrder(store, 'post-1', 'pilot2', 1, { ore: 1200, food: 900, energy: 1100, fuel: 300 }, now + 2);
     expect(complete.status).toBe('complete');
-    expect(await getInventory(store, 'pilot')).toEqual({ air_purifier_unit: 1 });
-    expect((await getAirPurifierOrder(store, 'pilot'))?.status).toBe('complete');
+    expect(await getInventory(store, 'pilot2')).toEqual({ air_purifier_unit: 1 });
+    expect((await getAirPurifierOrder(store, 'pilot2'))?.status).toBe('complete');
   });
 
   it('persists and consumes quest items without allowing negative inventory', async () => {

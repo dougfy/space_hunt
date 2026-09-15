@@ -17,6 +17,38 @@ if (c) {
   resize();
   window.addEventListener('resize', resize);
 
+  // ── Background art (supplied) with starfield fallback ─────────────────────
+  const bgImg = new Image();
+  let bgReady = false;
+  bgImg.onload = () => { bgReady = true; };
+  bgImg.src = 'background.png';
+
+  // ── Logo (top-center title) ───────────────────────────────────────────────
+  const logoImg = new Image();
+  let logoReady = false;
+  logoImg.onload = () => { logoReady = true; };
+  logoImg.src = 'logo.png';
+
+  // ── Frigate sprite (white background stripped to transparent) ─────────────
+  let shipSprite: HTMLCanvasElement | null = null;
+  const shipImg = new Image();
+  shipImg.onload = () => { shipSprite = stripWhite(shipImg); };
+  shipImg.src = 'icons/ships/frigate.png';
+
+  function stripWhite(img: HTMLImageElement): HTMLCanvasElement {
+    const cv = document.createElement('canvas');
+    cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+    const c2 = cv.getContext('2d')!;
+    c2.drawImage(img, 0, 0);
+    const id = c2.getImageData(0, 0, cv.width, cv.height);
+    const d = id.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i]! > 235 && d[i + 1]! > 235 && d[i + 2]! > 235) d[i + 3] = 0;
+    }
+    c2.putImageData(id, 0, 0);
+    return cv;
+  }
+
   // ── Constants ───────────────────────────────────────────────────────────
   const MAP_W = 20, MAP_H = 16; // world units
   const ASTEROID_COUNT = 50;
@@ -24,7 +56,6 @@ if (c) {
   const ACCEL = 1.35;
   const FUEL_MAX = 100;
   const FUEL_DRAIN = 0.8; // per sec while thrusting
-  const POD_COLLECT_R = 0.22;
   const ARRIVE_R = 0.15;
 
   // ── Seeded RNG ──────────────────────────────────────────────────────────
@@ -63,46 +94,43 @@ if (c) {
     asteroids.push({ x, y, r, verts, discovered: false });
   }
 
-  // ── Generate fuel pods (multi-color discovery system) ─────────────────────
-  type PodKind = 'refuel' | 'dock' | 'energy' | 'ore' | 'food' | 'upgrade';
-  const POD_TYPE_TABLE: { kind: PodKind; color: string; weight: number; fuel: number }[] = [
-    { kind: 'refuel',  color: '#FF5A3D', weight: 15, fuel: 40 },
-    { kind: 'dock',    color: '#FFD24A', weight: 10, fuel: 15 },
-    { kind: 'energy',  color: '#66CCFF', weight: 25, fuel: 5 },
-    { kind: 'ore',     color: '#FF9933', weight: 25, fuel: 5 },
-    { kind: 'food',    color: '#66FF66', weight: 20, fuel: 5 },
-    { kind: 'upgrade', color: '#CC66FF', weight: 5,  fuel: 0 },
+  // ── Docks: the four colored icons attached to asteroids (the objective) ───
+  const DOCK_ICON_SRCS = [
+    'icons/docks/blue.png',
+    'icons/docks/yellow.png',
+    'icons/docks/purple.png',
+    'icons/docks/red.png',
   ];
-  const TOTAL_W = POD_TYPE_TABLE.reduce((s, t) => s + t.weight, 0);
-  function pickPod(roll: number) {
-    const v = roll * TOTAL_W;
-    let cum = 0;
-    for (const e of POD_TYPE_TABLE) { cum += e.weight; if (v < cum) return e; }
-    return POD_TYPE_TABLE[POD_TYPE_TABLE.length - 1]!;
-  }
+  const dockSprites: (HTMLCanvasElement | null)[] = DOCK_ICON_SRCS.map(() => null);
+  DOCK_ICON_SRCS.forEach((src, i) => {
+    const im = new Image();
+    im.onload = () => { dockSprites[i] = stripWhite(im); };
+    im.src = src;
+  });
 
-  interface Pod {
-    x: number; y: number;
-    kind: PodKind;
-    color: string;
-    fuel: number;
+  interface Dock {
+    x: number; y: number;   // dock icon centre (just off the asteroid surface)
+    ax: number; ay: number; // stem anchor on the asteroid surface
+    icon: number;           // index into dockSprites
     collected: boolean;
   }
-  const pods: Pod[] = [];
-  for (const a of asteroids) {
+  const DOCK_TARGET = 6;
+  const DOCK_REACH_R = 0.5;
+  const docks: Dock[] = [];
+  for (let i = 0; i < asteroids.length && docks.length < DOCK_TARGET; i++) {
+    const a = asteroids[i]!;
     const angle = rng() * Math.PI * 2;
-    const offset = a.r + 0.13;
-    const picked = pickPod(rng());
-    pods.push({
-      x: a.x + Math.cos(angle) * offset,
-      y: a.y + Math.sin(angle) * offset,
-      kind: picked.kind,
-      color: picked.color,
-      fuel: picked.fuel,
+    const off = a.r + 0.3;
+    docks.push({
+      x: a.x + Math.cos(angle) * off,
+      y: a.y + Math.sin(angle) * off,
+      ax: a.x + Math.cos(angle) * a.r,
+      ay: a.y + Math.sin(angle) * a.r,
+      icon: docks.length % DOCK_ICON_SRCS.length,
       collected: false,
     });
   }
-  const totalDocks = pods.filter(p => p.kind === 'dock').length;
+  const totalDocks = docks.length;
 
   // ── Ship state ──────────────────────────────────────────────────────────
   const ship = { x: 0, y: 1.5, vx: 0, vy: 0, angle: 0, fuel: FUEL_MAX, thrusting: false };
@@ -111,10 +139,9 @@ if (c) {
 
   // ── Camera ──────────────────────────────────────────────────────────────
   let camX = 0, camY = 0;
-  let ortho = 3.2; // world units visible vertically / 2
-  const ZOOM_CLOSE = 0.8;
-  const ZOOM_FAR = 3.2;
-
+  let ortho = 1.5; // large (zoomed-in) attract view
+  const ZOOM_CLOSE = 1.15;
+  const ZOOM_FAR = 1.7;  let hasNavigated = false; // hides the tap-to-navigate coach hint after first tap
   // ── Input ───────────────────────────────────────────────────────────────
   c.addEventListener('pointerdown', (e) => {
     const rect = c!.getBoundingClientRect();
@@ -124,6 +151,7 @@ if (c) {
     tgtX = camX + (px - 0.5) * ortho * 2 * aspect;
     tgtY = camY + (py - 0.5) * ortho * 2;
     tgtActive = true;
+    hasNavigated = true;
   });
 
   // ── World-to-screen transform ──────────────────────────────────────────
@@ -154,6 +182,16 @@ if (c) {
 
     // ── Update ship physics ───────────────────────────────────────────
     ship.thrusting = false;
+    // Attract autopilot: cruise toward the nearest uncollected dock
+    if (!tgtActive) {
+      let best: Dock | null = null, bestD = Infinity;
+      for (const dk of docks) {
+        if (dk.collected) continue;
+        const dd = Math.hypot(ship.x - dk.x, ship.y - dk.y);
+        if (dd < bestD) { bestD = dd; best = dk; }
+      }
+      if (best) { tgtX = best.x; tgtY = best.y; tgtActive = true; }
+    }
     if (tgtActive && ship.fuel > 0) {
       const dx = tgtX - ship.x, dy = tgtY - ship.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
@@ -220,19 +258,21 @@ if (c) {
       }
     }
 
-    // Pod collection
-    for (const p of pods) {
-      if (p.collected) continue;
-      const dx = ship.x - p.x, dy = ship.y - p.y;
-      if (dx * dx + dy * dy < POD_COLLECT_R * POD_COLLECT_R) {
-        p.collected = true;
-        if (p.kind === 'refuel') {
-          ship.fuel = Math.min(FUEL_MAX, ship.fuel + p.fuel);
-        } else {
-          if (p.kind === 'dock') docksCollected++;
-          ship.fuel = Math.min(FUEL_MAX, ship.fuel + p.fuel);
-        }
+    // Dock collection — the core mini-game goal
+    for (const dk of docks) {
+      if (dk.collected) continue;
+      if (Math.hypot(ship.x - dk.x, ship.y - dk.y) < DOCK_REACH_R) {
+        dk.collected = true;
+        docksCollected++;
+        ship.fuel = Math.min(FUEL_MAX, ship.fuel + 30);
       }
+    }
+
+    // Loop the attract demo once every dock is reached
+    if (docksCollected >= totalDocks) {
+      for (const dk of docks) dk.collected = false;
+      docksCollected = 0;
+      ship.fuel = FUEL_MAX;
     }
 
     // Discover asteroids near ship
@@ -261,6 +301,27 @@ if (c) {
     ctx.clearRect(0, 0, W, H);
     const t = now / 1000;
     const sc = worldScale();
+
+    // Background art (cover-fit) or dark fallback
+    if (bgReady) {
+      const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
+      // Over-scale so the parallax pan never exposes the image edges.
+      const bScale = Math.max(W / iw, H / ih) * 1.3;
+      const dw = iw * bScale, dh = ih * bScale;
+      const slackX = (dw - W) / 2, slackY = (dh - H) / 2;
+      // Parallax: shift the backdrop opposite to camera motion at a fraction of
+      // world speed so it reads as a distant layer moving with the ship.
+      const aspect = W / H;
+      const PARALLAX = 0.35;
+      let panX = -camX * (W / (ortho * 2 * aspect)) * PARALLAX + Math.sin(t * 0.05) * slackX * 0.15;
+      let panY = -camY * (H / (ortho * 2)) * PARALLAX + Math.cos(t * 0.04) * slackY * 0.15;
+      panX = Math.max(-slackX, Math.min(slackX, panX));
+      panY = Math.max(-slackY, Math.min(slackY, panY));
+      ctx.drawImage(bgImg, (W - dw) / 2 + panX, (H - dh) / 2 + panY, dw, dh);
+    } else {
+      ctx.fillStyle = '#02040a';
+      ctx.fillRect(0, 0, W, H);
+    }
 
     // Background stars
     for (const s of bgStars) {
@@ -291,34 +352,6 @@ if (c) {
       ctx.restore();
     }
 
-    // Pods
-    for (const p of pods) {
-      if (p.collected) continue;
-      const [sx, sy] = w2s(p.x, p.y);
-      if (sx < -20 || sx > W + 20 || sy < -20 || sy > H + 20) continue;
-      const pr = Math.max(3, 0.06 * sc);
-      ctx.beginPath();
-      ctx.arc(sx, sy, pr, 0, Math.PI * 2);
-      ctx.fillStyle = p.color;
-      ctx.fill();
-      // Stem
-      const aIdx = pods.indexOf(p);
-      if (aIdx < asteroids.length) {
-        const a = asteroids[aIdx]!;
-        const [asx, asy] = w2s(a.x, a.y);
-        ctx.beginPath();
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(asx, asy);
-        ctx.strokeStyle = p.color.replace(')', ', 0.3)').replace('rgb(', 'rgba(');
-        // Simple alpha for hex colors
-        ctx.globalAlpha = 0.3;
-        ctx.strokeStyle = p.color;
-        ctx.lineWidth = 0.8;
-        ctx.stroke();
-        ctx.globalAlpha = 1.0;
-      }
-    }
-
     // Target reticle
     if (tgtActive) {
       const [tx, ty] = w2s(tgtX, tgtY);
@@ -337,30 +370,68 @@ if (c) {
       ctx.stroke();
     }
 
+    // Docks — colored icons attached to their asteroids
+    for (const dk of docks) {
+      const [dx, dy] = w2s(dk.x, dk.y);
+      if (dx < -80 || dx > W + 80 || dy < -80 || dy > H + 80) continue;
+      const [ax, ay] = w2s(dk.ax, dk.ay);
+      ctx.strokeStyle = dk.collected ? 'rgba(79,255,176,0.7)' : 'rgba(255,210,120,0.75)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay); ctx.lineTo(dx, dy);
+      ctx.stroke();
+      const sprite = dockSprites[dk.icon];
+      const isz = Math.max(20, 0.4 * sc);
+      if (sprite) {
+        ctx.save();
+        if (dk.collected) ctx.globalAlpha = 0.4;
+        ctx.drawImage(sprite, dx - isz / 2, dy - isz / 2, isz, isz);
+        ctx.restore();
+      } else {
+        ctx.beginPath();
+        ctx.arc(dx, dy, isz * 0.3, 0, Math.PI * 2);
+        ctx.fillStyle = dk.collected ? '#4fffb0' : '#FF6A3D';
+        ctx.fill();
+      }
+    }
+
     // Ship
     const [ssx, ssy] = w2s(ship.x, ship.y);
     const shipSize = Math.max(6, 0.1 * sc);
     ctx.save();
     ctx.translate(ssx, ssy);
-    ctx.rotate(ship.angle);
-    ctx.beginPath();
-    ctx.moveTo(shipSize * 1.5, 0);
-    ctx.lineTo(-shipSize, -shipSize);
-    ctx.lineTo(-shipSize * 0.5, 0);
-    ctx.lineTo(-shipSize, shipSize);
-    ctx.closePath();
-    ctx.strokeStyle = ship.thrusting ? '#f59e0b' : '#10b981';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    // Engine flame
-    if (ship.thrusting) {
+    if (shipSprite) {
+      const px = Math.max(30, shipSize * 6);
+      ctx.rotate(ship.angle + Math.PI / 2); // sprite nose points up
+      if (ship.thrusting) {
+        ctx.beginPath();
+        ctx.moveTo(-px * 0.16, px * 0.5);
+        ctx.lineTo(0, px * 0.5 + (0.18 + Math.random() * 0.14) * px);
+        ctx.lineTo(px * 0.16, px * 0.5);
+        ctx.fillStyle = 'rgba(255, 160, 50, 0.85)';
+        ctx.fill();
+      }
+      ctx.drawImage(shipSprite, -px / 2, -px / 2, px, px);
+    } else {
+      ctx.rotate(ship.angle);
       ctx.beginPath();
-      ctx.moveTo(-shipSize * 0.5, -shipSize * 0.3);
-      ctx.lineTo(-shipSize * 1.4 - Math.random() * shipSize * 0.4, 0);
-      ctx.lineTo(-shipSize * 0.5, shipSize * 0.3);
-      ctx.strokeStyle = 'rgba(255, 160, 50, 0.8)';
-      ctx.lineWidth = 1.5;
+      ctx.moveTo(shipSize * 1.5, 0);
+      ctx.lineTo(-shipSize, -shipSize);
+      ctx.lineTo(-shipSize * 0.5, 0);
+      ctx.lineTo(-shipSize, shipSize);
+      ctx.closePath();
+      ctx.strokeStyle = ship.thrusting ? '#f59e0b' : '#10b981';
+      ctx.lineWidth = 2;
       ctx.stroke();
+      if (ship.thrusting) {
+        ctx.beginPath();
+        ctx.moveTo(-shipSize * 0.5, -shipSize * 0.3);
+        ctx.lineTo(-shipSize * 1.4 - Math.random() * shipSize * 0.4, 0);
+        ctx.lineTo(-shipSize * 0.5, shipSize * 0.3);
+        ctx.strokeStyle = 'rgba(255, 160, 50, 0.8)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
     }
     ctx.restore();
 
@@ -383,16 +454,123 @@ if (c) {
     // Dock counter
     ctx.fillText(`DOCKS ${docksCollected}/${totalDocks}`, barX, barY + barH + 23);
 
-    // Title (top center)
+    // Title (top center) — logo image with text fallback
     ctx.textAlign = 'center';
-    ctx.font = 'bold 14px monospace';
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillText('VALCORDIA SPACE', W / 2 + 1, 21);
-    ctx.fillStyle = '#4fffb0';
-    ctx.fillText('VALCORDIA SPACE', W / 2, 20);
+    let hintY = 35;
+    if (logoReady) {
+      const lw = Math.min(W * 0.66, 460);
+      const lh = lw * (logoImg.naturalHeight / logoImg.naturalWidth);
+      const ly = Math.max(6, H * 0.04);
+      ctx.drawImage(logoImg, (W - lw) / 2, ly, lw, lh);
+      hintY = ly + lh + 12;
+    } else {
+      ctx.font = 'bold 14px monospace';
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillText('VALCORDIA SPACE', W / 2 + 1, 21);
+      ctx.fillStyle = '#4fffb0';
+      ctx.fillText('VALCORDIA SPACE', W / 2, 20);
+    }
     ctx.font = '10px monospace';
     ctx.fillStyle = 'rgba(79, 255, 176, 0.4)';
-    ctx.fillText('tap to navigate \u2022 collect docks', W / 2, 35);
+    ctx.fillText('tap to navigate \u2022 collect docks', W / 2, hintY);
+
+    // Coach-style "tap to navigate" indicator (amber card, matches the tutorial)
+    if (!hasNavigated) {
+      const amber = '#ffb84d';
+      const pulse = 0.5 + 0.5 * Math.sin(t * 3);
+      const cardTitle = 'NAVIGATE';
+      const cardBody = 'Tap here to navigate now';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.font = '11px monospace';
+      const bodyW = ctx.measureText(cardBody).width;
+      const boxW = Math.min(bodyW + 24, W - 24);
+      const boxH = 48;
+      const boxX = (W - boxW) / 2;
+      const boxY = H * 0.6;
+      // Pulsing outer glow
+      ctx.strokeStyle = `rgba(255,184,77,${0.16 + pulse * 0.3})`;
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.roundRect(boxX - 3, boxY - 3, boxW + 6, boxH + 6, 9);
+      ctx.stroke();
+      // Card body
+      ctx.fillStyle = 'rgba(10,6,0,0.92)';
+      ctx.beginPath();
+      ctx.roundRect(boxX, boxY, boxW, boxH, 7);
+      ctx.fill();
+      ctx.strokeStyle = amber;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(boxX, boxY, boxW, boxH, 7);
+      ctx.stroke();
+      ctx.font = 'bold 11px monospace';
+      ctx.fillStyle = amber;
+      ctx.fillText(cardTitle, boxX + 12, boxY + 9);
+      ctx.font = '11px monospace';
+      ctx.fillStyle = '#8ff7cf';
+      ctx.fillText(cardBody, boxX + 12, boxY + 27);
+
+      // Target a point a little ahead of the ship and off to one side, so tapping
+      // it makes the ship visibly alter course.
+      const fx = Math.cos(ship.angle), fy = Math.sin(ship.angle);
+      const aheadWX = ship.x + fx * 1.1 - fy * 0.75;
+      const aheadWY = ship.y + fy * 1.1 + fx * 0.75;
+      let [tX, tY] = w2s(aheadWX, aheadWY);
+      // Prefer a nearby dock, but only if it's far enough to not sit on the ship.
+      let bestDock: Dock | null = null, bestDockD = Infinity;
+      for (const dk of docks) {
+        if (dk.collected) continue;
+        const d = Math.hypot(ship.x - dk.x, ship.y - dk.y);
+        if (d < bestDockD) { bestDockD = d; bestDock = dk; }
+      }
+      if (bestDock && bestDockD > 1.3) {
+        const [dsx, dsy] = w2s(bestDock.x, bestDock.y);
+        if (dsx > 16 && dsx < W - 16 && dsy > 16 && dsy < H - 16) { tX = dsx; tY = dsy; }
+      }
+      tX = Math.max(24, Math.min(W - 24, tX));
+      tY = Math.max(24, Math.min(H - 24, tY));
+      // Arrow start: point on the card border facing the target.
+      const bcx = boxX + boxW / 2, bcy = boxY + boxH / 2;
+      const ang = Math.atan2(tY - bcy, tX - bcx);
+      const adx = Math.cos(ang), ady = Math.sin(ang);
+      const edgeScale = Math.min((boxW / 2 + 4) / Math.max(Math.abs(adx), 1e-3), (boxH / 2 + 4) / Math.max(Math.abs(ady), 1e-3));
+      const startX = bcx + adx * edgeScale, startY = bcy + ady * edgeScale;
+      const cr = 12 + pulse * 4;
+      const gap = cr + 10;
+      const fullEndX = tX - adx * gap, fullEndY = tY - ady * gap;
+      // Arrow spans about a third of the way toward the crosshair.
+      const endX = startX + (fullEndX - startX) * 0.34;
+      const endY = startY + (fullEndY - startY) * 0.34;
+      ctx.strokeStyle = amber;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+      const ah = 10;
+      ctx.beginPath();
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX - ah * Math.cos(ang - 0.42), endY - ah * Math.sin(ang - 0.42));
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX - ah * Math.cos(ang + 0.42), endY - ah * Math.sin(ang + 0.42));
+      ctx.stroke();
+      // Crosshair at the target.
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(tX, tY, cr, 0, Math.PI * 2);
+      ctx.moveTo(tX - cr * 1.7, tY); ctx.lineTo(tX - cr * 0.55, tY);
+      ctx.moveTo(tX + cr * 0.55, tY); ctx.lineTo(tX + cr * 1.7, tY);
+      ctx.moveTo(tX, tY - cr * 1.7); ctx.lineTo(tX, tY - cr * 0.55);
+      ctx.moveTo(tX, tY + cr * 0.55); ctx.lineTo(tX, tY + cr * 1.7);
+      ctx.stroke();
+      ctx.fillStyle = amber;
+      ctx.beginPath();
+      ctx.arc(tX, tY, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.textAlign = 'center';
+    }
 
     // Low fuel warning
     if (fuelPct < 0.2 && Math.sin(t * 6) > 0) {

@@ -29,7 +29,7 @@ import {
   isInTransferMode, hitTestGalaxyStar, completeTransferSelection, hitTestTransferCancel, cancelTransferMode,
   drawGalaxyZoomButtons, hitTestGalaxyZoomButtons, setHomeStarIndex,
 
-  selectGalaxyStar, deselectGalaxyStar, getSelectedStarIndex, hitTestStarInfoDismiss, hitTestStarInfoVisit,
+  selectGalaxyStar, deselectGalaxyStar, getSelectedStarIndex, hitTestStarInfoDismiss, hitTestStarInfoVisit, hitTestStarInfoCard,
   drawGalaxyModeToggle, drawGalaxyModeBanner, hitTestGalaxyModeBtn, hitTestGalaxyExitBtn, toggleGalaxyMode, setGalaxyMode, getGalaxyMode,
   setGalaxyJumpReturnTier, isFleetPanelOpen, closeFleetPanel,
   getPostId, triggerExplore,
@@ -81,6 +81,24 @@ function findNearestStarIndex(pos: GameState['ship']['pos']): number {
   }
   return bestIdx;
 }
+
+export function shouldConsumeGalaxyNavTap(
+  tier: NavigationTier,
+  mode: 'nav' | 'fleet',
+  selectedStarIndex: number,
+  tappedStarIndex: number,
+  hitStarInfoDismiss: boolean,
+  hitStarInfoVisit: boolean,
+  hitStarInfoCard: boolean,
+  isEmptySpaceTap: boolean,
+): boolean {
+  if (tier !== NavigationTier.Galaxy || mode !== 'nav') return false;
+  if (hitStarInfoDismiss || hitStarInfoVisit || hitStarInfoCard) return true;
+  if (selectedStarIndex >= 0) return true;
+  if (tappedStarIndex >= 0) return true;
+  return !isEmptySpaceTap;
+}
+
 let devvitCb: DevvitCallbacks | null = null;
 
 const POSE_INTERVAL = 1; // 1Hz pose reporting (1 request/sec)
@@ -209,6 +227,26 @@ export function setStarClaims(claims: Array<{ starIndex: number; username: strin
   }
 }
 
+/** Apply discovered/probed/visited state to a single star while preserving the
+ * correct card mode for enhanced probes versus ordinary visits. */
+export function applyStarDiscoveryState(
+  star: { discovered: boolean; discoveryLevel: string; visitMode?: string },
+  isEnhanced: boolean,
+): void {
+  star.discovered = true;
+
+  if (star.discoveryLevel === 'none') {
+    star.discoveryLevel = isEnhanced ? 'visited' : 'probed';
+    star.visitMode = isEnhanced ? 'enhanced_probe' : 'basic_probe';
+    return;
+  }
+
+  if (star.discoveryLevel === 'probed' && isEnhanced) {
+    star.discoveryLevel = 'visited';
+    star.visitMode = 'enhanced_probe';
+  }
+}
+
 /** Restore discovered stars from server data. */
 export function setDiscoveredStars(starIndices: number[], enhancedProbeStars?: number[]): void {
   if (!gameState) return;
@@ -218,12 +256,7 @@ export function setDiscoveredStars(starIndices: number[], enhancedProbeStars?: n
   for (const idx of starIndices) {
     const star = gameState.galaxy.stars[idx];
     if (!star) continue;
-    // Mark as discovered — does NOT claim ownership (that requires colonization)
-    star.discovered = true;
-    if (star.discoveryLevel === 'none') {
-      // Legacy profiles: all discovered = visited. New profiles: check enhanced list.
-      star.discoveryLevel = (legacyMode || enhancedSet.has(idx)) ? 'visited' : 'probed';
-    }
+    applyStarDiscoveryState(star, legacyMode || enhancedSet.has(idx));
   }
 }
 
@@ -980,6 +1013,9 @@ function update(dt: number): void {
         deselectGalaxyStar();
       }
       inputState.pointerDown = false;
+    } else if (getSelectedStarIndex() >= 0 && hitTestStarInfoCard(px, py)) {
+      // Inspecting the survey card must not select stars underneath it.
+      inputState.pointerDown = false;
     } else {
       // Check if tapping a star (toggle if same star)
       const tappedStar = hitTestGalaxyStar(px, py);
@@ -997,17 +1033,27 @@ function update(dt: number): void {
         }
         inputState.pointerDown = false; // consume click — don't move ship
       } else if (getSelectedStarIndex() >= 0) {
-        // Tapped empty space — deselect
+        // Tapped empty space while a star card is open — close the card and let
+        // the click fall through for ship movement when the map itself is empty.
         deselectGalaxyStar();
-        // Galaxy map taps are UI interactions. Never let a missed star hit fall
-        // through to ship movement and unexpectedly enter Solar/System view.
         inputState.pointerDown = false;
       } else if (getGalaxyMode() === 'fleet') {
         // Fleet mode: consume all taps (no ship movement)
         inputState.pointerDown = false;
       }
-      if (getGalaxyMode() === 'nav' && inputState.pointerDown) {
-        console.log('[GALAXY] navigation tap consumed without star selection');
+
+      const navTapConsumed = shouldConsumeGalaxyNavTap(
+        gameState.galaxy.tier,
+        getGalaxyMode(),
+        getSelectedStarIndex(),
+        tappedStar,
+        getSelectedStarIndex() >= 0 && hitTestStarInfoDismiss(px, py),
+        getSelectedStarIndex() >= 0 && hitTestStarInfoVisit(px, py),
+        getSelectedStarIndex() >= 0 && hitTestStarInfoCard(px, py),
+        tappedStar < 0 && getSelectedStarIndex() < 0,
+      );
+      if (navTapConsumed && getGalaxyMode() === 'nav') {
+        console.log('[GALAXY] nav tap consumed without star selection');
         inputState.pointerDown = false;
       }
     }

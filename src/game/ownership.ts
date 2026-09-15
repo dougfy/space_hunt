@@ -18,7 +18,13 @@ export function reduceStarOwnership(
     const nextStars: StarOwnershipState[] = stars.map((star) => {
       if (star.index !== command.homeStarIndex) return star;
       changed = changed || star.owner !== 'player' || !star.discovered;
-      return { ...star, owner: 'player', discovered: true, discoveryLevel: 'visited' as const };
+      return {
+        ...star,
+        owner: 'player',
+        discovered: true,
+        discoveryLevel: 'visited' as const,
+        visitMode: 'ship_visit' as const,
+      };
     });
 
     return {
@@ -36,7 +42,12 @@ export function reduceStarOwnership(
       // Probe only upgrades from 'none' to 'probed'; doesn't downgrade 'visited'
       if (star.discoveryLevel === 'visited') return star;
       discoveredOwner = star.owner;
-      return { ...star, discovered: true, discoveryLevel: 'probed' as const };
+      return {
+        ...star,
+        discovered: true,
+        discoveryLevel: 'probed' as const,
+        visitMode: 'basic_probe' as const,
+      };
     });
 
     return {
@@ -53,7 +64,12 @@ export function reduceStarOwnership(
     if (star.index !== command.starIndex) return star;
     if (star.discoveryLevel === 'visited') return star; // already visited
     discoveredOwner = star.discovered ? null : star.owner;
-    return { ...star, discovered: true, discoveryLevel: 'visited' as const };
+    return {
+      ...star,
+      discovered: true,
+      discoveryLevel: 'visited' as const,
+      visitMode: 'ship_visit' as const,
+    };
   });
 
   return {

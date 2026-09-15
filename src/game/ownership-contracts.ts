@@ -1,11 +1,13 @@
 export type StarOwner = 'none' | 'player' | 'foreign';
 export type DiscoveryLevel = 'none' | 'probed' | 'visited';
+export type VisitMode = 'unvisited' | 'basic_probe' | 'enhanced_probe' | 'ship_visit';
 
 export type StarOwnershipState = {
   index: number;
   owner: StarOwner;
   discovered: boolean;
   discoveryLevel: DiscoveryLevel;
+  visitMode?: VisitMode;
 };
 
 export type StarOwnershipCommand =

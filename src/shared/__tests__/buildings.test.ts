@@ -7,6 +7,7 @@ import {
   getUnlockedBuildTypes,
   normalizeStarBuildings,
   reconcileStarBuildings,
+  summarizeActiveBuildings,
 } from '../buildings';
 
 describe('shared building rules', () => {
@@ -46,5 +47,21 @@ describe('shared building rules', () => {
     expect(next.mine.status).toBe('ACTIVE');
     expect(next.warehouse.level).toBe(1);
     expect(next.warehouse.status).toBe('ACTIVE');
+  });
+
+  it('summarizes active foreign-star buildings in a compact readout', () => {
+    const summary = summarizeActiveBuildings({
+      station: { level: 3, status: 'ACTIVE', completeAt: null },
+      mine: { level: 2, status: 'ACTIVE', completeAt: null },
+      solar: { level: 1, status: 'ACTIVE', completeAt: null },
+      hab: { level: 0, status: 'READY', completeAt: null },
+      warehouse: { level: 0, status: 'LOCKED', completeAt: null },
+      dock: { level: 0, status: 'LOCKED', completeAt: null },
+      shield: { level: 0, status: 'LOCKED', completeAt: null },
+      cannon: { level: 0, status: 'LOCKED', completeAt: null },
+      refinery: { level: 0, status: 'LOCKED', completeAt: null },
+    });
+
+    expect(summary).toBe('Station III, Mine II, Solar I');
   });
 });

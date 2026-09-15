@@ -310,6 +310,8 @@ export type BuyShipRequest = {
   shipTypeId: ShipTypeId;
   quantity: number;
   useBlueprint?: boolean;
+  /** Colonize-tutorial only: shortens the Basic Probe build so onboarding isn't a dead wait. */
+  tutorialQuick?: boolean;
 };
 
 export type BuyShipResponse = {
@@ -462,6 +464,7 @@ export type FleetTransferRequest = {
   toStarIndex: number;
   shipTypeId: ShipTypeId;
   count: number;
+  tutorialFuelBypass?: boolean;
 };
 
 export type FleetTransferResponse = {
