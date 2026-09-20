@@ -17,7 +17,7 @@ menu.post('/post-create', async (c) => {
               type: 'string',
               name: 'title',
               label: 'Post title',
-              defaultValue: 'spacehunt',
+              defaultValue: 'Valcordia Space — Play Now 🚀',
               required: true,
             },
           ],

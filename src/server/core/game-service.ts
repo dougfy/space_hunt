@@ -248,8 +248,10 @@ function hashString(value: string): number {
 
 export function evaluateDailyAirPurifierRoll(postId: string, username: string, dayKey: string): boolean {
   const signature = `${postId}|${username.toLowerCase()}|${dayKey}`;
-  return (hashString(signature) % 100) < 10;
+  return (hashString(signature) % 100) < 90;
 }
+
+const AIR_PURIFIER_ROLL_VERSION = '90pct';
 
 /** Start at most one air-purifier incident per player and UTC day. */
 export async function ensureAirPurifierQuest(
@@ -263,7 +265,11 @@ export async function ensureAirPurifierQuest(
   const economy = await loadEconomyProfile(store, username);
   const claims = await getClaimedStars(store, postId);
   const owned = claims.filter((claim) => claim.username.toLowerCase() === username.toLowerCase());
-  if (owned.length < 2) return null;
+  if (owned.length < 2) {
+    console.log(`[QUEST-DEBUG] no incident reason=insufficient-stars user=${username} owned=${owned.length} required=2`);
+    return null;
+  }
+  const dayKey = getUtcDayKey(now);
 
   const existing = parseAirPurifierQuest(await store.hGet(profileKey, ACTIVE_QUEST_FIELD));
   if (existing) {
@@ -272,24 +278,38 @@ export async function ensureAirPurifierQuest(
       if (progression.condition === 'lost') {
         const failed = { ...existing, state: 'failed' as const, condition: 'lost' as const, capacityPercent: 0 };
         await store.hSet(profileKey, { [ACTIVE_QUEST_FIELD]: JSON.stringify(failed) });
+        console.log(`[QUEST-DEBUG] incident expired user=${username} event=${existing.eventId} state=failed condition=lost`);
         return failed;
       }
+      console.log(`[QUEST-DEBUG] existing incident user=${username} event=${existing.eventId} star=${existing.starIndex} condition=${progression.condition}`);
       return { ...existing, ...progression };
     }
-    return existing;
+    const terminalQuest = existing as unknown as AirPurifierQuest;
+    if (terminalQuest.dayKey === dayKey) {
+      console.log(`[QUEST-DEBUG] existing incident terminal user=${username} day=${dayKey}`);
+      return terminalQuest;
+    }
+    console.log(`[QUEST-DEBUG] ignoring terminal incident from prior day user=${username} priorDay=${terminalQuest.dayKey} currentDay=${dayKey}`);
   }
 
-  const dayKey = getUtcDayKey(now);
   const dailyKey = `daily:${postId}:${dayKey}:air-purifier:${username.toLowerCase()}`;
   const generated = await store.get(dailyKey);
-  if (generated) return parseAirPurifierQuest(generated);
+  if (generated) {
+    const generatedQuest = parseAirPurifierQuest(generated);
+    console.log(`[QUEST-DEBUG] generated incident found user=${username} day=${dayKey} event=${generatedQuest?.eventId ?? 'invalid'}`);
+    return generatedQuest;
+  }
 
-  const rollKey = `daily:${postId}:${dayKey}:air-purifier-roll:${username.toLowerCase()}`;
+  const rollKey = `daily:${postId}:${dayKey}:air-purifier-roll:${AIR_PURIFIER_ROLL_VERSION}:${username.toLowerCase()}`;
   const rollStatus = await store.get(rollKey);
-  if (rollStatus === 'skipped') return null;
+  if (rollStatus === 'skipped') {
+    console.log(`[QUEST-DEBUG] no incident reason=roll-already-skipped user=${username} day=${dayKey}`);
+    return null;
+  }
   const shouldCreate = rollStatus === 'triggered' ? true : evaluateDailyAirPurifierRoll(postId, username, dayKey);
   if (!shouldCreate) {
     await store.set(rollKey, 'skipped');
+    console.log(`[QUEST-DEBUG] no incident reason=daily-roll user=${username} day=${dayKey} roll=not-triggered chance=90pct`);
     return null;
   }
   await store.set(rollKey, 'triggered');
@@ -319,7 +339,7 @@ export async function ensureAirPurifierQuest(
   };
   await store.set(dailyKey, JSON.stringify(quest));
   await store.hSet(profileKey, { [ACTIVE_QUEST_FIELD]: JSON.stringify(quest) });
-  console.log(`[QUEST] air purifier started user=${username} star=${quest.starIndex} deadline=${quest.deadlineAt}`);
+  console.log(`[QUEST] air purifier started user=${username} star=${quest.starIndex} sourceStar=${quest.sourceStarIndex} day=${dayKey} deadline=${quest.deadlineAt}`);
   return quest;
 }
 

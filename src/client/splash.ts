@@ -23,6 +23,12 @@ if (c) {
   bgImg.onload = () => { bgReady = true; };
   bgImg.src = 'background.png';
 
+  // ── Tileable background (seamless wrap for full parallax scroll) ────────
+  const tileImg = new Image();
+  let tileReady = false;
+  tileImg.onload = () => { tileReady = true; };
+  tileImg.src = 'backgroundtile.png';
+
   // ── Logo (top-center title) ───────────────────────────────────────────────
   const logoImg = new Image();
   let logoReady = false;
@@ -55,7 +61,6 @@ if (c) {
   const MAX_SPEED = 0.9;
   const ACCEL = 1.35;
   const FUEL_MAX = 100;
-  const FUEL_DRAIN = 0.8; // per sec while thrusting
   const ARRIVE_R = 0.15;
 
   // ── Seeded RNG ──────────────────────────────────────────────────────────
@@ -69,21 +74,26 @@ if (c) {
     discovered: boolean;
   }
   const asteroids: Asteroid[] = [];
+  // Min surface-to-surface gap between asteroids so the ship can always fit through.
+  const NAV_GAP = 0.7;
   for (let i = 0; i < ASTEROID_COUNT; i++) {
-    let x: number, y: number, ok: boolean;
+    let x: number, y: number, r: number, ok: boolean;
+    let attempts = 0;
     do {
       x = (rng() - 0.5) * MAP_W;
       y = (rng() - 0.5) * MAP_H;
-      const dist = Math.sqrt(x * x + y * y);
-      ok = dist > 1.5; // keep origin clear
+      r = 0.28 + rng() * 0.42;
+      ok = Math.sqrt(x * x + y * y) > 1.5 + r; // keep origin/spawn clear
       if (ok) {
         for (const a of asteroids) {
-          if (Math.abs(a.x - x) + Math.abs(a.y - y) < 0.9) { ok = false; break; }
+          // Reject if the two surfaces would be closer than the ship-passage gap.
+          if (Math.hypot(a.x - x, a.y - y) < a.r + r + NAV_GAP) { ok = false; break; }
         }
       }
-    } while (!ok);
+      attempts++;
+    } while (!ok && attempts < 300);
+    if (!ok) continue; // no room left with proper spacing — skip rather than crowd
 
-    const r = 0.28 + rng() * 0.42;
     const n = 8 + (rng() * 5 | 0);
     const verts: [number, number][] = [];
     for (let j = 0; j < n; j++) {
@@ -192,7 +202,7 @@ if (c) {
       }
       if (best) { tgtX = best.x; tgtY = best.y; tgtActive = true; }
     }
-    if (tgtActive && ship.fuel > 0) {
+    if (tgtActive) {
       const dx = tgtX - ship.x, dy = tgtY - ship.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist > ARRIVE_R) {
@@ -235,8 +245,6 @@ if (c) {
     const spd = Math.sqrt(ship.vx * ship.vx + ship.vy * ship.vy);
     if (spd > MAX_SPEED) { ship.vx = (ship.vx / spd) * MAX_SPEED; ship.vy = (ship.vy / spd) * MAX_SPEED; }
 
-    // Fuel drain
-    if (ship.thrusting) ship.fuel = Math.max(0, ship.fuel - FUEL_DRAIN * dt);
 
     // Move
     ship.x += ship.vx * dt;
@@ -302,15 +310,28 @@ if (c) {
     const t = now / 1000;
     const sc = worldScale();
 
-    // Background art (cover-fit) or dark fallback
-    if (bgReady) {
+    // Background: seamless tiled parallax (wraps infinitely), with fallbacks.
+    if (tileReady) {
+      const aspect = W / H;
+      const PARALLAX = 0.35;
+      const ts = H; // display size of one square tile
+      const pxPerUnitX = W / (ortho * 2 * aspect);
+      const pxPerUnitY = H / (ortho * 2);
+      let offX = (-camX * pxPerUnitX * PARALLAX + t * 8) % ts;
+      let offY = (-camY * pxPerUnitY * PARALLAX) % ts;
+      if (offX > 0) offX -= ts;
+      if (offY > 0) offY -= ts;
+      for (let gx = offX; gx < W; gx += ts) {
+        for (let gy = offY; gy < H; gy += ts) {
+          ctx.drawImage(tileImg, gx, gy, ts, ts);
+        }
+      }
+    } else if (bgReady) {
       const iw = bgImg.naturalWidth, ih = bgImg.naturalHeight;
       // Over-scale so the parallax pan never exposes the image edges.
       const bScale = Math.max(W / iw, H / ih) * 1.3;
       const dw = iw * bScale, dh = ih * bScale;
       const slackX = (dw - W) / 2, slackY = (dh - H) / 2;
-      // Parallax: shift the backdrop opposite to camera motion at a fraction of
-      // world speed so it reads as a distant layer moving with the ship.
       const aspect = W / H;
       const PARALLAX = 0.35;
       let panX = -camX * (W / (ortho * 2 * aspect)) * PARALLAX + Math.sin(t * 0.05) * slackX * 0.15;
@@ -555,14 +576,19 @@ if (c) {
       ctx.moveTo(endX, endY);
       ctx.lineTo(endX - ah * Math.cos(ang + 0.42), endY - ah * Math.sin(ang + 0.42));
       ctx.stroke();
+      // Keep the crosshair close to the shortened arrowhead while preserving its direction.
+      tX = endX + adx * (cr + 12);
+      tY = endY + ady * (cr + 12);
       // Crosshair at the target.
       ctx.lineWidth = 2;
+      const crosshairInner = cr * 0.65;
+      const crosshairOuter = cr * 1.15;
       ctx.beginPath();
       ctx.arc(tX, tY, cr, 0, Math.PI * 2);
-      ctx.moveTo(tX - cr * 1.7, tY); ctx.lineTo(tX - cr * 0.55, tY);
-      ctx.moveTo(tX + cr * 0.55, tY); ctx.lineTo(tX + cr * 1.7, tY);
-      ctx.moveTo(tX, tY - cr * 1.7); ctx.lineTo(tX, tY - cr * 0.55);
-      ctx.moveTo(tX, tY + cr * 0.55); ctx.lineTo(tX, tY + cr * 1.7);
+      ctx.moveTo(tX - crosshairOuter, tY); ctx.lineTo(tX - crosshairInner, tY);
+      ctx.moveTo(tX + crosshairInner, tY); ctx.lineTo(tX + crosshairOuter, tY);
+      ctx.moveTo(tX, tY - crosshairOuter); ctx.lineTo(tX, tY - crosshairInner);
+      ctx.moveTo(tX, tY + crosshairInner); ctx.lineTo(tX, tY + crosshairOuter);
       ctx.stroke();
       ctx.fillStyle = amber;
       ctx.beginPath();
@@ -587,3 +613,5 @@ if (c) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (globalThis as any).__stopSplash = () => { cancelAnimationFrame(raf); };
 }
+
+export {};

@@ -1860,6 +1860,7 @@ async function pollEconomy() {
       ...(data.capacityPercent != null ? { capacityPercent: data.capacityPercent } : {}),
     }, econUsername === username);
     if (econUsername === username && data.starCondition && data.starCondition !== 'normal') {
+      console.log(`[QUEST-DEBUG] condition received star=${starIndex} condition=${data.starCondition} capacity=${data.capacityPercent ?? 'n/a'}`);
       if (data.starCondition !== _lastPurifierCondition) {
         if (data.starCondition === 'critical_failure') playSound('purifier_critical');
         else if (data.starCondition === 'reduced_capacity' && !_lastPurifierCondition) playSound('purifier_warning');
@@ -1867,6 +1868,7 @@ async function pollEconomy() {
         _lastPurifierCondition = data.starCondition;
       }
     } else if (econUsername === username && (!data.starCondition || data.starCondition === 'normal')) {
+      console.log(`[QUEST-DEBUG] no incident condition in economy response star=${starIndex} responseCondition=${data.starCondition ?? 'normal'}`);
       _lastPurifierCondition = null;
     }
     if (econUsername === username) {
@@ -2201,6 +2203,9 @@ function sendStatsHeartbeat() {
 // ── Activate multiplayer networking ─────────────────────────────────────────
 function startMultiplayer() {
   if (_isPlaying) return; // load timeout and profile promise can both reach here
+  // Stop the attract splash if it is running (e.g. after an idle-timeout rejoin).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (typeof (globalThis as any).__stopSplash === 'function') (globalThis as any).__stopSplash();
   console.log(`[STARTUP] t=${(performance.now() - _tPageLoad).toFixed(0)}ms — startMultiplayer() entered`);
   // Hide loading screen
   const ls = document.getElementById('loading-screen');
@@ -2356,6 +2361,8 @@ if (!isInline && _returningFromIdle) {
   overlay.classList.add('visible');
   const ls = document.getElementById('loading-screen');
   if (ls) ls.style.display = 'none';
+  // Run the animated attract splash behind the overlay (expanded mode skips the loader).
+  void import('./splash');
   history.replaceState(null, '', location.pathname + location.search);
 }
 

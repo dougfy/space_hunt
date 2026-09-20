@@ -82,11 +82,11 @@ describe('game service backend routines', () => {
     expect(await ensureAirPurifierQuest(store, 'post-1', 'pilot', Date.now())).toBeNull();
   });
 
-  it('rolls a deterministic 10% chance once per UTC day per qualifying user', () => {
+  it('rolls a deterministic 90% chance once per UTC day per qualifying user', () => {
     const dayKey = '2026-08-26';
     expect(evaluateDailyAirPurifierRoll('post-1', 'pilot2', dayKey)).toBe(true);
     expect(evaluateDailyAirPurifierRoll('post-1', 'pilot2', dayKey)).toBe(true);
-    expect(evaluateDailyAirPurifierRoll('post-1', 'pilot2', '2026-08-27')).toBe(false);
+    expect(evaluateDailyAirPurifierRoll('post-1', 'pilot2', '2026-08-27')).toBe(true);
     expect(evaluateDailyAirPurifierRoll('post-1', 'other', '2026-08-27')).toBe(true);
   });
 
