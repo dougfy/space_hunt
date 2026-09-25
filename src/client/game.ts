@@ -10,6 +10,7 @@ import versionJson from '../../version.json';
 import { consumePendingBuildRequest, consumePendingBuyShipRequest, consumePendingUpgradeShipRequest, consumePendingCompleteBuilds, consumePendingColonizeRequest, consumePendingTransfer, consumePendingCancelRoute, consumePendingTrade, createDevvitBridge, getGameState, getDiscoveredStars, getVisitedStars, getKnownPlayers, addKnownPlayer, setExternalStarNames, refreshGalaxyStarNames, relocateToHomeStar, restorePosition, setDiscoveredStars, setStarClaims, setServerStarEconomy, setServerShipState, setServerFleetAll, setForeignFleet, setIsAdmin, skipJourney, isJourneyDone, startCoach, restoreCoach, isCoachSkipped, getCoachStep, coachAdvance, isCoachActive, startShipsTopic, startComsTopic, startColonizationTopic, dismissColonizationTopic, isColonizationTopicActive, colonizationTopicAction, getColonizationTopicStep, getColonizationTopicTarget, setProbeBuildCompleteAt, openComsPanelForTutorial, getFontScaleName, setFontScaleByName, setTextAuditEnabled, getOverflowReport, playSound, preloadSounds, warmCriticalSounds, onColonizeSuccess, setComsUnread, clearComsUnread, isComsPanelOpen, setPostId, setTradeStationInfo, enableFullGestures, setKnownPlayers, getDMPeer, setDMMessages, setDMUnread, consumePendingDMSend, consumeDMInputRequest, submitDMInput, consumePendingDMReport, showDMReportConfirm, getComsTab, setPublicComments, consumePendingPublicPost, consumePublicInputRequest, submitPublicPost, setAllianceInfo, setAllianceInvites, setAllianceChat, setAllianceItemOffers, getAllianceView, consumeAllianceAction, consumeAllianceInputRequest, submitAllianceInput, setAllianceUsername, consumePendingBotTest, consumePendingBotAdminTest, consumePendingBotCheck, setBotTestLog, consumePendingBotCopy, setLeaderboardData, consumePendingToggleShield, consumePendingFleetShare, setFleetShareCooldown, consumePendingExplore, showExploreResult, getShieldCharging, clearShieldCharging, consumePendingRefuel, consumePendingAirPurifierRepair, setSpecialInventory, deductBaseFuel, canUseTutorialProbeFuelBypass, consumeTutorialProbeFuelBypass, consumePendingVideoPlay, setReturningReport, getReturningReportItems, getTestState, confirmSkinPicker, getSoundHistory, consumePendingAbandon, showBuildError, setBuildCooldown } from '../game';
 import type { DevvitBridge } from '../game';
 import type { ShipShape } from '../game';
+import { getDebugBounds, setDebugBounds } from '../game';
 import { getFleetShapeFromAllFleets, shouldApplyFleetShape } from '../shared/ships';
 import { generateSystem } from '../game/galaxy';
 import { applyStarDiscoveryState } from '../game/game-loop';
@@ -363,6 +364,9 @@ const bridge: DevvitBridge = createDevvitBridge(canvas, {
   onMilestone(event) {
     journeyProgress(event === 'first_move' ? 0.05 : 0.07, event);
   },
+  onStateChanged() {
+    savePositionIfChanged();
+  },
 });
 
 bridge.setPlayerName(username);
@@ -485,10 +489,13 @@ function loadPlayerProfile(): Promise<void> {
       // Restore last position if different from home star
       if (profile.lastPosition && profile.homeStar != null) {
         const lp = profile.lastPosition;
+        if (lp.boundaryActive !== undefined) setDebugBounds(lp.boundaryActive);
         console.log(`[PROFILE] lastPosition: star=${lp.starIndex} tier=${lp.tier} body=${lp.bodyIndex}, homeStar=${profile.homeStar}`);
-        if (lp.starIndex !== profile.homeStar || lp.tier !== 3 || lp.bodyIndex !== 0) {
+        const hasExactPosition = lp.schemaVersion === 1 || lp.shipPos !== undefined || lp.dock !== undefined;
+        if (hasExactPosition || lp.starIndex !== profile.homeStar || lp.tier !== 3 || lp.bodyIndex !== 0) {
           console.log('[PROFILE] restoring position...');
-          restorePosition(lp.starIndex, lp.tier, lp.bodyIndex);
+          bridge.setProfilePosition(lp);
+          restorePosition(lp.starIndex, lp.tier, lp.bodyIndex, lp);
         } else {
           console.log('[PROFILE] at default home position, skipping restore');
         }
@@ -1975,14 +1982,20 @@ function savePositionIfChanged() {
   if (_resetPerformed) return; // block saves after admin reset
   const gs = getGameState();
   if (!gs) return;
-  // When in galaxy view, starIndex is -1; save homeStarIndex so restore has a valid reference
-  const effectiveStarIndex = gs.galaxy.currentStarIndex >= 0
-    ? gs.galaxy.currentStarIndex
-    : gs.galaxy.homeStarIndex;
   const pos = JSON.stringify({
-    starIndex: effectiveStarIndex,
+    schemaVersion: 1,
+    starIndex: gs.galaxy.currentStarIndex,
     tier: gs.galaxy.tier,
     bodyIndex: gs.galaxy.currentBodyIndex,
+    shipPos: gs.ship.pos,
+    shipVel: gs.ship.vel,
+    shipAngle: gs.ship.ang,
+    targetPos: gs.tgtPos,
+    targetActive: gs.tgtActive,
+    dock: gs.dock,
+    galaxyCamPos: gs.galaxyCamPos,
+    galaxyZoom: gs.galaxyZoom,
+    boundaryActive: getDebugBounds(),
   });
   const discovered = getDiscoveredStars();
   const visited = getVisitedStars();
@@ -3003,9 +3016,37 @@ function openGlobalStatusPreview(): void {
   const shipNames: Record<number, string> = { 1: 'Scout', 2: 'Freighter', 3: 'Destroyer', 4: 'Frigate', 5: 'Battleship', 6: 'Command Cruiser', 7: 'Dreadnought', 8: 'Colony Ship', 10: 'Troop Transport', 11: 'Basic Probe', 12: 'Enhanced Probe', 14: 'Wrecker', 15: 'Raider' };
   const countdown = (at: number): string => {
     const seconds = Math.max(0, Math.ceil((at - Date.now()) / 1000));
-    return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor(seconds / 60) % 60;
+    const secs = seconds % 60;
+    // Roll over into hours — without this anything past an hour reads as a
+    // runaway minute count, e.g. a 21h deadline showing up as "1285:36".
+    return hours > 0
+      ? `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+      : `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
-  const sections = overlay.querySelectorAll<HTMLElement>('.gsp-section');
+  /**
+   * Deadline label for the active incident: time remaining plus the actual
+   * clock time in the viewer's own timezone, so "how long have I got" and
+   * "by when exactly" are both answerable at a glance. The weekday is only
+   * included when the deadline falls outside the viewer's current local day.
+   */
+  const deadlineLabel = (at: number): string => {
+    const msLeft = Math.max(0, at - Date.now());
+    if (msLeft === 0) return 'EXPIRED';
+    const hours = Math.floor(msLeft / 3_600_000);
+    const mins = Math.floor((msLeft % 3_600_000) / 60_000);
+    const remaining = hours > 0 ? `${hours}h ${mins}m` : mins > 0 ? `${mins}m` : '<1m';
+    const when = new Date(at);
+    const clock = when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const sameLocalDay = when.toDateString() === new Date().toDateString();
+    const stamp = sameLocalDay ? clock : `${when.toLocaleDateString([], { weekday: 'short' })} ${clock}`;
+    return `${remaining} left (by ${stamp})`;
+  };
+  // Scoped to .gsp-grid on purpose: WHAT'S NEW lives outside the grid and is
+  // static content that loadStatus() never repopulates, so a broader selector
+  // leaves it stuck on the LOADING placeholder forever.
+  const sections = overlay.querySelectorAll<HTMLElement>('.gsp-grid .gsp-section');
   for (const section of sections) section.innerHTML = '<h3>LOADING</h3><div class="gsp-event"><em>WAIT</em><span>Collecting current fleet and construction data...</span></div>';
 
   const loadStatus = async (): Promise<void> => {
@@ -3055,7 +3096,7 @@ function openGlobalStatusPreview(): void {
         ? `<br>Trade order: O ${order.paid.ore}/${order.required.ore} F ${order.paid.food}/${order.required.food} E ${order.paid.energy}/${order.required.energy} Fu ${order.paid.fuel}/${order.required.fuel}`
         : order?.status === 'complete' ? '<br>Trade order complete: replacement unit ready' : '';
       const incidentRows = quest && quest.state === 'active'
-        ? `<div class="gsp-event"><em>WARN</em><span>Air purifier failure at ${nameForStar(quest.starIndex)} / ${questAffectedPlanet ?? `Planet ${quest.affectedBodyIndex + 1}`}<br>Capacity ${quest.capacityPercent}% / deadline ${countdown(quest.deadlineAt)}<br>Replacement target: ${nameForStar(quest.sourceStarIndex)} / ${questSourcePlanet ?? `Planet ${quest.sourceBodyIndex + 1}`}${orderSummary}${data.inventory.air_purifier_unit ? `<br><button type="button" class="gsp-repair">REPAIR WITH UNIT</button>` : ''}</span></div>`
+        ? `<div class="gsp-event"><em>WARN</em><span>Air purifier failure at ${nameForStar(quest.starIndex)} / ${questAffectedPlanet ?? `Planet ${quest.affectedBodyIndex + 1}`}<br>Capacity ${quest.capacityPercent}% / deadline ${deadlineLabel(quest.deadlineAt)}<br>Replacement target: ${nameForStar(quest.sourceStarIndex)} / ${questSourcePlanet ?? `Planet ${quest.sourceBodyIndex + 1}`}${orderSummary}${data.inventory.air_purifier_unit ? `<br><button type="button" class="gsp-repair">REPAIR WITH UNIT</button>` : ''}</span></div>`
         : quest && quest.state === 'failed'
           ? `<div class="gsp-event"><em>LOST</em><span>Starbase services lost at ${nameForStar(quest.starIndex)} / ${questAffectedPlanet ?? `Planet ${quest.affectedBodyIndex + 1}`}</span></div>`
           : '<div class="gsp-event"><em>OK</em><span>No active incidents</span></div>';

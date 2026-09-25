@@ -7,12 +7,18 @@
 const GALAXY_SIZE = 100;
 const STAR_COUNT = 100;
 const STAR_MIN_SPACING = 7;
+// Must match SYSTEM_BODY_MIN/MAX in src/game/constants.ts — see the bodyCount
+// draw in generateStarPositions for why the exact values matter here.
+const SYSTEM_BODY_MIN = 3;
+const SYSTEM_BODY_MAX = 8;
 const MIN_HOME_SPACING = 28; // ~4-5 stars free between home stars (at STAR_MIN_SPACING=7)
 
 export interface StarPosition {
   index: number;
   x: number;
   y: number;
+  /** Number of bodies in the system. Mirrors GalaxyStar.bodyCount on the client. */
+  bodyCount: number;
 }
 
 function createRng(seed: number) {
@@ -66,7 +72,13 @@ export function generateStarPositions(worldSeed: string): StarPosition[] {
     }
     if (tooClose) continue;
 
-    stars.push({ index: stars.length, x, y });
+    // This draw MUST stay here. The client's generateGalaxy() pulls bodyCount
+    // from the same stream immediately after accepting a star; omitting it
+    // desynchronized every subsequent position, so the server and client
+    // disagreed on the location of stars 1..99 while agreeing only on star 0.
+    const bodyCount = rng.rangeInt(SYSTEM_BODY_MIN, SYSTEM_BODY_MAX + 1);
+
+    stars.push({ index: stars.length, x, y, bodyCount });
   }
 
   return stars;

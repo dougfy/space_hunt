@@ -166,7 +166,7 @@ export type ShotsResponse = {
 export type PlayerProfileResponse = {
   name: string;
   homeStar?: number;
-  lastPosition?: { starIndex: number; tier: number; bodyIndex: number };
+  lastPosition?: SavedPosition;
   claimed?: Array<{ starIndex: number; username: string }>;
   discoveredStars?: number[];
   enhancedProbeStars?: number[];  // stars discovered by enhanced probe
@@ -177,6 +177,33 @@ export type PlayerProfileResponse = {
   fontScale?: string;             // 'small' | 'medium' | 'large'
   devMode?: boolean;
   wireframePref?: boolean;        // global wireframe mode — everything renders as wireframe
+};
+
+export type SavedDockState = {
+  docked: boolean;
+  targetType: 'planet' | 'feature' | 'star';
+  bodyIndex: number;
+  featureIndex: number;
+  featureType?: string;
+  targetName: string;
+  targetLabel: string;
+  approachTimer: number;
+};
+
+export type SavedPosition = {
+  schemaVersion?: 1;
+  starIndex: number;
+  tier: number;
+  bodyIndex: number;
+  shipPos?: { x: number; y: number };
+  shipVel?: { x: number; y: number };
+  shipAngle?: number;
+  targetPos?: { x: number; y: number };
+  targetActive?: boolean;
+  dock?: SavedDockState | null;
+  galaxyCamPos?: { x: number; y: number };
+  galaxyZoom?: number;
+  boundaryActive?: boolean;
 };
 
 export type ResourceStore = {
@@ -265,7 +292,7 @@ export type BuildBuildingResponse = StarEconomyResponse & {
 export type SaveProfileRequest = {
   username: string;
   name?: string;
-  lastPosition?: { starIndex: number; tier: number; bodyIndex: number };
+  lastPosition?: SavedPosition;
   discoveredStars?: number[];
   enhancedProbeStars?: number[];
   journeyDone?: boolean;
@@ -280,7 +307,7 @@ export type SaveProfileRequest = {
 export type ReportItem = {
   icon: string;      // short emoji/symbol
   text: string;      // human-readable line
-  category: 'build' | 'resources' | 'visitor' | 'rumor';
+  category: 'build' | 'resources' | 'visitor' | 'rumor' | 'incident';
 };
 
 export type ReturningReport = {

@@ -92,6 +92,10 @@ import type { ResourceType } from '../../shared/trading';
 import { SHIP_CATALOG } from '../../shared/ships';
 import { rollDiscovery } from '../../shared/exploration';
 import { generateStarPositions } from '../../shared/galaxy-positions';
+import { recordGalaxyEvent } from '../core/galaxy-events';
+import { claimLead, findLeadFor, generateDailyLeads, getOpenLeads } from '../core/daily-leads';
+import { getUtcDayKey } from '../../shared/quests';
+import { resolveSensing } from '../../shared/sensing';
 import { getStarName } from '../../shared/star-names';
 import { popSensorAlerts } from '../core/sensor-alerts';
 import type { ExploreRequest, ExploreResponse } from '../../shared/exploration';
@@ -829,6 +833,7 @@ api.post('/buildings/buy', async (c) => {
     const response = await buyBuilding(redis, body);
     const { postId } = context;
     if (postId) auditLog(postId, 'build', { user: body.username, starIndex: body.starIndex, type: body.buildType });
+    if (postId) void recordGalaxyEvent(redis, postId, { type: 'build', starIndex: body.starIndex, user: body.username, detail: body.buildType });
     return c.json<BuildBuildingResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to start building purchase';
@@ -919,6 +924,7 @@ api.post('/ships/buy', async (c) => {
     // Fire-and-forget: first ship achievement
     const { postId } = context;
     if (postId) auditLog(postId, 'ship_buy', { user: body.username, starIndex: body.starIndex, shipTypeId: body.shipTypeId });
+    if (postId) void recordGalaxyEvent(redis, postId, { type: 'ship_buy', starIndex: body.starIndex, user: body.username, detail: String(body.shipTypeId) });
     console.log(`[ACHIEVEMENTS-DEBUG] /ships/buy postId=${postId} username=${body.username}`);
     if (postId) {
       onShipBuy(redis, postId, body.username, 1).catch((e) => console.error('[ACHIEVEMENTS] onShipBuy error:', e));
@@ -1205,6 +1211,13 @@ api.post('/fleet/raid-route', async (c) => {
   }
   try {
     const response = await assignRaidRoute(redis, body.username, body.homeStarIndex, body.targetStarIndex);
+    if (context.postId) {
+      void recordGalaxyEvent(redis, context.postId, {
+        type: 'raid',
+        starIndex: body.targetStarIndex,
+        user: body.username,
+      });
+    }
     return c.json<RaidRouteResponse>(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to start raid';
@@ -1223,6 +1236,7 @@ api.post('/colonize', async (c) => {
   try {
     const response = await colonizeStar(redis, body.postId, body.username, body.starIndex, Date.now(), body.bodyIndex ?? 0);
     auditLog(body.postId, 'colonize', { user: body.username, starIndex: body.starIndex, starName: response.starName });
+    void recordGalaxyEvent(redis, body.postId, { type: 'colonize', starIndex: body.starIndex, user: body.username, detail: response.starName });
     // Fire-and-forget: count stars owned and trigger achievements
     getClaimedStars(redis, body.postId).then((claims) => {
       const userStars = claims.filter((c) => c.username === body.username).length;
@@ -1699,6 +1713,39 @@ api.post('/explore', async (c) => {
     const response: ExploreResponse & { buff?: ActiveBuff } = { explored: true, result, ...(grantedBuff ? { buff: grantedBuff } : {}) };
     await redis.set(exploreKey, JSON.stringify({ explored: true, result }));
 
+    // A scan on one of the day's leads claims it. The pool is shared, so this
+    // takes the lead off the board for every player, not just this one. Station
+    // scans are excluded: leads always point at a planet body.
+    if (!isStation) {
+      try {
+        const dayKey = getUtcDayKey(Date.now());
+        const leads = generateDailyLeads(postId, dayKey, generateStarPositions(postId), galaxySeed);
+        const lead = findLeadFor(leads, starIndex, bodyIndex);
+        if (lead) {
+          const outcome = await claimLead(redis, postId, dayKey, lead.id, username);
+          if (outcome.claimed) {
+            console.log(`[LEADS] ${username} claimed lead ${lead.id} (${lead.kind})`);
+          }
+        }
+      } catch (err) {
+        // Claiming must never fail the scan the player just earned.
+        console.error('[LEADS] claim error:', err);
+      }
+    }
+
+    // Share notable finds on the galaxy log. A barren scan is not news, and the
+    // rare tier is logged as 'anomaly' so range-limited sensing can favour it.
+    if (result.kind !== 'nothing') {
+      const rare = result.kind === 'artifact' || result.kind === 'anomaly' || result.kind === 'blueprint';
+      void recordGalaxyEvent(redis, postId, {
+        type: rare ? 'anomaly' : 'explore',
+        starIndex,
+        bodyIndex,
+        user: username,
+        detail: result.kind,
+      });
+    }
+
     // Set scan cooldown after a real find (not "nothing") — 60 seconds
     if (result.kind !== 'nothing') {
       await redis.set(cooldownKey, (Date.now() + SCAN_COOLDOWN_MS).toString());
@@ -1767,6 +1814,54 @@ api.post('/buffs/consume', async (c) => {
     return c.json({ consumed: true });
   } catch (error) {
     return c.json<ErrorResponse>({ status: 'error', message: 'Failed to consume buff' }, 500);
+  }
+});
+
+// ── Daily Probe Report ────────────────────────────────────────────────────────
+
+/**
+ * The day's open leads, resolved to what this player can actually sense.
+ *
+ * Everyone reads the same shared pool, so the listing is identical for all
+ * players — what differs is resolution. Below 'full' the body and the nature of
+ * the find are withheld, leaving the star, which is enough to go looking.
+ */
+api.get('/leads', async (c) => {
+  const username = c.req.query('username');
+  const { postId } = context;
+  if (!username) return c.json<ErrorResponse>({ status: 'error', message: 'username required' }, 400);
+  if (!postId) return c.json<ErrorResponse>({ status: 'error', message: 'No postId' }, 400);
+
+  try {
+    let galaxySeed = 23;
+    const seedStr = postId + ':galaxy';
+    for (let i = 0; i < seedStr.length; i++) {
+      galaxySeed = (galaxySeed * 31 + seedStr.charCodeAt(i)) | 0;
+    }
+
+    const positions = generateStarPositions(postId);
+    const open = await getOpenLeads(redis, postId, getUtcDayKey(Date.now()), positions, galaxySeed);
+
+    const claims = await getClaimedStars(redis, postId);
+    const owned = claims
+      .filter((claim) => claim.username.toLowerCase() === username.toLowerCase())
+      .map((claim) => claim.starIndex);
+
+    const fleet = await loadAllFleet(redis, username);
+    const ships = Object.values(fleet.stars).flatMap((star) => star.ships);
+
+    const leads = open.map((lead) => {
+      const { tier, distance, detail } = resolveSensing(ships, positions, owned, lead.starIndex);
+      return detail === 'full'
+        ? { id: lead.id, starIndex: lead.starIndex, bodyIndex: lead.bodyIndex, kind: lead.kind, rare: lead.rare, detail, tier, distance }
+        : { id: lead.id, starIndex: lead.starIndex, detail, tier, distance };
+    });
+
+    return c.json({ dayKey: getUtcDayKey(Date.now()), leads });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to load leads';
+    console.error('[LEADS] error:', error);
+    return c.json<ErrorResponse>({ status: 'error', message }, 500);
   }
 });
 

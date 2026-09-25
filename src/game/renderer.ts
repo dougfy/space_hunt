@@ -2,6 +2,7 @@
 // Replaces Unity's LineRenderer with direct Canvas2D path drawing.
 
 import type { Vec2, Asteroid, Camera, ShipShape } from './types';
+import type { PodKind } from '../shared/exploration';
 import {
   SHIP_LINE_WIDTH, ASTEROID_LINE_WIDTH, TARGET_LINE_WIDTH,
   TARGET_RING_RADIUS, POD_LINE_WIDTH, POD_SIZE,
@@ -22,6 +23,32 @@ import { installTextAudit, setAuditRegion } from './text-audit';
 import { getJourneyPulseAlpha } from './journey';
 import { isCoachActive, getCoachStep, coachAdvance, dismissCoach, completeCoach, getCoachPulse, ackCoachStep, isCoachAcked, isShipsTopicActive, getShipsTopicStep, shipsTopicNext, shipsTopicShipsOpened, shipsTopicProbeClicked, dismissShipsTopic, isColonizationTopicActive, getColonizationTopicStep, getColonizationTopicTarget, colonizationTopicNext, colonizationTopicAction, dismissColonizationTopic, getProbeBuildCompleteAt, canUseTutorialProbeFuelBypass, isColonizationWaitNoticeDismissed, dismissColonizationWaitNotice, isComsTopicActive, getComsTopicIdx, getComsTopicPhase, comsTopicNext, comsTopicTabClicked, comsTopicBranchToAlliance, dismissComsTopic } from './coach';
 import { FLEET_COMMAND_SENDER, ENABLE_PROBE_MAP_MOCK } from '../shared/feature-flags';
+
+const BELT_DOCK_SOURCES: Record<PodKind, string> = {
+  refuel: 'icons/docks/red.png',
+  dock: 'icons/docks/yellow.png',
+  energy: 'icons/docks/blue.png',
+  ore: 'icons/docks/orange.png',
+  food: 'icons/docks/green.png',
+  upgrade: 'icons/docks/purple.png',
+};
+const beltDockImages = new Map<PodKind, HTMLImageElement>();
+
+/**
+ * Dock art is loaded on first draw rather than at module load: constructing an
+ * `Image` at import time throws in the Node test environment, which takes down
+ * every test file that imports this module. Loading per kind also means we only
+ * fetch art for the pod kinds a belt actually contains.
+ */
+function getBeltDockImage(kind: PodKind): HTMLImageElement | undefined {
+  if (typeof Image === 'undefined') return undefined;
+  const cached = beltDockImages.get(kind);
+  if (cached) return cached;
+  const image = new Image();
+  image.src = BELT_DOCK_SOURCES[kind];
+  beltDockImages.set(kind, image);
+  return image;
+}
 
 // ── View mode helper ────────────────────────────────────────────────────────
 function isMobileView(): boolean {
@@ -306,21 +333,48 @@ export function drawFuelPod(
   podCenter: Vec2,
   asteroid: Asteroid,
   color: string,
+  kind: PodKind,
 ) {
   const zs = zoomScale(camera);
   const podWidth = POD_LINE_WIDTH * zs;
   const rad = POD_SIZE;
+  const info = getAsteroidSurfaceInfo(asteroid, podCenter);
+  const diff = sub(podCenter, info.nearest);
+  const normal = magnitude(diff) > 1e-6
+    ? normalize(diff)
+    : normalize(sub(podCenter, asteroid.pos));
+  const image = getBeltDockImage(kind);
+  if (image?.complete && image.naturalWidth > 0) {
+    const dpr = window.devicePixelRatio || 1;
+    const screenH = r.height / dpr;
+    const screen = worldToScreen(podCenter, camera, r.width / dpr, screenH);
+    const size = Math.max(28, rad * 9 / worldPerPixel(camera, screenH));
+    const towardAsteroid = { x: -normal.x, y: normal.y };
+    const rotation = Math.atan2(towardAsteroid.y, towardAsteroid.x) - Math.PI / 2;
+    r.ctx.save();
+    r.ctx.translate(screen.x, screen.y);
+    r.ctx.rotate(rotation);
+    r.ctx.globalAlpha = 0.96;
+    r.ctx.drawImage(image, -size / 2, -size / 2, size, size);
+    r.ctx.restore();
+    return;
+  }
+  const targetRadius = rad * (1.8 + Math.min(zs * 0.04, 0.35));
 
-  // Draw pod circle
+  // Use the splash's readable dock language in the playable belt: a clear
+  // target ring, short crosshair arms, and a connected pod stem.
+  drawCircle(r, camera, podCenter, targetRadius, color, podWidth * 0.7);
+  const arm = targetRadius * 1.35;
+  drawLine(r, camera, { x: podCenter.x - arm, y: podCenter.y }, { x: podCenter.x - targetRadius * 0.55, y: podCenter.y }, color, podWidth * 0.7);
+  drawLine(r, camera, { x: podCenter.x + targetRadius * 0.55, y: podCenter.y }, { x: podCenter.x + arm, y: podCenter.y }, color, podWidth * 0.7);
+  drawLine(r, camera, { x: podCenter.x, y: podCenter.y - arm }, { x: podCenter.x, y: podCenter.y - targetRadius * 0.55 }, color, podWidth * 0.7);
+  drawLine(r, camera, { x: podCenter.x, y: podCenter.y + targetRadius * 0.55 }, { x: podCenter.x, y: podCenter.y + arm }, color, podWidth * 0.7);
+
+  // Draw the pod circle
   drawCircle(r, camera, podCenter, rad, color, podWidth);
 
   // Draw stems from asteroid surface to pod
-  const info = getAsteroidSurfaceInfo(asteroid, podCenter);
-  const diff = sub(podCenter, info.nearest);
-  let n = magnitude(diff) > 1e-6
-    ? normalize(diff)
-    : normalize(sub(podCenter, asteroid.pos));
-  if (magnitude(n) < 1e-6) n = vec2(0, 1);
+  const n = magnitude(normal) < 1e-6 ? vec2(0, 1) : normal;
   const t = vec2(-n.y, n.x);
   const halfSep = rad * 0.32;
 
@@ -7821,6 +7875,7 @@ export function drawReportPanel(r: Renderer): void {
     const color = item.category === 'build' ? '#44ff88'
       : item.category === 'resources' ? '#88ccff'
       : item.category === 'visitor' ? '#ff8844'
+      : item.category === 'incident' ? '#ffcc44'
       : '#cccccc';
 
     ctx.font = f(10);

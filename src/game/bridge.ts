@@ -3,8 +3,8 @@
 // Replaces the Unity SendMessage bridge with direct function calls.
 
 import type { Projectile, ShipShape } from './types';
+import type { SavedPosition } from '../shared/api';
 import { startGame, stopGame, getGameState, setGameCallbacks, relocateToHomeStar, restorePosition, getDiscoveredStars, setDiscoveredStars, getStarOwnership, applyStarOwnership } from './game-loop';
-import { NavigationTier } from './galaxy';
 import { setRemotePoses, RemotePoseItem } from './ghosts';
 import { applyPodCollected } from './pods';
 import { normalizeShipShape } from './ship';
@@ -21,6 +21,8 @@ export interface DevvitBridge {
   setShipShape(shape: string): void;
   /** Set the deterministic world seed (post:xxx) */
   setSharedWorldSeed(seed: string): void;
+  /** Carry the restored profile snapshot through splash-to-play replacement. */
+  setProfilePosition(position: SavedPosition): void;
   /** Push remote player poses (called from realtime updates) */
   setRemotePoses(json: string): void;
   /** Mark a pod as collected (from server broadcast) */
@@ -47,6 +49,8 @@ export interface DevvitCallbacks {
   onFire(projectiles: Projectile[]): void;
   /** Game milestone event for journey telemetry */
   onMilestone?(event: string): void;
+  /** State changed in a way that should be persisted immediately. */
+  onStateChanged?(): void;
 }
 
 let canvas: HTMLCanvasElement | null = null;
@@ -54,6 +58,7 @@ let callbacks: DevvitCallbacks | null = null;
 let pendingSeed: string | null = null;
 let pendingName = 'pilot';
 let pendingShape: ShipShape = 'scout';
+let pendingProfilePosition: SavedPosition | null = null;
 
 export function createDevvitBridge(
   targetCanvas: HTMLCanvasElement,
@@ -110,11 +115,10 @@ export function createDevvitBridge(
         if (savedDiscovered.length > 0) {
           setDiscoveredStars(savedDiscovered);
         }
-        // Restore position if it was explicitly set during splash (profile lastPosition restore).
-        // Skip if tier is still the splash default (Local=2) — that means no real position was saved.
+        // Restore position if profile state was explicitly applied during splash.
         const gs = getGameState();
-        if (gs && savedTier !== NavigationTier.Local && (savedStarIndex !== savedHomeStar || savedTier !== NavigationTier.Planet || savedBodyIndex !== 0)) {
-          restorePosition(savedStarIndex, savedTier, savedBodyIndex);
+        if (gs && pendingProfilePosition) {
+          restorePosition(savedStarIndex, savedTier, savedBodyIndex, pendingProfilePosition);
         }
         console.log(`[BRIDGE] beginPlay: transitioned from splash to play, tier=${getGameState()?.galaxy.tier} homeStar=${getGameState()?.galaxy.homeStarIndex}`);
       } else if (s) {
@@ -142,6 +146,10 @@ export function createDevvitBridge(
 
     setSharedWorldSeed(seed: string) {
       pendingSeed = seed;
+    },
+
+    setProfilePosition(position: SavedPosition) {
+      pendingProfilePosition = position;
     },
 
     setRemotePoses(json: string) {

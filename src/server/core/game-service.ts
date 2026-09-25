@@ -62,7 +62,8 @@ import type { AirPurifierQuest, ActiveQuestResponse, AirPurifierTradeOrder } fro
 import { getAirPurifierCondition, getUtcDayKey, isActiveAirPurifierQuest } from '../../shared/quests';
 import { calculateLeaderboardPower } from '../../shared/leaderboard';
 import { isTradingStation } from '../../shared/trading';
-import { pushSensorAlert } from './sensor-alerts';
+import { pushSensorAlert, getSensorAlertsSince } from './sensor-alerts';
+import type { SensorAlert } from './sensor-alerts';
 import { filterActiveBuffs, hasActiveBuff, RESONANCE_MULTIPLIER, HYPERDRIVE_MULTIPLIER, CHRONO_MULTIPLIER } from '../../shared/buffs';
 import type { ActiveBuff } from '../../shared/buffs';
 
@@ -2581,13 +2582,6 @@ export async function buildReturningReport(
       const entries = await store.zRange(auditKey, lastSeenMs, now, { by: 'score' });
       const userLower = username.toLowerCase();
 
-      // Get player's claimed stars to detect visitors
-      const claims = await getClaimedStars(store, postId);
-      const myStarIndices = new Set(
-        claims.filter(c => c.username.toLowerCase() === userLower).map(c => c.starIndex),
-      );
-
-      const visitorsSet = new Set<string>();
       const rumors: string[] = [];
 
       for (const entry of entries) {
@@ -2620,24 +2614,29 @@ export async function buildReturningReport(
         } catch { /* skip malformed entries */ }
       }
 
-      // Check sensor alerts for actual visitors to player's stars
-      for (const starIdx of myStarIndices) {
-        const alertKey = `sensor:${postId}:${userLower}:${starIdx}`;
-        const alerts = await store.zRange(alertKey, lastSeenMs, now, { by: 'score' });
-        for (const alert of alerts) {
-          try {
-            const data = JSON.parse(alert.member) as { intruder: string; [k: string]: unknown };
-            if (data.intruder) visitorsSet.add(data.intruder);
-          } catch { /* skip */ }
-        }
-      }
-
-      // Add visitor items
-      if (visitorsSet.size > 0) {
-        const visitors = [...visitorsSet].slice(0, 5);
+      // Sensor alerts recorded while the player was away. This reads the durable
+      // log via the sensor-alerts module rather than rebuilding a key here \u2014 the
+      // previous hand-rolled `sensor:${postId}:${user}:${star}` key was never
+      // written by anything, so this item could never fire.
+      const alerts = await getSensorAlertsSince(store, username, lastSeenMs, now);
+      const describe = (subset: SensorAlert[]): string => {
+        const names = [...new Set(subset.map((a) => a.from))].slice(0, 5);
+        const stars = [...new Set(subset.map((a) => getStarName(a.starIndex)))].slice(0, 3);
+        return `${names.join(', ')} at ${stars.join(', ')}`;
+      };
+      const raiders = alerts.filter((a) => a.type === 'raider');
+      const unidentified = alerts.filter((a) => a.type === 'unidentified');
+      if (raiders.length > 0) {
         items.push({
           icon: '\u26A0',
-          text: `Visitors detected: ${visitors.join(', ')}`,
+          text: `Raid detected: ${describe(raiders)}`,
+          category: 'incident',
+        });
+      }
+      if (unidentified.length > 0) {
+        items.push({
+          icon: '\u26A0',
+          text: `Unidentified ships detected: ${describe(unidentified)}`,
           category: 'visitor',
         });
       }
@@ -2698,6 +2697,27 @@ export async function buildReturningReport(
       }
     } catch { /* ignore leaderboard errors */ }
   }
+
+  // ── Active incident ──
+  // The air purifier failure is deadline-driven, so a returning player needs to
+  // see it in the report rather than only in the ACTIVE INCIDENT panel. Note the
+  // stored capacityPercent goes stale: ensureAirPurifierQuest() only persists the
+  // degraded condition when the quest is already lost, so recompute it here.
+  try {
+    const incident = parseAirPurifierQuest(await store.hGet(profileKey, ACTIVE_QUEST_FIELD));
+    if (isActiveAirPurifierQuest(incident)) {
+      const { capacityPercent } = getAirPurifierCondition(incident, now);
+      const msLeft = Math.max(0, incident.deadlineAt - now);
+      const hoursLeft = Math.floor(msLeft / 3_600_000);
+      const minsLeft = Math.floor((msLeft % 3_600_000) / 60_000);
+      const remaining = hoursLeft > 0 ? `${hoursLeft}h ${minsLeft}m` : `${minsLeft}m`;
+      items.unshift({
+        icon: '⚠',
+        text: `Air purifier failure at ${getStarName(incident.starIndex)} — capacity ${capacityPercent}%, ${remaining} left. Replacement at ${getStarName(incident.sourceStarIndex)}`,
+        category: 'incident',
+      });
+    }
+  } catch { /* ignore incident read errors */ }
 
   // ── Away time summary ──
   if (awaySeconds > 3600) {

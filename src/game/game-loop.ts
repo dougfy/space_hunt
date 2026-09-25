@@ -1,6 +1,7 @@
 // ── Main Game Loop ──────────────────────────────────────────────────────────
 
 import type { GameState, ShipShape } from './types';
+import type { SavedPosition } from '../shared/api';
 import { ZoomState } from './types';
 import {
   CANVAS_W, CANVAS_H, FUEL_CAPACITY_BY_SHAPE,
@@ -43,7 +44,7 @@ import type { GalaxyMode as _GalaxyMode } from './renderer';
 import type { DevvitCallbacks } from './bridge';
 import { createShootingState, updateShooting, fireBurst } from './shooting';
 import { createGalaxyState, NavigationTier, checkTierTransition, applyTransition, getLocalSeed, applyStarNames, generateSystem, consumeVisitForeignOwner } from './galaxy';
-import { checkDocking, updateDocking, undock } from './dock';
+import { checkDocking, updateDocking, undock, getFeatureWorldPos } from './dock';
 import type { DockAction } from './dock';
 import { initJourney, skipJourney, journeyAction, updateJourney, isJourneyDone as _isJourneyDone } from './journey';
 import { coachAdvance } from './coach';
@@ -410,8 +411,20 @@ export function consumePendingAbandon(): boolean {
  * Restore player to a saved position (star + tier + body).
  * Called on reload to resume where the player left off.
  */
-export function restorePosition(starIndex: number, tier: number, bodyIndex: number): void {
+export function restorePosition(starIndex: number, tier: number, bodyIndex: number, saved?: SavedPosition): void {
   if (!gameState) return;
+
+  const exact = saved?.shipPos && Number.isFinite(saved.shipPos.x) && Number.isFinite(saved.shipPos.y) ? saved : undefined;
+  const restoreShipState = () => {
+    if (!exact || !gameState) return;
+    gameState.ship.pos = vec2(exact.shipPos!.x, exact.shipPos!.y);
+    if (exact.shipVel && Number.isFinite(exact.shipVel.x) && Number.isFinite(exact.shipVel.y)) gameState.ship.vel = vec2(exact.shipVel.x, exact.shipVel.y);
+    if (Number.isFinite(exact.shipAngle)) gameState.ship.ang = exact.shipAngle!;
+    if (exact.targetPos && Number.isFinite(exact.targetPos.x) && Number.isFinite(exact.targetPos.y)) {
+      gameState.tgtPos = vec2(exact.targetPos.x, exact.targetPos.y);
+      gameState.tgtActive = exact.targetActive === true;
+    }
+  };
 
   // For galaxy tier with invalid starIndex, just switch to galaxy view centered on home
   if (starIndex < 0 || starIndex >= gameState.galaxy.stars.length) {
@@ -421,7 +434,9 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
         gameState.galaxy.tier = NavigationTier.Galaxy;
         gameState.galaxy.currentStarIndex = -1;
         gameState.ship.pos = vec2(home.pos.x, home.pos.y);
-        gameState.galaxyCamPos = { x: home.pos.x, y: home.pos.y };
+        gameState.galaxyCamPos = exact?.galaxyCamPos ?? { x: home.pos.x, y: home.pos.y };
+        if (exact?.galaxyZoom != null && Number.isFinite(exact.galaxyZoom)) gameState.galaxyZoom = exact.galaxyZoom;
+        restoreShipState();
         console.log(`[RESTORE] galaxy view at home star (invalid starIndex ${starIndex})`);
       }
     } else {
@@ -443,6 +458,9 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
     gameState.ship.pos = vec2(star.pos.x, star.pos.y);
     gameState.galaxyCamPos = { x: star.pos.x, y: star.pos.y };
     gameState.dock = null; // Clear dock state from startGame
+    gameState.galaxyCamPos = exact?.galaxyCamPos ?? { x: star.pos.x, y: star.pos.y };
+    if (exact?.galaxyZoom != null && Number.isFinite(exact.galaxyZoom)) gameState.galaxyZoom = exact.galaxyZoom;
+    restoreShipState();
   } else if (tier === NavigationTier.System) {
     // At system view — generate system, place ship near system edge (not center)
     gameState.galaxy.bodies = generateSystem(star, getPostId());
@@ -451,6 +469,7 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
     const edgeDist = 20; // SYSTEM_EXIT_RADIUS - 2, near outer boundary
     gameState.ship.pos = vec2(center, center + edgeDist);
     gameState.dock = null; // Clear dock state from startGame
+    restoreShipState();
   } else if (tier === NavigationTier.Local) {
     // At local orbit ring — generate system + ring asteroids for the body
     gameState.galaxy.bodies = generateSystem(star, getPostId());
@@ -470,6 +489,7 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
       gameState.totalDocks = gameState.pods.filter(p => !p.refuels).length;
       // Place ship at orbit distance
       gameState.ship.pos = vec2(center + body.orbitDist, center);
+      restoreShipState();
     }
   } else {
     // Planet tier — generate system, go to specific body
@@ -481,7 +501,9 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
     gameState.dock = null; // Clear stale dock state
     if (body) {
       const stationFeature = body.features.find(f => f.type === 'station');
-      if (stationFeature) {
+      // Legacy profiles have no exact dock snapshot, so retain the old safe
+      // station fallback. Exact snapshots must restore dock state explicitly.
+      if (stationFeature && !exact) {
         const sx = Math.cos(stationFeature.angle) * stationFeature.dist;
         const sy = Math.sin(stationFeature.angle) * stationFeature.dist;
         gameState.ship.pos = vec2(sx + Math.cos(stationFeature.angle) * 0.6, sy + Math.sin(stationFeature.angle) * 0.6);
@@ -498,6 +520,31 @@ export function restorePosition(starIndex: number, tier: number, bodyIndex: numb
         };
       } else {
         gameState.ship.pos = vec2(0, 3);
+      }
+      restoreShipState();
+      if (exact?.dock?.docked && exact.dock.bodyIndex === bi) {
+        let validDock = true;
+        let dockTarget = vec2(0, 0);
+        if (exact.dock.targetType === 'feature') {
+          const feature = exact.dock.featureIndex >= 0 ? body.features[exact.dock.featureIndex] : undefined;
+          validDock = !!feature;
+          if (feature) dockTarget = getFeatureWorldPos(feature);
+        }
+        if (exact.dock.targetType === 'planet') {
+          dockTarget = vec2(0, 0);
+        }
+        if (validDock && exact.shipPos) {
+          const expectedDockDistance = exact.dock.targetType === 'feature' ? 0.3 : 0.95;
+          const dx = exact.shipPos.x - dockTarget.x;
+          const dy = exact.shipPos.y - dockTarget.y;
+          validDock = Math.hypot(dx, dy) <= expectedDockDistance + 0.45;
+        }
+        if (validDock) gameState.dock = { ...exact.dock };
+        else console.warn(`[RESTORE] stale or invalid dock target=${exact.dock.targetName}; restoring undocked`);
+      }
+      if (exact && !exact.dock?.docked) {
+        gameState.dock = null;
+        console.log(`[RESTORE] explicit undocked state restored star=${starIndex} body=${bi}`);
       }
     }
   }
@@ -684,6 +731,9 @@ function update(dt: number): void {
   const screenH = renderer.height / (window.devicePixelRatio || 1);
 
   gameState.elapsedTime += dt;
+  const tierAtFrameStart = gameState.galaxy.tier;
+  const starAtFrameStart = gameState.galaxy.currentStarIndex;
+  const bodyAtFrameStart = gameState.galaxy.currentBodyIndex;
 
   // Update journey/tutorial system (Planet tier only — voice/pulse shouldn't fire in other tiers)
   if (gameState.galaxy.tier === NavigationTier.Planet) {
@@ -763,6 +813,7 @@ function update(dt: number): void {
           playSound(Math.random() < 0.5 ? 'undocking' : 'undocking_alt');
         }
         undock(gameState);
+        devvitCb?.onStateChanged?.();
         journeyAction();
         coachAdvance('navigate_dock');
         devvitCb?.onMilestone?.('first_move');
@@ -822,6 +873,7 @@ function update(dt: number): void {
       if (gameState.dock.targetType === 'planet') playSound('leaving_orbit');
       else playSound(Math.random() < 0.5 ? 'undocking' : 'undocking_alt');
       undock(gameState);
+      devvitCb?.onStateChanged?.();
       journeyAction();
       coachAdvance('navigate_dock');
       devvitCb?.onMilestone?.('first_move');
@@ -1475,6 +1527,13 @@ function update(dt: number): void {
   }
   } // end splash mode guard
 
+  if (devvitCb && (tierAtFrameStart !== gameState.galaxy.tier
+    || starAtFrameStart !== gameState.galaxy.currentStarIndex
+    || bodyAtFrameStart !== gameState.galaxy.currentBodyIndex)) {
+    console.log(`[STATE] transition complete tier=${gameState.galaxy.tier} star=${gameState.galaxy.currentStarIndex} body=${gameState.galaxy.currentBodyIndex} docked=${!!gameState.dock}`);
+    devvitCb.onStateChanged?.();
+  }
+
   // Pose reporting
   poseTimer += dt;
   if (poseTimer >= POSE_INTERVAL && devvitCb) {
@@ -1721,7 +1780,7 @@ function render(): void {
       const asteroid = gameState.asteroids[pod.astIndex];
       if (!asteroid) continue;
       drawFuelPod(
-        renderer, camera, pod.pos, asteroid, pod.color,
+        renderer, camera, pod.pos, asteroid, pod.color, pod.kind,
       );
     }
   }
